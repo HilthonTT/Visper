@@ -1,0 +1,15 @@
+http:
+  host: "0.0.0.0"
+  port: 8080
+  allowed_origins:
+    - "http://localhost:3000"
+    - "https://example.com"
+  allowed_headers:
+    - "Content-Type"
+    - "Authorization"
+  read_timeout: 10s
+  write_timeout: 30s
+
+rateLimiter:
+  requestPerTimeFrame: 100
+  timeFrame: 20s
