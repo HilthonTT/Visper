@@ -13,3 +13,7 @@ type createRoomResponse struct {
 	CreatedAt  time.Time `json:"createdAt"`
 	Persistent bool      `json:"persistent"`
 }
+
+type sendMessageRequest struct {
+	Content string `json:"content"`
+}

@@ -3,12 +3,21 @@ package ws
 import (
 	"errors"
 	"log"
+	"net/http"
 	"sync"
+
+	"github.com/gorilla/websocket"
 )
 
 var (
 	ErrRoomNotFound   = errors.New("room not found")
 	ErrClientNotFound = errors.New("client not found")
+
+	upgrader = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
 )
 
 type WSRoom struct {
@@ -29,6 +38,14 @@ func NewRoomManager() *RoomManager {
 	return &RoomManager{
 		rooms: make(map[string]*WSRoom),
 	}
+}
+
+func (rm *RoomManager) Upgrade(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
 }
 
 func (rm *RoomManager) AddClient(cl *Client) {

@@ -169,3 +169,33 @@ func (r *roomRepository) Delete(ctx context.Context, room *domain.Room) (*domain
 
 	return storedRoom, nil
 }
+
+func (r *roomRepository) Update(ctx context.Context, room *domain.Room) error {
+	if room == nil || room.ID == "" || room.JoinCode == "" {
+		return domain.ErrInvalidInput
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	existingRoom, exists := r.rooms[room.ID]
+	if !exists {
+		return domain.ErrRoomNotFound
+	}
+
+	if existingRoom.JoinCode != room.JoinCode {
+		return domain.ErrInvalidInput
+	}
+
+	if existingRoom.ID != room.ID {
+		return domain.ErrInvalidInput
+	}
+
+	r.evictIdle()
+
+	r.rooms[room.ID] = room
+
+	r.touch(room.ID)
+
+	return nil
+}

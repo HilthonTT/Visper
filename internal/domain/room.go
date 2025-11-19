@@ -44,6 +44,7 @@ type RoomRepository interface {
 	GetByID(ctx context.Context, id string) (*Room, error)
 	GetByJoinCode(ctx context.Context, joinCode string) (*Room, error)
 	Delete(ctx context.Context, room *Room) (*Room, error)
+	Update(ctx context.Context, room *Room) error
 }
 
 func NewRoom(owner *Member, persistent bool, expiry time.Duration) (*Room, error) {
@@ -87,7 +88,7 @@ func (r *Room) AddMember(m *Member) error {
 		return ErrRoomFull
 	}
 	for _, existing := range r.Members {
-		if existing.User.ID == m.User.ID {
+		if existing.Token == m.Token {
 			return ErrAlreadyInRoom
 		}
 	}

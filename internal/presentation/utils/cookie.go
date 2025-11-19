@@ -16,6 +16,16 @@ const (
 	CookieRoomAuth = "room_auth"
 )
 
+func SetupMemberToken(w http.ResponseWriter, r *http.Request) string {
+	memberToken := GetMemberTokenFromCookie(r)
+	if memberToken == "" {
+		memberToken = uuid.NewString()
+	}
+
+	setMemberTokenCookie(memberToken, w)
+	return memberToken
+}
+
 func GetMemberToken(w http.ResponseWriter, r *http.Request) string {
 	cookie, err := r.Cookie(CookieMemberID)
 	if err != nil {
@@ -32,7 +42,7 @@ func GetMemberToken(w http.ResponseWriter, r *http.Request) string {
 		decodedStr = uuid.NewString()
 	}
 
-	setMemberIDCookie(decodedStr, w)
+	setMemberTokenCookie(decodedStr, w)
 	return decodedStr
 }
 
@@ -45,7 +55,21 @@ func GetMemberFromCookie(r *http.Request) (*domain.Member, error) {
 	return member, nil
 }
 
-func setMemberIDCookie(memberToken string, w http.ResponseWriter) {
+func GetMemberTokenFromCookie(r *http.Request) string {
+	cookie, err := r.Cookie(CookieMemberID)
+	if err != nil {
+		return ""
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(cookie.Value)
+	if err != nil {
+		return ""
+	}
+
+	return string(decoded)
+}
+
+func setMemberTokenCookie(memberToken string, w http.ResponseWriter) {
 	cookieExpiry := time.Now().Add(24 * 30 * time.Hour)
 	http.SetCookie(w, &http.Cookie{
 		Name:     CookieMemberID,
