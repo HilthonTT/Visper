@@ -60,9 +60,10 @@ func (app *Application) Mount() http.Handler {
 			r.Get("/{roomId}/join", app.roomHandler.JoinRoomHandler)
 		})
 
-		r.Route("/health", func(r chi.Router) {
-			r.Get("/", app.healthHandler.GetHealth)
-		})
+		r.Get("/health", app.healthHandler.GetHealth)
+		r.Get("/healthz", app.healthHandler.GetHealth)
+		r.Get("/ready", app.healthHandler.GetHealth)
+		r.Get("/live", app.healthHandler.GetHealth)
 	})
 
 	return r
