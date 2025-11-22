@@ -38,6 +38,11 @@ type RoomUpdatePayload struct {
 	MemberCount int    `json:"memberCount"`
 }
 
+type BootPayload struct {
+	Username string `json:"username"`
+	Reason   string `json:"reason"`
+}
+
 func NewMessageReceived(roomID, msgID, content, userID, username, timestamp string) *WSMessage {
 	return &WSMessage{
 		Type:   MessageReceived,
@@ -114,14 +119,13 @@ func NewJoinFailed(roomID, reason string) *WSMessage {
 	}
 }
 
-func NewKicked(roomID, reason string) *WSMessage {
+func NewKicked(roomID, username, reason string) *WSMessage {
 	return &WSMessage{
 		Type:   Kicked,
 		RoomID: roomID,
-		Data: ErrorPayload{
-			Code:    "KICKED",
-			Message: reason,
-			Retry:   false,
+		Data: BootPayload{
+			Reason:   reason,
+			Username: username,
 		},
 	}
 }

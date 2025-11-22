@@ -199,3 +199,21 @@ func (r *roomRepository) Update(ctx context.Context, room *domain.Room) error {
 
 	return nil
 }
+
+func (r *roomRepository) RemoveMember(ctx context.Context, roomID string, memberID string) (*domain.Member, error) {
+	room, err := r.GetByID(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+
+	existingMember := room.FindMemberByID(memberID)
+	if existingMember == nil {
+		return nil, domain.ErrMemberNotFound
+	}
+
+	if err := room.LeaveAndAutoPromote(existingMember); err != nil {
+		return nil, err
+	}
+
+	return existingMember, nil
+}

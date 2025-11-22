@@ -15,31 +15,35 @@ import (
 	"github.com/hilthontt/visper/internal/infrastructure/configs"
 	"github.com/hilthontt/visper/internal/infrastructure/ratelimiter"
 	healthHandler "github.com/hilthontt/visper/internal/presentation/handler/health"
+	messagesHandler "github.com/hilthontt/visper/internal/presentation/handler/messages"
 	roomHandler "github.com/hilthontt/visper/internal/presentation/handler/rooms"
 	"go.uber.org/zap"
 )
 
 type Application struct {
-	config        configs.Config
-	roomHandler   roomHandler.Handler
-	healthHandler healthHandler.Handler
-	logger        *zap.SugaredLogger
-	ratelimiter   ratelimiter.Limiter
+	config          configs.Config
+	roomHandler     roomHandler.Handler
+	healthHandler   healthHandler.Handler
+	messagesHandler messagesHandler.Handler
+	logger          *zap.SugaredLogger
+	ratelimiter     ratelimiter.Limiter
 }
 
 func NewApplication(
 	config configs.Config,
 	roomHandler roomHandler.Handler,
 	healthHandler healthHandler.Handler,
+	messagesHandler messagesHandler.Handler,
 	logger *zap.SugaredLogger,
 	ratelimiter ratelimiter.Limiter,
 ) *Application {
 	return &Application{
-		config:        config,
-		roomHandler:   roomHandler,
-		healthHandler: healthHandler,
-		logger:        logger,
-		ratelimiter:   ratelimiter,
+		config:          config,
+		roomHandler:     roomHandler,
+		healthHandler:   healthHandler,
+		messagesHandler: messagesHandler,
+		logger:          logger,
+		ratelimiter:     ratelimiter,
 	}
 }
 
@@ -58,6 +62,8 @@ func (app *Application) Mount() http.Handler {
 		r.Route("/rooms", func(r chi.Router) {
 			r.Post("/", app.roomHandler.CreateRoomHandler)
 			r.Get("/{roomId}/join", app.roomHandler.JoinRoomHandler)
+			r.Post("/{roomId}/messages", app.messagesHandler.CreateNewMessage)
+			r.Post("/{roomId}/boot", app.roomHandler.BootUserHandler)
 		})
 
 		r.Get("/health", app.healthHandler.GetHealth)

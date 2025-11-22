@@ -3,8 +3,9 @@ package utils
 import (
 	"encoding/base64"
 	"encoding/json"
-	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/google/uuid"
@@ -12,88 +13,79 @@ import (
 )
 
 const (
-	CookieMemberID = "member_id"
-	CookieRoomAuth = "room_auth"
+	CookieNameAnon     = "roomanonauth"
+	CookieRoomAuth     = "roomauth"
+	CookieNameJS       = "roomauth_js"
+	CookieNameMemberID = "member_id"
 )
 
-func SetupMemberToken(w http.ResponseWriter, r *http.Request) string {
-	memberToken := GetMemberTokenFromCookie(r)
-	if memberToken == "" {
-		memberToken = uuid.NewString()
-	}
+func setMemberCookie(w http.ResponseWriter, name string, member *domain.Member, path string, httpOnly bool, expires time.Time) {
+	data, _ := json.Marshal(member)
+	value := base64.StdEncoding.EncodeToString(data)
 
-	setMemberTokenCookie(memberToken, w)
-	return memberToken
-}
-
-func GetMemberToken(w http.ResponseWriter, r *http.Request) string {
-	cookie, err := r.Cookie(CookieMemberID)
-	if err != nil {
-		return ""
-	}
-
-	decoded, err := base64.StdEncoding.DecodeString(cookie.Value)
-	if err != nil {
-		return ""
-	}
-
-	decodedStr := string(decoded)
-	if decodedStr == "" {
-		decodedStr = uuid.NewString()
-	}
-
-	setMemberTokenCookie(decodedStr, w)
-	return decodedStr
-}
-
-func GetMemberFromCookie(r *http.Request) (*domain.Member, error) {
-	member, err := getCookieMemberDetails(CookieRoomAuth, r)
-	if err != nil {
-		return nil, err
-	}
-
-	return member, nil
-}
-
-func GetMemberTokenFromCookie(r *http.Request) string {
-	cookie, err := r.Cookie(CookieMemberID)
-	if err != nil {
-		return ""
-	}
-
-	decoded, err := base64.StdEncoding.DecodeString(cookie.Value)
-	if err != nil {
-		return ""
-	}
-
-	return string(decoded)
-}
-
-func setMemberTokenCookie(memberToken string, w http.ResponseWriter) {
-	cookieExpiry := time.Now().Add(24 * 30 * time.Hour)
 	http.SetCookie(w, &http.Cookie{
-		Name:     CookieMemberID,
-		Value:    base64.StdEncoding.EncodeToString([]byte(memberToken)),
-		Path:     "/",
-		HttpOnly: true,
-		Expires:  cookieExpiry,
+		Name:     name,
+		Value:    value,
+		Path:     path,
+		HttpOnly: httpOnly,
+		Expires:  expires,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   true,
 	})
 }
 
-func getCookieMemberDetails(cookieName string, r *http.Request) (*domain.Member, error) {
-	cookie, err := r.Cookie(cookieName)
+func SetAuthenticatedMemberCookies(member *domain.Member, roomPath string, w http.ResponseWriter) {
+	expires := time.Now().Add(240 * time.Hour)
+	setMemberCookie(w, CookieRoomAuth, member, roomPath, true, expires)
+	setMemberCookie(w, CookieNameJS, member, roomPath, false, expires)
+}
+
+func ClearAuthenticatedMemberCookies(roomPath string, w http.ResponseWriter) {
+	past := time.Now().Add(-24 * time.Hour)
+
+	setMemberCookie(w, CookieRoomAuth, &domain.Member{}, roomPath, true, past)
+	setMemberCookie(w, CookieNameJS, &domain.Member{}, roomPath, false, past)
+}
+
+func SetAnonymousMemberCookie(member *domain.Member, roomPath string, w http.ResponseWriter) {
+	expires := time.Now().Add(240 * time.Hour)
+	setMemberCookie(w, CookieNameAnon, member, roomPath, true, expires)
+}
+
+func FormatRoomPath(roomID string) string {
+	return fmt.Sprintf("/rooms/%s", url.QueryEscape(roomID))
+}
+
+func EnsureMemberID(w http.ResponseWriter, r *http.Request) string {
+	if id := GetMemberIDFromCookie(r); id != "" {
+		return id
+	}
+	newID := uuid.New().String()
+	SetPersistentMemberIDCookie(newID, w)
+	return newID
+}
+
+func GetMemberIDFromCookie(r *http.Request) string {
+	cookie, err := r.Cookie(CookieNameMemberID)
 	if err != nil {
-		return nil, errors.New("you're not a member of the room")
+		return ""
 	}
 	decoded, err := base64.StdEncoding.DecodeString(cookie.Value)
 	if err != nil {
-		return nil, errors.New("could not verify your membership in the room")
+		return ""
 	}
+	return string(decoded)
+}
 
-	member := &domain.Member{}
-	err = json.Unmarshal(decoded, member)
-	if err != nil {
-		return nil, errors.New("could not verify your membership in the room")
-	}
-	return member, nil
+func SetPersistentMemberIDCookie(memberID string, w http.ResponseWriter) {
+	expires := time.Now().Add(30 * 24 * time.Hour)
+	http.SetCookie(w, &http.Cookie{
+		Name:     CookieNameMemberID,
+		Value:    base64.StdEncoding.EncodeToString([]byte(memberID)),
+		Path:     "/",
+		HttpOnly: true,
+		Expires:  expires,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   true,
+	})
 }

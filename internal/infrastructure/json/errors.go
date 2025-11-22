@@ -2,6 +2,7 @@ package json
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
@@ -24,6 +25,10 @@ func WriteError(w http.ResponseWriter, status int, err error, msg string) {
 
 func WriteValidationError(w http.ResponseWriter, err error) {
 	WriteError(w, http.StatusBadRequest, err, err.Error())
+}
+
+func WriteBadRequestError(w http.ResponseWriter, msg string) {
+	WriteError(w, http.StatusBadRequest, errors.New("bad request"), msg)
 }
 
 func WriteInternalError(w http.ResponseWriter, err error) {

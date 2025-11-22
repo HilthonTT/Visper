@@ -14,6 +14,6 @@ type createRoomResponse struct {
 	Persistent bool      `json:"persistent"`
 }
 
-type sendMessageRequest struct {
-	Content string `json:"content"`
+type bootUserRequest struct {
+	MemberID string `json:"memberId"`
 }

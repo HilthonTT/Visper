@@ -45,6 +45,7 @@ type RoomRepository interface {
 	GetByJoinCode(ctx context.Context, joinCode string) (*Room, error)
 	Delete(ctx context.Context, room *Room) (*Room, error)
 	Update(ctx context.Context, room *Room) error
+	RemoveMember(ctx context.Context, roomID string, memberID string) (*Member, error)
 }
 
 func NewRoom(owner *Member, persistent bool, expiry time.Duration) (*Room, error) {
@@ -93,6 +94,29 @@ func (r *Room) AddMember(m *Member) error {
 		}
 	}
 	r.Members = append(r.Members, *m)
+	return nil
+}
+
+func (r *Room) IsMember(m *Member) bool {
+	if m == nil {
+		return false
+	}
+
+	for _, member := range r.Members {
+		if member.User.ID == m.User.ID {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (r *Room) FindMemberByID(memberID string) *Member {
+	for _, m := range r.Members {
+		if m.Token == memberID {
+			return &m
+		}
+	}
 	return nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -41,7 +42,7 @@ func (h *Handler) CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	memberToken := utils.GetMemberToken(w, r)
+	memberToken := utils.EnsureMemberID(w, r)
 	if memberToken == "" {
 		json.WriteError(w, http.StatusUnauthorized, errors.New("unauthorized"), "Missing or invalid authentication")
 		return
@@ -116,29 +117,18 @@ func (h *Handler) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	memberToken := utils.SetupMemberToken(w, r)
+	memberToken := utils.EnsureMemberID(w, r)
 	if memberToken == "" {
-		_ = conn.WriteJSON(ws.NewAuthError(roomID, "Authentication failed"))
+		_ = conn.WriteJSON(ws.NewAuthError(roomID, "Failed to establish identity"))
 		_ = conn.Close()
 		return
 	}
-
-	user, err := domain.NewUser(username)
-	if err != nil {
-		_ = conn.WriteJSON(ws.NewError(roomID, "Invalid username"))
-		_ = conn.Close()
-		return
-	}
-
-	member := domain.NewMember(memberToken, user)
 
 	room, err := h.roomRepository.GetByID(r.Context(), roomID)
 	if err != nil {
-		var msg string
+		msg := "Failed to load room"
 		if errors.Is(err, domain.ErrRoomNotFound) {
 			msg = "Room not found"
-		} else {
-			msg = "Failed to load room"
 		}
 		_ = conn.WriteJSON(ws.NewJoinFailed(roomID, msg))
 		_ = conn.Close()
@@ -151,21 +141,35 @@ func (h *Handler) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := room.AddMember(member); err != nil {
-		if errors.Is(err, domain.ErrAlreadyInRoom) {
-			log.Printf("User %s rejoining room %s", member.User.ID, roomID)
-		} else {
+	existingMember := room.FindMemberByID(memberToken)
+
+	if existingMember != nil {
+		log.Printf("User rejoining room %s: %s (%s)", roomID, existingMember.User.Name, memberToken)
+	} else {
+		user, err := domain.NewUser(username)
+		if err != nil {
+			_ = conn.WriteJSON(ws.NewError(roomID, "Invalid username"))
+			_ = conn.Close()
+			return
+		}
+
+		existingMember = domain.NewMember(memberToken, user)
+
+		if err := room.AddMember(existingMember); err != nil {
 			_ = conn.WriteJSON(ws.NewJoinFailed(roomID, "Cannot join room"))
 			_ = conn.Close()
 			return
 		}
+
+		if err := h.roomRepository.Update(r.Context(), room); err != nil {
+			log.Printf("Failed to persist room %s after new member join: %v", roomID, err)
+		}
 	}
 
-	if err := h.roomRepository.Update(r.Context(), room); err != nil {
-		log.Printf("Failed to persist room %s after join: %v", roomID, err)
-	}
+	roomPath := utils.FormatRoomPath(room.ID)
+	utils.SetAuthenticatedMemberCookies(existingMember, roomPath, w)
 
-	client := ws.NewClient(conn, member.User.ID, roomID, member.User.Name)
+	client := ws.NewClient(conn, existingMember.User.ID, roomID, existingMember.User.Name)
 
 	h.roomManager.AddClient(client)
 	h.core.Register() <- client
@@ -173,9 +177,70 @@ func (h *Handler) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	go client.WriteMessage()
 	go client.ReadMessage(h.core)
 
-	log.Printf("User %s (%s) joined room %s", member.User.Name, member.User.ID, roomID)
+	log.Printf("User %s (%s) connected to room %s", existingMember.User.Name, memberToken, roomID)
 }
 
-func (h *Handler) SendMessage(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) BootUserHandler(w http.ResponseWriter, r *http.Request) {
+	roomID := chi.URLParam(r, "roomId")
+	if roomID == "" {
+		json.WriteValidationError(w, errors.New("room ID is missing"))
+		return
+	}
 
+	var req bootUserRequest
+	if err := json.Read(r, &req); err != nil {
+		json.WriteValidationError(w, err)
+		return
+	}
+
+	currentMemberID := utils.GetMemberIDFromCookie(r)
+	if currentMemberID == "" {
+		json.WriteError(w, http.StatusUnauthorized, errors.New("unauthorized"), "Missing or invalid authentication")
+		return
+	}
+
+	room, err := h.roomRepository.GetByID(r.Context(), roomID)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrRoomNotFound):
+			json.WriteError(w, http.StatusNotFound, err, "Room not found")
+		default:
+			log.Printf("Failed to find room: %v", err)
+			json.WriteInternalError(w, err)
+		}
+		return
+	}
+
+	existingMember := room.FindMemberByID(currentMemberID)
+	if existingMember == nil {
+		json.WriteError(w, http.StatusUnauthorized, errors.New("unauthorized"), "You are not a member")
+		return
+	}
+
+	if !room.IsOwner(existingMember) {
+		json.WriteError(w, http.StatusUnauthorized, errors.New("unauthorized"), "You aren't the owner")
+		return
+	}
+
+	if strings.EqualFold(currentMemberID, req.MemberID) {
+		json.WriteBadRequestError(w, "You cannot boot yourself")
+		return
+	}
+
+	bootedMember, err := h.roomRepository.RemoveMember(r.Context(), roomID, req.MemberID)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrMemberNotFound):
+			json.WriteError(w, http.StatusNotFound, err, "Member not found")
+		default:
+			log.Printf("Failed to boot user: %v", err)
+			json.WriteInternalError(w, err)
+		}
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+
+	// Broadcast
+	payload := ws.NewKicked(roomID, bootedMember.User.Name, "booted")
+	h.core.Broadcast() <- payload
 }

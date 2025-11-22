@@ -12,6 +12,7 @@ import (
 	"github.com/hilthontt/visper/internal/infrastructure/ws"
 	"github.com/hilthontt/visper/internal/presentation/api"
 	"github.com/hilthontt/visper/internal/presentation/handler/health"
+	"github.com/hilthontt/visper/internal/presentation/handler/messages"
 	"github.com/hilthontt/visper/internal/presentation/handler/rooms"
 	"go.uber.org/zap"
 )
@@ -36,8 +37,10 @@ func main() {
 
 	roomHandler := rooms.NewHandler(roomRepository, messageRepository, roomManager, wsCore)
 	healthHandler := health.NewHandler()
+	messageHandler := messages.NewHandler(roomRepository, messageRepository, roomManager, wsCore)
+
 	rateLimiter := ratelimiter.NewFixedWindowRateLimiter(cfg.RateLimiter.RequestsPerTimeFrame, cfg.RateLimiter.TimeFrame)
-	app := api.NewApplication(*cfg, *roomHandler, *healthHandler, logger, rateLimiter)
+	app := api.NewApplication(*cfg, *roomHandler, *healthHandler, *messageHandler, logger, rateLimiter)
 
 	expvar.Publish("goroutines", expvar.Func(func() any {
 		return runtime.NumGoroutine()
