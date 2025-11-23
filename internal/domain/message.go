@@ -2,12 +2,17 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/hilthontt/visper/internal/infrastructure/validate"
+)
+
+var (
+	ErrMessageNotFound = errors.New("message not found")
 )
 
 type Message struct {
@@ -22,6 +27,7 @@ type MessageRepository interface {
 	Create(ctx context.Context, message *Message) error
 	GetByRoomID(ctx context.Context, roomID string) ([]Message, error)
 	Delete(ctx context.Context, message *Message) error
+	GetByID(ctx context.Context, roomID, messageID string) (*Message, error)
 }
 
 func NewMessage(member *Member, rawContent string, roomID string) (*Message, error) {

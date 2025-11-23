@@ -107,3 +107,19 @@ func (r *messageRepository) GetByRoomID(ctx context.Context, roomID string) ([]d
 
 	return cpy, nil
 }
+
+func (r *messageRepository) GetByID(ctx context.Context, roomID, messageID string) (*domain.Message, error) {
+	roomMsgs, exists := r.messages[roomID]
+
+	if !exists || len(roomID) == 0 {
+		return nil, domain.ErrMessageNotFound
+	}
+
+	for _, message := range roomMsgs {
+		if message.ID == messageID {
+			return &message, nil
+		}
+	}
+
+	return nil, domain.ErrMessageNotFound
+}

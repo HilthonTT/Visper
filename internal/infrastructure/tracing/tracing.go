@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hilthontt/visper/internal/infrastructure/env"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/propagation"
@@ -17,6 +18,14 @@ type Config struct {
 	ServiceName    string
 	Environment    string
 	JaegerEndpoint string
+}
+
+func NewDefaultConfig(serviceName string) Config {
+	return Config{
+		ServiceName:    serviceName,
+		Environment:    env.GetString("ENVIRONMENT", "development"),
+		JaegerEndpoint: env.GetString("JAEGER_ENDPOINT", "http://jaeger:14268/api/traces"),
+	}
 }
 
 type ShutdownFunc = func(context.Context) error

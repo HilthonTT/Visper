@@ -61,9 +61,12 @@ func (app *Application) Mount() http.Handler {
 	r.Route("/api", func(r chi.Router) {
 		r.Route("/rooms", func(r chi.Router) {
 			r.Post("/", app.roomHandler.CreateRoomHandler)
+			r.Get("/{roomId}", app.roomHandler.GetRoomHandler)
 			r.Get("/{roomId}/join", app.roomHandler.JoinRoomHandler)
-			r.Post("/{roomId}/messages", app.messagesHandler.CreateNewMessage)
 			r.Post("/{roomId}/boot", app.roomHandler.BootUserHandler)
+
+			r.Post("/{roomId}/messages", app.messagesHandler.CreateNewMessageHandler)
+			r.Delete("/{roomId}/messages/{messageId}", app.messagesHandler.DeleteMessageHandler)
 		})
 
 		r.Get("/health", app.healthHandler.GetHealth)

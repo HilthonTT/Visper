@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"expvar"
 	"log"
 	"runtime"
@@ -9,6 +10,7 @@ import (
 	"github.com/hilthontt/visper/internal/infrastructure/configs"
 	"github.com/hilthontt/visper/internal/infrastructure/ratelimiter"
 	"github.com/hilthontt/visper/internal/infrastructure/repository"
+	"github.com/hilthontt/visper/internal/infrastructure/tracing"
 	"github.com/hilthontt/visper/internal/infrastructure/ws"
 	"github.com/hilthontt/visper/internal/presentation/api"
 	"github.com/hilthontt/visper/internal/presentation/handler/health"
@@ -17,7 +19,22 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	serviceName = "visper-api"
+)
+
 func main() {
+	tracerCfg := tracing.NewDefaultConfig(serviceName)
+
+	sh, err := tracing.InitTracer(tracerCfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize the tracer: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer sh(ctx)
+
 	logger := zap.Must(zap.NewProduction()).Sugar()
 	defer logger.Sync()
 

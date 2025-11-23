@@ -244,3 +244,68 @@ func (h *Handler) BootUserHandler(w http.ResponseWriter, r *http.Request) {
 	payload := ws.NewKicked(roomID, bootedMember.User.Name, "booted")
 	h.core.Broadcast() <- payload
 }
+
+func (h *Handler) GetRoomHandler(w http.ResponseWriter, r *http.Request) {
+	roomID := chi.URLParam(r, "roomId")
+	if roomID == "" {
+		json.WriteValidationError(w, errors.New("room ID is missing"))
+		return
+	}
+
+	currentMemberID := utils.GetMemberIDFromCookie(r)
+	if currentMemberID == "" {
+		json.WriteError(w, http.StatusUnauthorized, errors.New("unauthorized"), "Missing or invalid authentication")
+		return
+	}
+
+	room, err := h.roomRepository.GetByID(r.Context(), roomID)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrRoomNotFound):
+			json.WriteError(w, http.StatusNotFound, err, "Room not found")
+		default:
+			log.Printf("Failed to find room: %v", err)
+			json.WriteInternalError(w, err)
+		}
+		return
+	}
+
+	existingMember := room.FindMemberByID(currentMemberID)
+	if existingMember == nil {
+		json.WriteError(w, http.StatusUnauthorized, errors.New("unauthorized"), "You are not a member")
+		return
+	}
+
+	messages, err := h.messageRepository.GetByRoomID(r.Context(), roomID)
+	if err != nil {
+		json.WriteInternalError(w, err)
+		return
+	}
+
+	mappedMessages := make([]messageResponse, 0, len(messages))
+
+	for i, message := range messages {
+		mappedMessages[i] = messageResponse{
+			ID:      message.ID,
+			Content: message.Content,
+			User: userResponse{
+				ID:   message.User.ID,
+				Name: message.User.Name,
+			},
+		}
+	}
+
+	resp := roomResponse{
+		ID:       room.ID,
+		JoinCode: room.JoinCode,
+		Owner: userResponse{
+			ID:   room.Owner.User.ID,
+			Name: room.Owner.User.Name,
+		},
+		Messages:   mappedMessages,
+		Persistent: room.Persistent,
+		CreatedAt:  room.CreatedAt,
+	}
+
+	json.Write(w, http.StatusOK, resp)
+}

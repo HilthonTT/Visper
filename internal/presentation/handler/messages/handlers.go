@@ -34,7 +34,7 @@ func NewHandler(
 	}
 }
 
-func (h *Handler) CreateNewMessage(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) CreateNewMessageHandler(w http.ResponseWriter, r *http.Request) {
 	roomID := chi.URLParam(r, "roomId")
 	if roomID == "" {
 		json.WriteValidationError(w, errors.New("room ID is missing"))
@@ -102,4 +102,61 @@ func (h *Handler) CreateNewMessage(w http.ResponseWriter, r *http.Request) {
 
 	// Broadcast to room
 	h.core.Broadcast() <- wsPayload
+}
+
+func (h *Handler) DeleteMessageHandler(w http.ResponseWriter, r *http.Request) {
+	roomID := chi.URLParam(r, "roomId")
+	if roomID == "" {
+		json.WriteValidationError(w, errors.New("room ID is missing"))
+		return
+	}
+
+	messageID := chi.URLParam(r, "messageId")
+	if roomID == "" {
+		json.WriteValidationError(w, errors.New("message ID is missing"))
+		return
+	}
+
+	currentMemberID := utils.GetMemberIDFromCookie(r)
+	if currentMemberID == "" {
+		json.WriteError(w, http.StatusUnauthorized, errors.New("unauthorized"), "Missing or invalid authentication")
+		return
+	}
+
+	room, err := h.roomRepository.GetByID(r.Context(), roomID)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrRoomNotFound):
+			json.WriteError(w, http.StatusNotFound, err, "Room not found")
+		default:
+			log.Printf("Failed to find room: %v", err)
+			json.WriteInternalError(w, err)
+		}
+		return
+	}
+
+	existingMember := room.FindMemberByID(currentMemberID)
+	if existingMember == nil {
+		json.WriteError(w, http.StatusUnauthorized, errors.New("unauthorized"), "You are not a member")
+		return
+	}
+
+	messageToDelete, err := h.messageRepository.GetByID(r.Context(), room.ID, messageID)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrMessageNotFound):
+			json.WriteError(w, http.StatusNotFound, err, "Message not found")
+		default:
+			log.Printf("Failed to find message: %v", err)
+			json.WriteInternalError(w, err)
+		}
+		return
+	}
+
+	if err := h.messageRepository.Delete(r.Context(), messageToDelete); err != nil {
+		json.WriteInternalError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
