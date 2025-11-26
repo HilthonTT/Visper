@@ -141,10 +141,12 @@ func (h *Handler) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wasAlreadyMember := false
 	existingMember := room.FindMemberByID(memberToken)
 
 	if existingMember != nil {
 		log.Printf("User rejoining room %s: %s (%s)", roomID, existingMember.User.Name, memberToken)
+		wasAlreadyMember = true
 	} else {
 		user, err := domain.NewUser(username)
 		if err != nil {
@@ -176,6 +178,16 @@ func (h *Handler) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 
 	go client.WriteMessage()
 	go client.ReadMessage(h.core)
+
+	// Broadcast join
+	if !wasAlreadyMember {
+		wsPayload := ws.NewMemberJoined(roomID, ws.MemberPayload{
+			UserID:   existingMember.User.ID,
+			Username: existingMember.User.Name,
+			JoinedAt: time.Now().UTC().Format(time.RFC3339),
+		})
+		h.core.Broadcast() <- wsPayload
+	}
 
 	log.Printf("User %s (%s) connected to room %s", existingMember.User.Name, memberToken, roomID)
 }

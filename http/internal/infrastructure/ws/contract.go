@@ -15,6 +15,10 @@ type MessagePayload struct {
 	Timestamp string `json:"timestamp"`
 }
 
+type MessageDeletedPayload struct {
+	MessageID string `json:"id"`
+}
+
 type MemberPayload struct {
 	UserID   string `json:"userId"`
 	Username string `json:"username"`
@@ -53,6 +57,16 @@ func NewMessageReceived(roomID, msgID, content, userID, username, timestamp stri
 			UserID:    userID,
 			Username:  username,
 			Timestamp: timestamp,
+		},
+	}
+}
+
+func NewMessageDeleted(roomID, msgID string) *WSMessage {
+	return &WSMessage{
+		Type:   MessageDeleted,
+		RoomID: roomID,
+		Data: MessageDeletedPayload{
+			MessageID: msgID,
 		},
 	}
 }

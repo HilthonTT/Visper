@@ -44,9 +44,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// TODO: Add these magic numbers to a config file
-	roomRepository := repository.NewRoomRepository(100, time.Hour)
-	messageRepository := repository.NewMessageRepository(100)
+	roomRepository := repository.NewRoomRepository(cfg.RoomStore.Capacity, time.Hour)
+	messageRepository := repository.NewMessageRepository(cfg.MessageStore.Capacity)
 
 	roomManager := ws.NewRoomManager()
 	wsCore := ws.NewCore(roomRepository, messageRepository)

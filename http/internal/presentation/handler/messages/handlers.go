@@ -159,4 +159,8 @@ func (h *Handler) DeleteMessageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+
+	// Broadcast
+	wsPayload := ws.NewMessageDeleted(roomID, messageToDelete.ID)
+	h.core.Broadcast() <- wsPayload
 }

@@ -9,8 +9,10 @@ import (
 )
 
 type Config struct {
-	HTTP        HTTPConfig        `koanf:"http"`
-	RateLimiter RateLimiterConfig `koanf:"rateLimiter"`
+	HTTP         HTTPConfig         `koanf:"http"`
+	RateLimiter  RateLimiterConfig  `koanf:"rateLimiter"`
+	MessageStore MessageStoreConfig `koanf:"message_store"`
+	RoomStore    RoomStoreConfig    `koanf:"room_store"`
 }
 
 type HTTPConfig struct {
@@ -27,6 +29,14 @@ type RateLimiterConfig struct {
 	TimeFrame            time.Duration `koanf:"timeFrame"`
 }
 
+type MessageStoreConfig struct {
+	Capacity uint `koanf:"capacity"`
+}
+
+type RoomStoreConfig struct {
+	Capacity uint `koanf:"capacity"`
+}
+
 func Load(path string) (*Config, error) {
 	k := koanf.New(".")
 
@@ -41,6 +51,8 @@ func Load(path string) (*Config, error) {
 	k.Set("http.write_timeout", 30*time.Second)
 	k.Set("rateLimiter.requestPerTimeFrame", 100)
 	k.Set("rateLimiter.timeFrame", time.Second*20)
+	k.Set("room_store.capacity", 100)
+	k.Set("message_store.capacity", 100)
 
 	var cfg Config
 	if err := k.UnmarshalWithConf("", &cfg, koanf.UnmarshalConf{Tag: "koanf"}); err != nil {
