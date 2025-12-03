@@ -13,6 +13,8 @@ import (
 type Client struct {
 	Options []option.RequestOption
 	Room    *RoomService
+	Message *MessageService
+	Health  *HealthService
 }
 
 func DefaultClientOptions() []option.RequestOption {
@@ -31,6 +33,8 @@ func NewClient(opts ...option.RequestOption) *Client {
 	r := &Client{
 		Options: opts,
 		Room:    NewRoomService(opts...),
+		Message: NewMessageService(opts...),
+		Health:  NewHealthService(opts...),
 	}
 
 	return r
