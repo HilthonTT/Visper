@@ -68,6 +68,18 @@ func (r *RoomService) Join(ctx context.Context, joinOpts joinRoomOpts, opts ...o
 	return err
 }
 
+func (r *RoomService) Leave(ctx context.Context, id string, opts ...option.RequestOption) error {
+	opts = slices.Concat(r.Options, opts)
+	if id == "" {
+		return ErrMissingIDParameter
+	}
+
+	path := fmt.Sprintf("/rooms/%s/leave", id)
+	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, nil, opts...)
+
+	return err
+}
+
 func (r *RoomService) Boot(ctx context.Context, id string, body bootUserParams, opts ...option.RequestOption) error {
 	opts = slices.Concat(r.Options, opts)
 	if id == "" {

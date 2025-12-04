@@ -64,6 +64,7 @@ func (app *Application) Mount() http.Handler {
 			r.Get("/{roomId}", app.roomHandler.GetRoomHandler)
 			r.Get("/{roomId}/join", app.roomHandler.JoinRoomHandler)
 			r.Post("/{roomId}/boot", app.roomHandler.BootUserHandler)
+			r.Post("/{roomId}/leave", app.roomHandler.LeaveRoomHandler)
 
 			r.Post("/{roomId}/messages", app.messagesHandler.CreateNewMessageHandler)
 			r.Delete("/{roomId}/messages/{messageId}", app.messagesHandler.DeleteMessageHandler)

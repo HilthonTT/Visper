@@ -257,6 +257,55 @@ func (h *Handler) BootUserHandler(w http.ResponseWriter, r *http.Request) {
 	h.core.Broadcast() <- payload
 }
 
+func (h *Handler) LeaveRoomHandler(w http.ResponseWriter, r *http.Request) {
+	roomID := chi.URLParam(r, "roomId")
+	if roomID == "" {
+		json.WriteValidationError(w, errors.New("room ID is missing"))
+		return
+	}
+
+	currentMemberID := utils.GetMemberIDFromCookie(r)
+	if currentMemberID == "" {
+		json.WriteError(w, http.StatusUnauthorized, errors.New("unauthorized"), "Missing or invalid authentication")
+		return
+	}
+
+	room, err := h.roomRepository.GetByID(r.Context(), roomID)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrRoomNotFound):
+			json.WriteError(w, http.StatusNotFound, err, "Room not found")
+		default:
+			log.Printf("Failed to find room: %v", err)
+			json.WriteInternalError(w, err)
+		}
+		return
+	}
+
+	existingMember := room.FindMemberByID(currentMemberID)
+	if existingMember == nil {
+		json.WriteError(w, http.StatusUnauthorized, errors.New("unauthorized"), "You are not a member")
+		return
+	}
+
+	memberThatLeft, err := h.roomRepository.RemoveMember(r.Context(), roomID, existingMember.Token)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrMemberNotFound):
+			json.WriteError(w, http.StatusNotFound, err, "Member not found")
+		default:
+			log.Printf("Failed to leave room: %v", err)
+			json.WriteInternalError(w, err)
+		}
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+
+	// Broadcast
+	payload := ws.NewMemberLeft(roomID, memberThatLeft.User.ID, memberThatLeft.User.Name)
+	h.core.Broadcast() <- payload
+}
+
 func (h *Handler) GetRoomHandler(w http.ResponseWriter, r *http.Request) {
 	roomID := chi.URLParam(r, "roomId")
 	if roomID == "" {
