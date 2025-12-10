@@ -1,8 +1,33 @@
 package tui
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	"context"
+
+	tea "github.com/charmbracelet/bubbletea"
+	apisdk "github.com/hilthontt/visper/api-sdk"
+	"github.com/hilthontt/visper/cli/internal/tui/theme"
+)
 
 type model struct {
+	context         context.Context
+	client          *apisdk.Client
+	state           state
+	error           *visibleError
+	theme           theme.Theme
+	viewportWidth   int
+	viewportHeight  int
+	widthContainer  int
+	heightContainer int
+	widthContent    int
+}
+
+type visibleError struct {
+	message string
+}
+
+type state struct {
+	splash SplashState
+	cursor cursorState
 }
 
 func NewModel() (tea.Model, error) {

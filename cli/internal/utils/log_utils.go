@@ -11,7 +11,7 @@ func PrintlnAndExit(args ...any) {
 	os.Exit(1)
 }
 
-func PrintfAndExit(format string, args ...any) {
+func PrintfAndExitf(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format, args...)
 	os.Exit(1)
 }

@@ -18,17 +18,17 @@ func NewHealthService(opts ...option.RequestOption) *HealthService {
 	return h
 }
 
-func (h *HealthService) Get(ctx context.Context, opts ...option.RequestOption) (*healthResponse, error) {
+func (h *HealthService) Get(ctx context.Context, opts ...option.RequestOption) (*HealthResponse, error) {
 	opts = slices.Concat(h.Options, opts)
 	path := "health"
 
-	res := &healthResponse{}
+	res := &HealthResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
 
 	return res, err
 }
 
-type healthResponse struct {
+type HealthResponse struct {
 	Status    string `json:"status"`
 	Timestamp string `json:"timestamp"`
 	Uptime    string `json:"uptime"`

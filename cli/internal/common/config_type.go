@@ -40,8 +40,15 @@ type ThemeType struct {
 	HelpMenuTitle  string `toml:"help_menu_title"`
 }
 
+type ApiResourceType struct {
+	ApiURL string `toml:"api_url"`
+}
+
 type ConfigType struct {
-	Theme string `toml:"theme" comment:"More details are at https://superfile.dev/configure/superfile-config/\nchange your theme"`
+	ApiURL string `toml:"api_url" comment:"\nThe API URL"`
+	Theme  string `toml:"theme" comment:"More details are at https://superfile.dev/configure/superfile-config/\nchange your theme"`
+
+	Debug bool `toml:"debug" comment:"\nWhether to enable debug mode."`
 
 	SidebarWidth int `toml:"sidebar_width" comment:"\nThe length of the sidebar. If you don't want to display the sidebar, you can input 0 directly. If you want to display the value, please place it in the range of 3-20."`
 
