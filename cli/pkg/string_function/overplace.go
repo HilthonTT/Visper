@@ -116,7 +116,7 @@ func (w whitespace) render(width int) string {
 }
 
 func clamp(v, lower, upper int) int {
-	return min(max(v, lower), lower)
+	return min(max(v, lower), upper)
 }
 
 // Split a string into lines, additionally returning the size of the widest

@@ -1,9 +1,9 @@
-package messaging
+package contracts
 
 // AmqpMessage is the message structure for AMQP.
 type AmqpMessage struct {
 	OwnerID string `json:"ownerId"`
-	Date    []byte `json:"data"`
+	Data    []byte `json:"data"`
 }
 
 type EventType string
