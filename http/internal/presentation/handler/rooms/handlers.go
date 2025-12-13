@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/hilthontt/visper/internal/domain"
+	"github.com/hilthontt/visper/internal/infrastructure/events"
 	"github.com/hilthontt/visper/internal/infrastructure/json"
 	"github.com/hilthontt/visper/internal/infrastructure/ws"
 	"github.com/hilthontt/visper/internal/presentation/utils"
@@ -19,6 +20,7 @@ type Handler struct {
 	messageRepository domain.MessageRepository
 	roomManager       *ws.RoomManager
 	core              *ws.Core
+	roomPublisher     *events.RoomPublisher
 }
 
 func NewHandler(
@@ -26,12 +28,14 @@ func NewHandler(
 	messageRepository domain.MessageRepository,
 	roomManager *ws.RoomManager,
 	core *ws.Core,
+	roomPublisher *events.RoomPublisher,
 ) *Handler {
 	return &Handler{
 		roomRepository:    roomRepository,
 		messageRepository: messageRepository,
 		roomManager:       roomManager,
 		core:              core,
+		roomPublisher:     roomPublisher,
 	}
 }
 
@@ -87,6 +91,11 @@ func (h *Handler) CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 		JoinCode:   newRoom.JoinCode,
 		CreatedAt:  newRoom.CreatedAt,
 		Persistent: newRoom.Persistent,
+	}
+
+	if err := h.roomPublisher.PublishRoomCreated(ctx, *newRoom); err != nil {
+		log.Printf("Error publishing room created: %v\n", err)
+		return
 	}
 
 	json.Write(w, http.StatusCreated, resp)
@@ -303,6 +312,60 @@ func (h *Handler) LeaveRoomHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Broadcast
 	payload := ws.NewMemberLeft(roomID, memberThatLeft.User.ID, memberThatLeft.User.Name)
+	h.core.Broadcast() <- payload
+}
+
+func (h *Handler) DeleteRoomHandler(w http.ResponseWriter, r *http.Request) {
+	roomID := chi.URLParam(r, "roomId")
+	if roomID == "" {
+		json.WriteValidationError(w, errors.New("room ID is missing"))
+		return
+	}
+
+	currentMemberID := utils.GetMemberIDFromCookie(r)
+	if currentMemberID == "" {
+		json.WriteError(w, http.StatusUnauthorized, errors.New("unauthorized"), "Missing or invalid authentication")
+		return
+	}
+
+	room, err := h.roomRepository.GetByID(r.Context(), roomID)
+	if err != nil {
+		switch {
+		case errors.Is(err, domain.ErrRoomNotFound):
+			json.WriteError(w, http.StatusNotFound, err, "Room not found")
+		default:
+			log.Printf("Failed to find room: %v", err)
+			json.WriteInternalError(w, err)
+		}
+		return
+	}
+
+	existingMember := room.FindMemberByID(currentMemberID)
+	if existingMember == nil {
+		json.WriteError(w, http.StatusUnauthorized, errors.New("unauthorized"), "You are not a member")
+		return
+	}
+
+	if room.Owner.User.ID != existingMember.User.ID {
+		json.WriteError(w, http.StatusUnauthorized, errors.New("unauthorized"), "You are not authorized to perform this action")
+		return
+	}
+
+	deletedRoom, err := h.roomRepository.Delete(r.Context(), room)
+	if err != nil {
+		json.WriteInternalError(w, err)
+		return
+	}
+
+	if err := h.messageRepository.DeleteByRoomID(r.Context(), roomID); err != nil {
+		json.WriteInternalError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+
+	// Broadcast
+	payload := ws.NewRoomDeleted(deletedRoom.ID)
 	h.core.Broadcast() <- payload
 }
 

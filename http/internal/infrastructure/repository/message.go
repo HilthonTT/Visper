@@ -123,3 +123,16 @@ func (r *messageRepository) GetByID(ctx context.Context, roomID, messageID strin
 
 	return nil, domain.ErrMessageNotFound
 }
+
+func (r *messageRepository) DeleteByRoomID(ctx context.Context, roomID string) error {
+	if roomID == "" {
+		return domain.ErrInvalidInput
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	delete(r.messages, roomID)
+
+	return nil
+}

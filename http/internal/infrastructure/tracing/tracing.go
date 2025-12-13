@@ -24,7 +24,7 @@ func NewDefaultConfig(serviceName string) Config {
 	return Config{
 		ServiceName:    serviceName,
 		Environment:    env.GetString("ENVIRONMENT", "development"),
-		JaegerEndpoint: env.GetString("JAEGER_ENDPOINT", "http://jaeger:14268/api/traces"),
+		JaegerEndpoint: env.GetString("JAEGER_ENDPOINT", "http://localhost:14268/api/traces"),
 	}
 }
 

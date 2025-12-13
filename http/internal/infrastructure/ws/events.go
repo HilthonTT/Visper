@@ -13,4 +13,6 @@ const (
 	JoinFailed          = "error.join"
 	RateLimited         = "error.rate_limited"
 	Kicked              = "error.kicked"
+
+	RoomDeleted = "room.deleted"
 )

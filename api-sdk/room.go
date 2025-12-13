@@ -45,6 +45,18 @@ func (r *RoomService) Get(ctx context.Context, id string, opts ...option.Request
 	return res, err
 }
 
+func (r *RoomService) Delete(ctx context.Context, id string, opts ...option.RequestOption) error {
+	opts = slices.Concat(r.Options, opts)
+	if id == "" {
+		return ErrMissingIDParameter
+	}
+
+	path := fmt.Sprintf("/rooms/%s", id)
+	err := requestconfig.ExecuteNewRequest(ctx, http.MethodDelete, path, nil, nil, opts...)
+
+	return err
+}
+
 func (r *RoomService) Join(ctx context.Context, joinOpts joinRoomOpts, opts ...option.RequestOption) error {
 	opts = slices.Concat(r.Options, opts)
 	if joinOpts.RoomID == "" {

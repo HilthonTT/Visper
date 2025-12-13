@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/hilthontt/visper/internal/infrastructure/configs"
+	"github.com/hilthontt/visper/internal/infrastructure/env"
+	"github.com/hilthontt/visper/internal/infrastructure/events"
+	"github.com/hilthontt/visper/internal/infrastructure/messaging"
 	"github.com/hilthontt/visper/internal/infrastructure/ratelimiter"
 	"github.com/hilthontt/visper/internal/infrastructure/repository"
 	"github.com/hilthontt/visper/internal/infrastructure/tracing"
@@ -51,7 +54,22 @@ func main() {
 	wsCore := ws.NewCore(roomRepository, messageRepository)
 	go wsCore.Run()
 
-	roomHandler := rooms.NewHandler(roomRepository, messageRepository, roomManager, wsCore)
+	rabbitMqURI := env.GetString("RABBITMQ_URI", "amqp://guest:guest@localhost:5672/")
+	rabbitmq, err := messaging.NewRabbitMQ(rabbitMqURI)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer rabbitmq.Close()
+
+	log.Println("Starting RabbitMQ connection")
+
+	roomPublisher := events.NewRoomPublisher(rabbitmq)
+
+	// Start Room Consumer
+	roomConsumer := events.NewRoomConsumer(rabbitmq)
+	go roomConsumer.Listen()
+
+	roomHandler := rooms.NewHandler(roomRepository, messageRepository, roomManager, wsCore, roomPublisher)
 	healthHandler := health.NewHandler()
 	messageHandler := messages.NewHandler(roomRepository, messageRepository, roomManager, wsCore)
 

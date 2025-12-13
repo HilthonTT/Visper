@@ -41,6 +41,12 @@ func NewRabbitMQ(uri string) (*RabbitMQ, error) {
 		Channel: ch,
 	}
 
+	if err := rmq.setupExchangesAndQueues(); err != nil {
+		// Clean up if setup fails
+		rmq.Close()
+		return nil, fmt.Errorf("failed to setup exchanges and queues: %v", err)
+	}
+
 	return rmq, nil
 }
 
@@ -178,6 +184,38 @@ func (r *RabbitMQ) declareAndBindQueue(queueName string, messageTypes []string, 
 		); err != nil {
 			return fmt.Errorf("failed to bind queue to %s: %v", queueName, err)
 		}
+	}
+
+	return nil
+}
+
+func (r *RabbitMQ) setupExchangesAndQueues() error {
+	if err := r.setupDeadLetterExchange(); err != nil {
+		return err
+	}
+
+	err := r.Channel.ExchangeDeclare(
+		VisperExchange, // name
+		"topic",        // type
+		true,           // durable
+		false,          // auto-deleted
+		false,          // internal
+		false,          // no-wait
+		nil,            // arguments
+	)
+	if err != nil {
+		return fmt.Errorf("failed to declare exchange: %s: %v", VisperExchange, err)
+	}
+
+	if err := r.declareAndBindQueue(
+		RoomsQueue,
+		[]string{
+			contracts.EventRoomCreated,
+			contracts.EventRoomDeleted,
+		},
+		VisperExchange,
+	); err != nil {
+		return err
 	}
 
 	return nil

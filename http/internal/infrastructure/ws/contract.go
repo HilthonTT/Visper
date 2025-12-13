@@ -47,6 +47,10 @@ type BootPayload struct {
 	Reason   string `json:"reason"`
 }
 
+type RoomDeletedPayload struct {
+	RoomID string `json:"roomid"`
+}
+
 func NewMessageReceived(roomID, msgID, content, userID, username, timestamp string) *WSMessage {
 	return &WSMessage{
 		Type:   MessageReceived,
@@ -140,6 +144,16 @@ func NewKicked(roomID, username, reason string) *WSMessage {
 		Data: BootPayload{
 			Reason:   reason,
 			Username: username,
+		},
+	}
+}
+
+func NewRoomDeleted(roomID string) *WSMessage {
+	return &WSMessage{
+		Type:   RoomDeleted,
+		RoomID: roomID,
+		Data: RoomDeletedPayload{
+			RoomID: roomID,
 		},
 	}
 }

@@ -28,6 +28,7 @@ type MessageRepository interface {
 	GetByRoomID(ctx context.Context, roomID string) ([]Message, error)
 	Delete(ctx context.Context, message *Message) error
 	GetByID(ctx context.Context, roomID, messageID string) (*Message, error)
+	DeleteByRoomID(ctx context.Context, roomID string) error
 }
 
 func NewMessage(member *Member, rawContent string, roomID string) (*Message, error) {

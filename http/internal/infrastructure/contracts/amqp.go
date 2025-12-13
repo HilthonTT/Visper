@@ -6,13 +6,11 @@ type AmqpMessage struct {
 	Data    []byte `json:"data"`
 }
 
-type EventType string
-
 // Routing keys - using consistent event/command patterns
 const (
-	EventMessageSent  EventType = "message.sent"
-	EventMemberJoined EventType = "member.joined"
-	EventMemberLeft   EventType = "member.left"
-	EventRoomCreated  EventType = "room.created"
-	EventRoomDeleted  EventType = "room.deleted"
+	EventMessageSent  = "message.sent"
+	EventMemberJoined = "member.joined"
+	EventMemberLeft   = "member.left"
+	EventRoomCreated  = "room.created"
+	EventRoomDeleted  = "room.deleted"
 )
