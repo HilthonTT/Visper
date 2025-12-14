@@ -1,17 +1,28 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
-
-	"github.com/hilthontt/visper/internal/infrastructure/json"
 )
 
 func (app *Application) rateLimiterMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if allow, retryAfter := app.ratelimiter.Allow(r.RemoteAddr); !allow {
-			json.WriteRateLimitError(w, int(retryAfter))
+		sourceKey := app.ratelimiter.GetSourceKey(r)
+
+		maxBurst := app.ratelimiter.GetMaxBurst()
+		if !app.ratelimiter.Allow(sourceKey) {
+			// Set rate limit headers
+			w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", maxBurst))
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.Header().Set("Retry-After", "1") // Retry after 1 second
+
+			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
+
+		remaining := app.ratelimiter.Remaining(sourceKey)
+		w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%d", maxBurst))
+		w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
 
 		next.ServeHTTP(w, r)
 	})

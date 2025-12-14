@@ -27,7 +27,7 @@ type MessageHandler func(context.Context, amqp.Delivery) error
 func NewRabbitMQ(uri string) (*RabbitMQ, error) {
 	conn, err := amqp.Dial(uri)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connecto RabbitMQ: %v", err)
+		return nil, fmt.Errorf("failed to connect to RabbitMQ: %v", err)
 	}
 
 	ch, err := conn.Channel()

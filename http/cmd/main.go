@@ -73,8 +73,12 @@ func main() {
 	healthHandler := health.NewHandler()
 	messageHandler := messages.NewHandler(roomRepository, messageRepository, roomManager, wsCore)
 
-	rateLimiter := ratelimiter.NewFixedWindowRateLimiter(cfg.RateLimiter.RequestsPerTimeFrame, cfg.RateLimiter.TimeFrame)
-	app := api.NewApplication(*cfg, *roomHandler, *healthHandler, *messageHandler, logger, rateLimiter)
+	rl := ratelimiter.New(ratelimiter.Options{
+		MaxRatePerSecond: cfg.RateLimiter.MaxRatePerSecond,
+		MaxBurst:         cfg.RateLimiter.MaxBurst,
+		SourceHeaderKey:  cfg.RateLimiter.SourceHeaderKey,
+	})
+	app := api.NewApplication(*cfg, *roomHandler, *healthHandler, *messageHandler, logger, rl)
 
 	expvar.Publish("goroutines", expvar.Func(func() any {
 		return runtime.NumGoroutine()

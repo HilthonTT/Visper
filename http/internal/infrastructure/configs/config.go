@@ -25,8 +25,10 @@ type HTTPConfig struct {
 }
 
 type RateLimiterConfig struct {
-	RequestsPerTimeFrame int           `koanf:"requestPerTimeFrame"`
-	TimeFrame            time.Duration `koanf:"timeFrame"`
+	MaxRatePerSecond int           `koanf:"maxRatePerSecond"`
+	MaxBurst         int           `koanf:"maxBurst"`
+	CacheTTL         time.Duration `koanf:"cacheTTL"`
+	SourceHeaderKey  string        `koanf:"sourceHeaderKey"`
 }
 
 type MessageStoreConfig struct {
