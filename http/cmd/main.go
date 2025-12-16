@@ -12,9 +12,10 @@ import (
 	"github.com/hilthontt/visper/internal/infrastructure/events"
 	"github.com/hilthontt/visper/internal/infrastructure/messaging"
 	"github.com/hilthontt/visper/internal/infrastructure/ratelimiter"
-	"github.com/hilthontt/visper/internal/infrastructure/repository"
 	"github.com/hilthontt/visper/internal/infrastructure/tracing"
 	"github.com/hilthontt/visper/internal/infrastructure/ws"
+	"github.com/hilthontt/visper/internal/persistence/db"
+	"github.com/hilthontt/visper/internal/persistence/repository"
 	"github.com/hilthontt/visper/internal/presentation/api"
 	"github.com/hilthontt/visper/internal/presentation/handler/health"
 	"github.com/hilthontt/visper/internal/presentation/handler/messages"
@@ -28,7 +29,6 @@ const (
 
 func main() {
 	tracerCfg := tracing.NewDefaultConfig(serviceName)
-
 	sh, err := tracing.InitTracer(tracerCfg)
 	if err != nil {
 		log.Fatalf("Failed to initialize the tracer: %v", err)
@@ -46,6 +46,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	mongoConfig := db.NewMongoDefaultConfig()
+	mongoClient, err := db.NewMongoClient(ctx, mongoConfig)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	mongoDatabase := db.GetDatabase(mongoClient, mongoConfig)
+	auditRepo := repository.NewRoomAuditLogRepository(mongoDatabase)
 
 	roomRepository := repository.NewRoomRepository(cfg.RoomStore.Capacity, time.Hour)
 	messageRepository := repository.NewMessageRepository(cfg.MessageStore.Capacity)
@@ -66,7 +75,7 @@ func main() {
 	roomPublisher := events.NewRoomPublisher(rabbitmq)
 
 	// Start Room Consumer
-	roomConsumer := events.NewRoomConsumer(rabbitmq)
+	roomConsumer := events.NewRoomConsumer(rabbitmq, auditRepo)
 	go roomConsumer.Listen()
 
 	roomHandler := rooms.NewHandler(roomRepository, messageRepository, roomManager, wsCore, roomPublisher)

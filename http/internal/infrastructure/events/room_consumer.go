@@ -5,18 +5,21 @@ import (
 	"encoding/json"
 	"log"
 
+	"github.com/hilthontt/visper/internal/domain"
 	"github.com/hilthontt/visper/internal/infrastructure/contracts"
 	"github.com/hilthontt/visper/internal/infrastructure/messaging"
 	"github.com/rabbitmq/amqp091-go"
 )
 
 type roomConsumer struct {
-	rabbitmq *messaging.RabbitMQ
+	rabbitmq  *messaging.RabbitMQ
+	auditRepo domain.RoomAuditRepository
 }
 
-func NewRoomConsumer(rabbitmq *messaging.RabbitMQ) *roomConsumer {
+func NewRoomConsumer(rabbitmq *messaging.RabbitMQ, auditRepo domain.RoomAuditRepository) *roomConsumer {
 	return &roomConsumer{
-		rabbitmq: rabbitmq,
+		rabbitmq:  rabbitmq,
+		auditRepo: auditRepo,
 	}
 }
 
