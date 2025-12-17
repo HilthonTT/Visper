@@ -6,7 +6,8 @@ import (
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/hilthontt/visper/cli/internal/tui"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/hilthontt/visper/cli/pkg/tui"
 )
 
 func main() {
@@ -17,7 +18,7 @@ func main() {
 	defer log.Close()
 	slog.SetDefault(slog.New(slog.NewTextHandler(log, &slog.HandlerOptions{})))
 
-	model, err := tui.NewModel()
+	model, err := tui.NewModel(lipgloss.DefaultRenderer())
 	if err != nil {
 		panic(err)
 	}

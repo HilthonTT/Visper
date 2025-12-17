@@ -37,9 +37,25 @@ func (c *roomConsumer) Listen() error {
 			return err
 		}
 
-		// TODO: Write audit logs
+		var log *domain.RoomAuditLog
 
-		log.Printf("Room Event Data received: %+v", payload)
+		switch msg.RoutingKey {
+		case contracts.EventRoomCreated:
+			log = domain.NewRoomCreatedLog(payload.Room.ID, payload.Room.Persistent, payload.Room.Expiry)
+		case contracts.EventRoomDeleted:
+			log = domain.NewRoomDeletedLog(payload.Room.ID, "deleted", len(payload.Room.Members))
+		case contracts.EventMemberJoined:
+			log = domain.NewMemberJoinedLog(payload.Room.ID, len(payload.Room.Members))
+		case contracts.EventMemberKicked:
+		case contracts.EventMemberLeft:
+			log = domain.NewMemberLeftLog(payload.Room.ID, len(payload.Room.Members), false)
+		}
+
+		if log != nil {
+			if err := c.auditRepo.Log(ctx, log); err != nil {
+				return err
+			}
+		}
 
 		return nil
 	})

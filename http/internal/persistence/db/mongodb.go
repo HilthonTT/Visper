@@ -26,7 +26,7 @@ type MongoConfig struct {
 }
 
 func NewMongoDefaultConfig() *MongoConfig {
-	uri := env.GetString("MONGODB_URI", "mongodb://localhost:27017")
+	uri := env.GetString("MONGODB_URI", "mongodb://admin:password@localhost:27017")
 	database := env.GetString("MONGODB_DATABASE", DefaultDatabase)
 
 	return &MongoConfig{

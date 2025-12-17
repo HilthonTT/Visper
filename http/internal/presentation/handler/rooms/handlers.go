@@ -95,7 +95,6 @@ func (h *Handler) CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.roomPublisher.PublishRoomCreated(ctx, *newRoom); err != nil {
 		log.Printf("Error publishing room created: %v\n", err)
-		return
 	}
 
 	json.Write(w, http.StatusCreated, resp)
@@ -198,6 +197,10 @@ func (h *Handler) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 		h.core.Broadcast() <- wsPayload
 	}
 
+	if err := h.roomPublisher.PublishRoomJoined(r.Context(), *room); err != nil {
+		log.Printf("Error publishing room joined: %v\n", err)
+	}
+
 	log.Printf("User %s (%s) connected to room %s", existingMember.User.Name, memberToken, roomID)
 }
 
@@ -261,6 +264,10 @@ func (h *Handler) BootUserHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusNoContent)
 
+	if err := h.roomPublisher.PublishRoomMemberKicked(r.Context(), *room); err != nil {
+		log.Printf("Error publishing room kicked: %v\n", err)
+	}
+
 	// Broadcast
 	payload := ws.NewKicked(roomID, bootedMember.User.Name, "booted")
 	h.core.Broadcast() <- payload
@@ -306,6 +313,10 @@ func (h *Handler) LeaveRoomHandler(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Failed to leave room: %v", err)
 			json.WriteInternalError(w, err)
 		}
+	}
+
+	if err := h.roomPublisher.PublishRoomLeave(r.Context(), *room); err != nil {
+		log.Printf("Error publishing room leave: %v\n", err)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
@@ -360,6 +371,10 @@ func (h *Handler) DeleteRoomHandler(w http.ResponseWriter, r *http.Request) {
 	if err := h.messageRepository.DeleteByRoomID(r.Context(), roomID); err != nil {
 		json.WriteInternalError(w, err)
 		return
+	}
+
+	if err := h.roomPublisher.PublishRoomDeleted(r.Context(), *deletedRoom); err != nil {
+		log.Printf("Error publishing room deleted: %v\n", err)
 	}
 
 	w.WriteHeader(http.StatusNoContent)

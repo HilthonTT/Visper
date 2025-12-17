@@ -25,6 +25,7 @@ func (m model) CursorUpdate(msg tea.Msg) (model, tea.Cmd) {
 		return m, tea.Every(time.Millisecond*700, func(t time.Time) tea.Msg {
 			return CursorTickMsg{}
 		})
+
 	}
 	return m, nil
 }

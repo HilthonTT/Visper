@@ -7,28 +7,26 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	apisdk "github.com/hilthontt/visper/api-sdk"
 	"github.com/hilthontt/visper/api-sdk/option"
-	"github.com/hilthontt/visper/cli/internal/common"
+	"github.com/hilthontt/visper/cli/pkg/resource"
 )
 
 func (m model) CreateSDKClient() *apisdk.Client {
 	options := []option.RequestOption{
-		option.WithBaseURL(common.Config.ApiURL),
-		option.WithAppID("terminal-client"),
+		option.WithBaseURL(resource.Resource.Api.Url),
 	}
-
 	return apisdk.NewClient(options...)
 }
 
-type SplashState struct {
+type splashState struct {
 	data  bool
 	delay bool
 }
 
-type DelayCompleteMsg struct{}
-
 type UserSignedInMsg struct {
 	client *apisdk.Client
 }
+
+type DelayCompleteMsg struct{}
 
 func (m model) LoadCmds() []tea.Cmd {
 	cmds := []tea.Cmd{}
@@ -80,7 +78,7 @@ func (m model) SplashUpdate(msg tea.Msg) (model, tea.Cmd) {
 	}
 
 	if m.IsLoadingComplete() {
-		// TODO: Load the menu page
+		// TODO
 	}
 
 	return m, nil

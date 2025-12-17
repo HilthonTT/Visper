@@ -42,7 +42,7 @@ func NewRoomCreatedLog(roomID string, persistent bool, expiry time.Duration) *Ro
 		RoomID:    roomID,
 		EventType: EventRoomCreated,
 		Timestamp: time.Now(),
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"persistent":     persistent,
 			"expiry_seconds": expiry.Seconds(),
 		},
@@ -55,7 +55,7 @@ func NewRoomDeletedLog(roomID string, reason string, memberCount int) *RoomAudit
 		RoomID:    roomID,
 		EventType: EventRoomDeleted,
 		Timestamp: time.Now(),
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"reason":       reason,
 			"member_count": memberCount,
 		},
@@ -68,7 +68,7 @@ func NewMemberJoinedLog(roomID string, memberCount int) *RoomAuditLog {
 		RoomID:    roomID,
 		EventType: EventMemberJoined,
 		Timestamp: time.Now(),
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"member_count": memberCount,
 		},
 	}
@@ -80,7 +80,7 @@ func NewMemberLeftLog(roomID string, memberCount int, wasOwner bool) *RoomAuditL
 		RoomID:    roomID,
 		EventType: EventMemberLeft,
 		Timestamp: time.Now(),
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"member_count": memberCount,
 			"was_owner":    wasOwner,
 		},
@@ -93,7 +93,7 @@ func NewOwnershipTransferLog(roomID string, reason string) *RoomAuditLog {
 		RoomID:    roomID,
 		EventType: EventOwnershipTransfer,
 		Timestamp: time.Now(),
-		Metadata: map[string]interface{}{
+		Metadata: map[string]any{
 			"reason": reason, // "owner_left", "manual_transfer", etc.
 		},
 	}
@@ -105,6 +105,6 @@ func NewRoomFullRejectionLog(roomID string) *RoomAuditLog {
 		RoomID:    roomID,
 		EventType: EventRoomFull,
 		Timestamp: time.Now(),
-		Metadata:  map[string]interface{}{},
+		Metadata:  map[string]any{},
 	}
 }

@@ -11,6 +11,7 @@ const (
 	EventMessageSent  = "message.sent"
 	EventMemberJoined = "member.joined"
 	EventMemberLeft   = "member.left"
+	EventMemberKicked = "member.kicked"
 	EventRoomCreated  = "room.created"
 	EventRoomDeleted  = "room.deleted"
 )
