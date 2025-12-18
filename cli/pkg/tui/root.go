@@ -15,6 +15,10 @@ type size = int
 
 const (
 	splashPage page = iota
+	faqPage
+	newRoomPage
+	joinRoomPage
+	chatPage
 )
 
 const (
@@ -27,6 +31,7 @@ const (
 type state struct {
 	splash splashState
 	cursor cursorState
+	footer footerState
 }
 
 type visibleError struct {
@@ -34,6 +39,7 @@ type visibleError struct {
 }
 
 type model struct {
+	switched        bool
 	renderer        *lipgloss.Renderer
 	page            page
 	state           state
@@ -48,6 +54,7 @@ type model struct {
 	heightContent   int
 	size            size
 	theme           theme.Theme
+	faqs            []FAQ
 }
 
 func NewModel(renderer *lipgloss.Renderer) (tea.Model, error) {
@@ -59,8 +66,12 @@ func NewModel(renderer *lipgloss.Renderer) (tea.Model, error) {
 		renderer: renderer,
 		state: state{
 			splash: splashState{},
+			footer: footerState{
+				commands: []footerCommand{},
+			},
 		},
 		theme: theme.BasicTheme(renderer, nil),
+		faqs:  LoadFaqs(),
 	}
 
 	return m, nil
@@ -74,6 +85,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds := []tea.Cmd{}
 
 	switch msg := msg.(type) {
+	case visibleError:
+		m.error = &msg
 	case tea.WindowSizeMsg:
 		m.viewportWidth = msg.Width
 		m.viewportHeight = msg.Height
@@ -121,18 +134,90 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m.page {
 	case splashPage:
 		m, cmd = m.SplashUpdate(msg)
+	case joinRoomPage:
+		m, cmd = m.JoinRoomUpdate(msg)
+	case newRoomPage:
+		m, cmd = m.NewRoomUpdate(msg)
+	case chatPage:
+		m, cmd = m.ChatUpdate(msg)
 	}
 
-	cmds = append(cmds, cmd)
+	var headerCmd tea.Cmd
+	m, headerCmd = m.HeaderUpdate(msg)
+	cmds = append(cmds, headerCmd)
+
+	if cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+
+	if m.switched {
+		m.switched = false
+	}
 
 	return m, tea.Batch(cmds...)
 }
 
 func (m model) View() string {
+	if m.size == undersized {
+		return m.ResizeView()
+	}
+
 	switch m.page {
 	case splashPage:
 		return m.SplashView()
-	}
+	case chatPage:
+		return m.ChatView()
+	default:
+		header := m.HeaderView()
+		footer := m.FooterView()
 
-	return "Test"
+		// Get content based on current page
+		content := m.getContent()
+
+		height := m.heightContainer
+		height -= lipgloss.Height(header)
+		height -= lipgloss.Height(footer)
+
+		body := m.theme.Base().Width(m.widthContainer).Height(height).Render(content)
+
+		items := []string{}
+		items = append(items, header)
+		items = append(items, body)
+		items = append(items, footer)
+
+		child := lipgloss.JoinVertical(
+			lipgloss.Left,
+			items...,
+		)
+
+		return m.renderer.Place(
+			m.viewportWidth,
+			m.viewportHeight,
+			lipgloss.Center,
+			lipgloss.Center,
+			m.theme.Base().
+				MaxWidth(m.widthContainer).
+				MaxHeight(m.heightContainer).
+				Render(child),
+		)
+	}
+}
+
+func (m model) SwitchPage(page page) model {
+	m.page = page
+	m.switched = true
+	return m
+}
+
+func (m model) getContent() string {
+	page := "unknown"
+	switch m.page {
+	case newRoomPage:
+		page = m.NewRoomView()
+	case joinRoomPage:
+		page = m.JoinRoomView()
+	case faqPage:
+		page = m.FaqView()
+	}
+	return page
 }

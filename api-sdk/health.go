@@ -20,7 +20,7 @@ func NewHealthService(opts ...option.RequestOption) *HealthService {
 
 func (h *HealthService) Get(ctx context.Context, opts ...option.RequestOption) (*HealthResponse, error) {
 	opts = slices.Concat(h.Options, opts)
-	path := "health"
+	path := "api/health"
 
 	res := &HealthResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)

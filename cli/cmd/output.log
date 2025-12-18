@@ -1,0 +1,6 @@
+time=2025-12-18T20:26:05.606+01:00 level=INFO msg="state: {false false}"
+time=2025-12-18T20:26:05.608+01:00 level=INFO msg="state: {false false}"
+time=2025-12-18T20:26:05.609+01:00 level=INFO msg="state: {false false}"
+time=2025-12-18T20:26:05.640+01:00 level=INFO msg="state: {true false}"
+time=2025-12-18T20:26:07.607+01:00 level=INFO msg="state: {true true}"
+time=2025-12-18T20:26:07.607+01:00 level=INFO msg="Hit here?"

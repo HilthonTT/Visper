@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"log"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -38,7 +39,9 @@ func (m model) LoadCmds() []tea.Cmd {
 	cmds = append(cmds, func() tea.Msg {
 		response, err := m.client.Health.Get(m.context)
 		if err != nil {
-			return err
+			return visibleError{
+				message: err.Error(),
+			}
 		}
 		return response
 	})
@@ -73,12 +76,17 @@ func (m model) SplashUpdate(msg tea.Msg) (model, tea.Cmd) {
 		return m, tea.Batch(m.LoadCmds()...)
 	case DelayCompleteMsg:
 		m.state.splash.delay = true
-	case apisdk.HealthResponse:
+	case *apisdk.HealthResponse:
 		m.state.splash.data = true
+	case visibleError:
+		m.error = &msg
 	}
 
+	log.Printf("state: %v\n", m.state.splash)
+
 	if m.IsLoadingComplete() {
-		// TODO
+		log.Printf("Hit here?\n")
+		return m.NewRoomSwitch()
 	}
 
 	return m, nil

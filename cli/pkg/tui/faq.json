@@ -1,0 +1,42 @@
+[
+  {
+    "question": "Do I need to create an account to use this chat app?",
+    "answer": "No account needed. Just launch the app and start chatting immediately."
+  },
+  {
+    "question": "How do I start a new chat room?",
+    "answer": "Simply create a room from the main menu. You'll get a room code to share with others."
+  },
+  {
+    "question": "How do people join my room?",
+    "answer": "Share the room code with anyone you want to chat with. They enter the code and they're in."
+  },
+  {
+    "question": "What information do I need to provide?",
+    "answer": "None. No email, phone number, or personal details required."
+  },
+  {
+    "question": "How do I delete a room?",
+    "answer": "The room creator can delete it at any time from the room settings. Once deleted, all messages are removed."
+  },
+  {
+    "question": "What happens to my messages when I close the app?",
+    "answer": "Messages only exist while the room is active. Once the room is deleted, all chat history is permanently removed."
+  },
+  {
+    "question": "Can I use this on multiple devices?",
+    "answer": "Yes, just enter the same room code on any device running the terminal app."
+  },
+  {
+    "question": "Is my chat private?",
+    "answer": "Chats are private to room members. Since no personal data is collected, your identity remains anonymous."
+  },
+  {
+    "question": "How many people can join a room?",
+    "answer": "This depends on your server configuration, but rooms support multiple participants simultaneously."
+  },
+  {
+    "question": "Do I need an internet connection?",
+    "answer": "Yes, an active internet connection is required to create, join, and participate in chat rooms."
+  }
+]

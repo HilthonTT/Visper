@@ -24,7 +24,7 @@ func NewRoomService(opts ...option.RequestOption) *RoomService {
 
 func (r *RoomService) New(ctx context.Context, body roomNewParams, opts ...option.RequestOption) (*roomNewResponse, error) {
 	opts = slices.Concat(r.Options, opts)
-	path := "rooms"
+	path := "api/rooms"
 
 	res := &roomNewResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, &res, opts...)
@@ -38,7 +38,7 @@ func (r *RoomService) Get(ctx context.Context, id string, opts ...option.Request
 		return nil, ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("/rooms/%s", id)
+	path := fmt.Sprintf("api/rooms/%s", id)
 	res := &roomNewResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
 
@@ -51,7 +51,7 @@ func (r *RoomService) Delete(ctx context.Context, id string, opts ...option.Requ
 		return ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("/rooms/%s", id)
+	path := fmt.Sprintf("api/rooms/%s", id)
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodDelete, path, nil, nil, opts...)
 
 	return err
@@ -69,7 +69,7 @@ func (r *RoomService) Join(ctx context.Context, joinOpts joinRoomOpts, opts ...o
 		return ErrMissingUsername
 	}
 
-	path := fmt.Sprintf("/rooms/%s/join", joinOpts.RoomID)
+	path := fmt.Sprintf("api/rooms/%s/join", joinOpts.RoomID)
 	query := url.Values{}
 	query.Set("joinCode", joinOpts.JoinCode)
 	query.Set("username", joinOpts.Username)
@@ -86,7 +86,7 @@ func (r *RoomService) Leave(ctx context.Context, id string, opts ...option.Reque
 		return ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("/rooms/%s/leave", id)
+	path := fmt.Sprintf("api/rooms/%s/leave", id)
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, nil, opts...)
 
 	return err
@@ -98,7 +98,7 @@ func (r *RoomService) Boot(ctx context.Context, id string, body bootUserParams, 
 		return ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("/rooms/%s/boot", id)
+	path := fmt.Sprintf("api/rooms/%s/boot", id)
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, nil, opts...)
 
 	return err
