@@ -3,10 +3,13 @@ package tui
 import (
 	"context"
 	"math"
+	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	apisdk "github.com/hilthontt/visper/api-sdk"
+	"github.com/hilthontt/visper/cli/pkg/generator"
 	"github.com/hilthontt/visper/cli/pkg/tui/theme"
 )
 
@@ -55,9 +58,10 @@ type model struct {
 	size            size
 	theme           theme.Theme
 	faqs            []FAQ
+	generator       *generator.Generator
 }
 
-func NewModel(renderer *lipgloss.Renderer) (tea.Model, error) {
+func NewModel(renderer *lipgloss.Renderer, generator *generator.Generator) (tea.Model, error) {
 	ctx := context.Background()
 
 	m := model{
@@ -70,8 +74,9 @@ func NewModel(renderer *lipgloss.Renderer) (tea.Model, error) {
 				commands: []footerCommand{},
 			},
 		},
-		theme: theme.BasicTheme(renderer, nil),
-		faqs:  LoadFaqs(),
+		theme:     theme.BasicTheme(renderer, nil),
+		faqs:      LoadFaqs(),
+		generator: generator,
 	}
 
 	return m, nil
@@ -113,8 +118,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.widthContent = m.widthContainer - 2
 		m.heightContent = m.heightContainer
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "esc":
+		switch {
+		case key.Matches(msg, keys.Back):
 			if m.error != nil {
 				if m.page == splashPage {
 					return m, tea.Quit
@@ -122,7 +127,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.error = nil
 				return m, nil
 			}
-		case "ctrl+c":
+		case key.Matches(msg, keys.Quit):
 			return m, tea.Quit
 		}
 	case CursorTickMsg:
@@ -180,14 +185,14 @@ func (m model) View() string {
 
 		body := m.theme.Base().Width(m.widthContainer).Height(height).Render(content)
 
-		items := []string{}
-		items = append(items, header)
-		items = append(items, body)
-		items = append(items, footer)
+		sb := strings.Builder{}
+		sb.WriteString(header)
+		sb.WriteString(body)
+		sb.WriteString(footer)
 
 		child := lipgloss.JoinVertical(
 			lipgloss.Left,
-			items...,
+			sb.String(),
 		)
 
 		return m.renderer.Place(

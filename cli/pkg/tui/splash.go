@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"log"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -82,10 +81,7 @@ func (m model) SplashUpdate(msg tea.Msg) (model, tea.Cmd) {
 		m.error = &msg
 	}
 
-	log.Printf("state: %v\n", m.state.splash)
-
 	if m.IsLoadingComplete() {
-		log.Printf("Hit here?\n")
 		return m.NewRoomSwitch()
 	}
 
