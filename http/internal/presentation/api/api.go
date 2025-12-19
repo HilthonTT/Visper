@@ -55,8 +55,10 @@ func (app *Application) Mount() http.Handler {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	r.Use(app.rateLimiterMiddleware)
+	r.Use(app.loggerMiddleware)
+	r.Use(app.prometheusMiddleware)
 	r.Use(app.enableCors)
+	r.Use(app.rateLimiterMiddleware)
 
 	r.Route("/api", func(r chi.Router) {
 		r.Route("/rooms", func(r chi.Router) {

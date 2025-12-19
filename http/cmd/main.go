@@ -20,11 +20,13 @@ import (
 	"github.com/hilthontt/visper/internal/presentation/handler/health"
 	"github.com/hilthontt/visper/internal/presentation/handler/messages"
 	"github.com/hilthontt/visper/internal/presentation/handler/rooms"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.uber.org/zap"
 )
 
 const (
 	serviceName = "visper-api"
+	version     = "1.0.0"
 )
 
 func main() {
@@ -89,9 +91,24 @@ func main() {
 	})
 	app := api.NewApplication(*cfg, *roomHandler, *healthHandler, *messageHandler, logger, rl)
 
+	// Metrics collected
 	expvar.Publish("goroutines", expvar.Func(func() any {
 		return runtime.NumGoroutine()
 	}))
+	expvar.Publish("database", expvar.Func(func() any {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		var result bson.M
+		err := mongoClient.Database("admin").RunCommand(ctx, bson.D{{Key: "serverStatus", Value: 1}}).Decode(&result)
+		if err != nil {
+			return map[string]any{
+				"error": err.Error(),
+			}
+		}
+		return result
+	}))
+	expvar.NewString("version").Set(version)
 
 	mux := app.Mount()
 	logger.Fatal(app.Run(mux))
