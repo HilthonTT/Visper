@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"errors"
+
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -19,6 +21,12 @@ func (m model) HeaderUpdate(msg tea.Msg) (model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
+		case key.Matches(msg, keys.Left):
+			// Navigate to previous page
+			return m.navigateToPage(-1)
+		case key.Matches(msg, keys.Right):
+			// Navigate to next page
+			return m.navigateToPage(1)
 		case key.Matches(msg, keys.NewRoomPage):
 			if m.page != newRoomPage {
 				return m.NewRoomSwitch()
@@ -30,6 +38,10 @@ func (m model) HeaderUpdate(msg tea.Msg) (model, tea.Cmd) {
 		case key.Matches(msg, keys.FaqPage):
 			if m.page != faqPage {
 				return m.FaqSwitch()
+			}
+		case key.Matches(msg, keys.MenuPage):
+			if m.page != menuPage {
+				return m.MenuSwitch()
 			}
 		case key.Matches(msg, keys.Quit):
 			return m, tea.Quit
@@ -82,7 +94,6 @@ func (m model) getHeaderStyles() headerStyles {
 }
 
 func (m model) buildHeaderTabs(styles headerStyles) []string {
-	// Build menu and logo
 	menu := styles.bold("m") + styles.base(" ☰")
 
 	cursorHighlight := m.theme.Base().
@@ -91,12 +102,10 @@ func (m model) buildHeaderTabs(styles headerStyles) []string {
 	mark := styles.bold("t") + cursorHighlight
 	logo := styles.bold("visper")
 
-	// Build tab items with active state
 	newRoom := m.buildTab("n", "new room", m.page == newRoomPage, styles)
 	joinRoom := m.buildTab("j", "join room", m.page == joinRoomPage, styles)
 	faq := m.buildTab("f", "faq", m.page == faqPage, styles)
 
-	// Return tabs based on screen size
 	switch m.size {
 	case small:
 		return []string{mark, newRoom, joinRoom}
@@ -112,4 +121,49 @@ func (m model) buildTab(key, label string, active bool, styles headerStyles) str
 		return styles.accent(key + " " + label)
 	}
 	return styles.accent(key) + styles.base(" "+label)
+}
+
+func (m model) getNavigablePages() []page {
+	switch m.size {
+	case small:
+		return []page{newRoomPage, joinRoomPage}
+	case medium:
+		return []page{newRoomPage, joinRoomPage}
+	default:
+		return []page{newRoomPage, joinRoomPage, faqPage}
+	}
+}
+
+func (m model) getCurrentPageIndex() (int, error) {
+	pages := m.getNavigablePages()
+	for i, p := range pages {
+		if p == m.page {
+			return i, nil
+		}
+	}
+	return -1, errors.New("page not found")
+}
+
+func (m model) navigateToPage(direction int) (model, tea.Cmd) {
+	currentIndex, err := m.getCurrentPageIndex()
+
+	// If current page is not in navigable list, don't navigate
+	if err != nil || currentIndex == -1 {
+		return m, nil
+	}
+
+	pages := m.getNavigablePages()
+	newIndex := (currentIndex + direction + len(pages)) % len(pages)
+	targetPage := pages[newIndex]
+
+	switch targetPage {
+	case newRoomPage:
+		return m.NewRoomSwitch()
+	case joinRoomPage:
+		return m.JoinRoomSwitch()
+	case faqPage:
+		return m.FaqSwitch()
+	default:
+		return m, nil
+	}
 }

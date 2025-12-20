@@ -12,11 +12,18 @@ type keyMap struct {
 	NewRoomPage  key.Binding
 	JoinRoomPage key.Binding
 	FaqPage      key.Binding
+	MenuPage     key.Binding
 
 	// Context-specific (can be enabled/disabled per page)
 	Enter  key.Binding
 	Tab    key.Binding
 	Submit key.Binding
+	Yes    key.Binding
+	No     key.Binding
+
+	// Navigation arrows
+	Left  key.Binding
+	Right key.Binding
 }
 
 var keys = keyMap{
@@ -47,6 +54,10 @@ var keys = keyMap{
 		key.WithKeys("f"),
 		key.WithHelp("f", "faq"),
 	),
+	MenuPage: key.NewBinding(
+		key.WithKeys("m"),
+		key.WithHelp("m", "menu"),
+	),
 
 	// Context-specific
 	Enter: key.NewBinding(
@@ -61,6 +72,24 @@ var keys = keyMap{
 		key.WithKeys("ctrl+s"),
 		key.WithHelp("ctrl+s", "submit"),
 	),
+	Yes: key.NewBinding(
+		key.WithKeys("y", "Y"),
+		key.WithHelp("y", "yes"),
+	),
+	No: key.NewBinding(
+		key.WithKeys("n", "N"),
+		key.WithHelp("n", "no"),
+	),
+
+	// Navigation arrows
+	Left: key.NewBinding(
+		key.WithKeys("left"),
+		key.WithHelp("←", "previous page"),
+	),
+	Right: key.NewBinding(
+		key.WithKeys("right"),
+		key.WithHelp("→", "next page"),
+	),
 }
 
 // FullHelp returns all keybindings for the help view
@@ -72,6 +101,8 @@ func (k keyMap) FullHelp() []key.Binding {
 		k.NewRoomPage,
 		k.JoinRoomPage,
 		k.FaqPage,
+		k.Left,
+		k.Right,
 	}
 }
 

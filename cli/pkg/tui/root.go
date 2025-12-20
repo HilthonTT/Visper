@@ -22,6 +22,7 @@ const (
 	newRoomPage
 	joinRoomPage
 	chatPage
+	menuPage
 )
 
 const (
@@ -32,9 +33,12 @@ const (
 )
 
 type state struct {
-	splash splashState
-	cursor cursorState
-	footer footerState
+	splash   splashState
+	cursor   cursorState
+	footer   footerState
+	menu     menuState
+	joinRoom joinRoomState
+	newRoom  newRoomState
 }
 
 type visibleError struct {
@@ -73,6 +77,9 @@ func NewModel(renderer *lipgloss.Renderer, generator *generator.Generator) (tea.
 			footer: footerState{
 				commands: []footerCommand{},
 			},
+			menu:     menuState{},
+			joinRoom: joinRoomState{},
+			newRoom:  newRoomState{},
 		},
 		theme:     theme.BasicTheme(renderer, nil),
 		faqs:      LoadFaqs(),
@@ -137,6 +144,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	switch m.page {
+	case menuPage:
+		m, cmd = m.MenuUpdate(msg)
 	case splashPage:
 		m, cmd = m.SplashUpdate(msg)
 	case joinRoomPage:
@@ -172,6 +181,8 @@ func (m model) View() string {
 		return m.SplashView()
 	case chatPage:
 		return m.ChatView()
+	case menuPage:
+		return m.MenuView()
 	default:
 		header := m.HeaderView()
 		footer := m.FooterView()
