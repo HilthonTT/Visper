@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/hilthontt/visper/internal/infrastructure/logging"
 )
 
 type responseWriter struct {
@@ -41,10 +43,15 @@ func (app *Application) rateLimiterMiddleware(next http.Handler) http.Handler {
 			w.Header().Set("X-RateLimit-Remaining", "0")
 			w.Header().Set("Retry-After", "1") // Retry after 1 second
 
-			app.logger.Warnw("rate limit exceeded",
-				"source", sourceKey,
-				"path", r.URL.Path,
-				"method", r.Method,
+			app.logger.Warn(
+				logging.General,
+				logging.RateLimiting,
+				"rate limit exceeded",
+				map[logging.ExtraKey]any{
+					"source": sourceKey,
+					"path":   r.URL.Path,
+					"method": r.Method,
+				},
 			)
 
 			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
@@ -93,32 +100,31 @@ func (app *Application) loggerMiddleware(next http.Handler) http.Handler {
 
 		duration := time.Since(start)
 
-		fields := []any{
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", wrapped.statusCode,
-			"duration_ms", duration.Milliseconds(),
-			"bytes", wrapped.bytes,
-			"remote_addr", r.RemoteAddr,
-			"user_agent", r.UserAgent(),
-			"client_ip", r.RemoteAddr,
+		extra := map[logging.ExtraKey]any{
+			"method":      r.Method,
+			"path":        r.URL.Path,
+			"status":      wrapped.statusCode,
+			"duration_ms": duration.Milliseconds(),
+			"bytes":       wrapped.bytes,
+			"remote_addr": r.RemoteAddr,
+			"user_agent":  r.UserAgent(),
+			"client_ip":   r.RemoteAddr,
 		}
 
 		if r.URL.RawQuery != "" {
-			fields = append(fields, "query", r.URL.RawQuery)
+			extra["query"] = r.URL.RawQuery
 		}
 
 		switch {
 		case wrapped.statusCode >= 500:
-			app.logger.Errorw("request completed with server error", fields...)
+			app.logger.Error(logging.RequestResponse, logging.ExternalService, "request completed with server error", extra)
 		case wrapped.statusCode >= 400:
-			app.logger.Warnw("request completed with client error", fields...)
+			app.logger.Warn(logging.RequestResponse, logging.ExternalService, "request completed with client error", extra)
 		default:
-			app.logger.Infow("request completed", fields...)
+			app.logger.Info(logging.RequestResponse, logging.ExternalService, "request completed", extra)
 		}
 	})
 }
-
 func (app *Application) prometheusMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -128,11 +134,16 @@ func (app *Application) prometheusMiddleware(next http.Handler) http.Handler {
 
 		duration := time.Since(start).Seconds()
 
-		app.logger.Debugw("prometheus metrics",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", wrapped.statusCode,
-			"duration_seconds", duration,
+		app.logger.Debug(
+			logging.Prometheus,
+			logging.ExternalService,
+			"prometheus metrics",
+			map[logging.ExtraKey]any{
+				"method":           r.Method,
+				"path":             r.URL.Path,
+				"status_code":      wrapped.statusCode,
+				"duration_seconds": duration,
+			},
 		)
 	})
 }

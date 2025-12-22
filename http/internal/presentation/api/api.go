@@ -12,12 +12,15 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/hilthontt/visper/docs"
+	_ "github.com/hilthontt/visper/docs"
 	"github.com/hilthontt/visper/internal/infrastructure/configs"
+	"github.com/hilthontt/visper/internal/infrastructure/logging"
 	"github.com/hilthontt/visper/internal/infrastructure/ratelimiter"
 	healthHandler "github.com/hilthontt/visper/internal/presentation/handler/health"
 	messagesHandler "github.com/hilthontt/visper/internal/presentation/handler/messages"
 	roomHandler "github.com/hilthontt/visper/internal/presentation/handler/rooms"
-	"go.uber.org/zap"
+	httpSwagger "github.com/swaggo/http-swagger/v2"
 )
 
 type Application struct {
@@ -25,7 +28,7 @@ type Application struct {
 	roomHandler     roomHandler.Handler
 	healthHandler   healthHandler.Handler
 	messagesHandler messagesHandler.Handler
-	logger          *zap.SugaredLogger
+	logger          logging.Logger
 	ratelimiter     ratelimiter.Limiter
 }
 
@@ -34,7 +37,7 @@ func NewApplication(
 	roomHandler roomHandler.Handler,
 	healthHandler healthHandler.Handler,
 	messagesHandler messagesHandler.Handler,
-	logger *zap.SugaredLogger,
+	logger logging.Logger,
 	ratelimiter ratelimiter.Limiter,
 ) *Application {
 	return &Application{
@@ -60,6 +63,12 @@ func (app *Application) Mount() http.Handler {
 	r.Use(app.enableCors)
 	r.Use(app.rateLimiterMiddleware)
 
+	if app.config.Environment != "production" {
+		r.Get("/swagger/*", httpSwagger.Handler(
+			httpSwagger.URL("/swagger/doc.json"),
+		))
+	}
+
 	r.Route("/api", func(r chi.Router) {
 		r.Route("/rooms", func(r chi.Router) {
 			r.Post("/", app.roomHandler.CreateRoomHandler)
@@ -82,7 +91,11 @@ func (app *Application) Mount() http.Handler {
 	return r
 }
 
-func (app *Application) Run(mux http.Handler) error {
+func (app *Application) Run(mux http.Handler, version string) error {
+	docs.SwaggerInfo.Version = version
+	docs.SwaggerInfo.Host = app.config.Swagger.Host
+	docs.SwaggerInfo.BasePath = "/api"
+
 	srv := &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", app.config.HTTP.Host, app.config.HTTP.Port),
 		Handler:      mux,
@@ -102,12 +115,26 @@ func (app *Application) Run(mux http.Handler) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		app.logger.Infow("signal caught", "signal", s.String())
+		app.logger.Info(
+			logging.General,
+			logging.Startup,
+			"signal caught",
+			map[logging.ExtraKey]any{
+				"signal": s.String(),
+			},
+		)
 
 		shutdown <- srv.Shutdown(ctx)
 	}()
 
-	app.logger.Infow("server has started", "addr", srv.Addr)
+	app.logger.Info(
+		logging.General,
+		logging.Startup,
+		"server started",
+		map[logging.ExtraKey]any{
+			"address": srv.Addr,
+		},
+	)
 
 	err := srv.ListenAndServe()
 	if !errors.Is(err, http.ErrServerClosed) {
@@ -119,7 +146,12 @@ func (app *Application) Run(mux http.Handler) error {
 		return err
 	}
 
-	app.logger.Infow("server has stopped", "addr", srv.Addr)
+	app.logger.Info(
+		logging.General,
+		logging.Startup,
+		"server stopped gracefully",
+		nil,
+	)
 
 	return nil
 }

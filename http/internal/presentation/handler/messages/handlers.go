@@ -34,6 +34,21 @@ func NewHandler(
 	}
 }
 
+// CreateNewMessageHandler godoc
+// @Summary      Create a new message
+// @Description  Creates a new message in the specified room and broadcasts it to all connected clients. Messages are persisted only if the room is persistent.
+// @Tags         messages
+// @Accept       json
+// @Produce      json
+// @Param        roomId path string true "Room ID"
+// @Param        request body createMessageRequest true "Message content"
+// @Success      201 {object} createMessageResponse "Message created successfully"
+// @Failure      400 {object} map[string]interface{} "Bad request - validation error or missing room ID"
+// @Failure      401 {object} map[string]interface{} "Unauthorized - missing authentication or not a member"
+// @Failure      404 {object} map[string]interface{} "Room not found"
+// @Failure      500 {object} map[string]interface{} "Internal server error"
+// @Security     MemberAuth
+// @Router       /rooms/{roomId}/messages [post]
 func (h *Handler) CreateNewMessageHandler(w http.ResponseWriter, r *http.Request) {
 	roomID := chi.URLParam(r, "roomId")
 	if roomID == "" {
@@ -104,6 +119,20 @@ func (h *Handler) CreateNewMessageHandler(w http.ResponseWriter, r *http.Request
 	h.core.Broadcast() <- wsPayload
 }
 
+// DeleteMessageHandler godoc
+// @Summary      Delete a message
+// @Description  Deletes a message from the room. Only available for persistent rooms.
+// @Tags         messages
+// @Produce      json
+// @Param        roomId path string true "Room ID"
+// @Param        messageId path string true "Message ID"
+// @Success      204 "Message deleted successfully"
+// @Failure      400 {object} map[string]interface{} "Bad request - missing room ID or message ID"
+// @Failure      401 {object} map[string]interface{} "Unauthorized - missing authentication or not a member"
+// @Failure      404 {object} map[string]interface{} "Room or message not found"
+// @Failure      500 {object} map[string]interface{} "Internal server error"
+// @Security     MemberAuth
+// @Router       /rooms/{roomId}/messages/{messageId} [delete]
 func (h *Handler) DeleteMessageHandler(w http.ResponseWriter, r *http.Request) {
 	roomID := chi.URLParam(r, "roomId")
 	if roomID == "" {

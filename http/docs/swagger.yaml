@@ -1,0 +1,591 @@
+basePath: /api
+definitions:
+  health.healthResponse:
+    properties:
+      status:
+        description: Health status (ok or unhealthy)
+        example: ok
+        type: string
+      timestamp:
+        description: Current server timestamp in RFC3339 format
+        example: "2024-01-01T12:00:00Z"
+        type: string
+      uptime:
+        description: Server uptime since start
+        example: 2h30m45s
+        type: string
+    type: object
+  messages.createMessageRequest:
+    properties:
+      content:
+        description: Message content
+        example: Hello, everyone!
+        maxLength: 5000
+        minLength: 1
+        type: string
+      roomId:
+        description: Room ID
+        example: 550e8400-e29b-41d4-a716-446655440003
+        type: string
+    type: object
+  messages.createMessageResponse:
+    properties:
+      content:
+        description: Message content
+        example: Hello, everyone!
+        type: string
+      id:
+        description: Unique message identifier
+        example: 550e8400-e29b-41d4-a716-446655440003
+        type: string
+      roomId:
+        description: Room identifier where message was sent
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+    type: object
+  rooms.bootUserRequest:
+    properties:
+      memberId:
+        description: Member ID to remove
+        example: 550e8400-e29b-41d4-a716-446655440001
+        type: string
+    type: object
+  rooms.createRoomRequest:
+    properties:
+      persistent:
+        description: Whether the room persists after all users leave
+        example: true
+        type: boolean
+      username:
+        description: Username of the room creator
+        example: john_doe
+        minLength: 1
+        type: string
+    type: object
+  rooms.createRoomResponse:
+    properties:
+      createdAt:
+        description: Room creation timestamp
+        example: "2024-01-01T12:00:00Z"
+        type: string
+      joinCode:
+        description: Code required to join the room
+        example: ABC123
+        type: string
+      persistent:
+        description: Whether the room is persistent
+        example: true
+        type: boolean
+      roomId:
+        description: Unique room identifier
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+    type: object
+  rooms.messageResponse:
+    properties:
+      content:
+        description: Message content
+        example: Hello, world!
+        type: string
+      id:
+        description: Unique message identifier
+        example: 550e8400-e29b-41d4-a716-446655440003
+        type: string
+      user:
+        allOf:
+        - $ref: '#/definitions/rooms.userResponse'
+        description: User who sent the message
+    type: object
+  rooms.roomResponse:
+    properties:
+      createdAt:
+        description: Room creation timestamp
+        example: "2024-01-01T12:00:00Z"
+        type: string
+      id:
+        description: Unique room identifier
+        example: 550e8400-e29b-41d4-a716-446655440000
+        type: string
+      joinCode:
+        description: Code required to join the room
+        example: ABC123
+        type: string
+      messages:
+        description: List of messages in the room
+        items:
+          $ref: '#/definitions/rooms.messageResponse'
+        type: array
+      owner:
+        allOf:
+        - $ref: '#/definitions/rooms.userResponse'
+        description: Room owner information
+      persistent:
+        description: Whether the room is persistent
+        example: true
+        type: boolean
+    type: object
+  rooms.userResponse:
+    properties:
+      id:
+        description: Unique user identifier
+        example: 550e8400-e29b-41d4-a716-446655440002
+        type: string
+      name:
+        description: Username
+        example: john_doe
+        type: string
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+    url: http://www.swagger.io/support
+  description: Anonymous chat room API with WebSocket support
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: Visper API
+  version: "1.0"
+paths:
+  /health:
+    get:
+      description: Returns the health status of the API, including uptime and current
+        timestamp
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Service is healthy
+          schema:
+            $ref: '#/definitions/health.healthResponse'
+        "503":
+          description: Service is unhealthy
+          schema:
+            $ref: '#/definitions/health.healthResponse'
+      summary: Health check
+      tags:
+      - health
+  /healthz:
+    get:
+      description: Returns the health status of the API, including uptime and current
+        timestamp
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Service is healthy
+          schema:
+            $ref: '#/definitions/health.healthResponse'
+        "503":
+          description: Service is unhealthy
+          schema:
+            $ref: '#/definitions/health.healthResponse'
+      summary: Health check
+      tags:
+      - health
+  /live:
+    get:
+      description: Returns the health status of the API, including uptime and current
+        timestamp
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Service is healthy
+          schema:
+            $ref: '#/definitions/health.healthResponse'
+        "503":
+          description: Service is unhealthy
+          schema:
+            $ref: '#/definitions/health.healthResponse'
+      summary: Health check
+      tags:
+      - health
+  /ready:
+    get:
+      description: Returns the health status of the API, including uptime and current
+        timestamp
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Service is healthy
+          schema:
+            $ref: '#/definitions/health.healthResponse'
+        "503":
+          description: Service is unhealthy
+          schema:
+            $ref: '#/definitions/health.healthResponse'
+      summary: Health check
+      tags:
+      - health
+  /rooms:
+    post:
+      consumes:
+      - application/json
+      description: Creates a new chat room with the specified settings and returns
+        room details
+      parameters:
+      - description: Room creation parameters
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/rooms.createRoomRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Room created successfully
+          schema:
+            $ref: '#/definitions/rooms.createRoomResponse'
+        "400":
+          description: Bad request - validation error or room full
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized - missing authentication
+          schema:
+            additionalProperties: true
+            type: object
+        "409":
+          description: Conflict - room already exists or user already in room
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - MemberAuth: []
+      summary: Create a new chat room
+      tags:
+      - rooms
+  /rooms/{roomId}:
+    delete:
+      description: Permanently deletes a room and all its messages (owner only)
+      parameters:
+      - description: Room ID
+        in: path
+        name: roomId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: Room deleted successfully
+        "400":
+          description: Bad request - missing room ID
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized - not owner or not member
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Room not found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - MemberAuth: []
+      summary: Delete a chat room
+      tags:
+      - rooms
+    get:
+      description: Retrieves room information including messages and members
+      parameters:
+      - description: Room ID
+        in: path
+        name: roomId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Room details
+          schema:
+            $ref: '#/definitions/rooms.roomResponse'
+        "400":
+          description: Bad request - missing room ID
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized - not a member
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Room not found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - MemberAuth: []
+      summary: Get room details
+      tags:
+      - rooms
+  /rooms/{roomId}/boot:
+    post:
+      consumes:
+      - application/json
+      description: Removes a user from the room (owner only)
+      parameters:
+      - description: Room ID
+        in: path
+        name: roomId
+        required: true
+        type: string
+      - description: User to boot
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/rooms.bootUserRequest'
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: User booted successfully
+        "400":
+          description: Bad request - cannot boot yourself
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized - not owner or not member
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Room or member not found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - MemberAuth: []
+      summary: Boot a user from room
+      tags:
+      - rooms
+  /rooms/{roomId}/join:
+    get:
+      consumes:
+      - application/json
+      description: Establishes WebSocket connection to join a chat room with the provided
+        join code
+      parameters:
+      - description: Room ID
+        in: path
+        name: roomId
+        required: true
+        type: string
+      - description: Join code for the room
+        in: query
+        name: joinCode
+        required: true
+        type: string
+      - description: Username to join with
+        in: query
+        name: username
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "101":
+          description: Switching Protocols - WebSocket connection established
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad request - missing parameters
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized - authentication failed
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Room not found
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - MemberAuth: []
+      summary: Join a chat room via WebSocket
+      tags:
+      - rooms
+  /rooms/{roomId}/leave:
+    post:
+      description: Removes the current user from the room
+      parameters:
+      - description: Room ID
+        in: path
+        name: roomId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: Left room successfully
+        "400":
+          description: Bad request - missing room ID
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized - not a member
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Room or member not found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - MemberAuth: []
+      summary: Leave a chat room
+      tags:
+      - rooms
+  /rooms/{roomId}/messages:
+    post:
+      consumes:
+      - application/json
+      description: Creates a new message in the specified room and broadcasts it to
+        all connected clients. Messages are persisted only if the room is persistent.
+      parameters:
+      - description: Room ID
+        in: path
+        name: roomId
+        required: true
+        type: string
+      - description: Message content
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/messages.createMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Message created successfully
+          schema:
+            $ref: '#/definitions/messages.createMessageResponse'
+        "400":
+          description: Bad request - validation error or missing room ID
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized - missing authentication or not a member
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Room not found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - MemberAuth: []
+      summary: Create a new message
+      tags:
+      - messages
+  /rooms/{roomId}/messages/{messageId}:
+    delete:
+      description: Deletes a message from the room. Only available for persistent
+        rooms.
+      parameters:
+      - description: Room ID
+        in: path
+        name: roomId
+        required: true
+        type: string
+      - description: Message ID
+        in: path
+        name: messageId
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "204":
+          description: Message deleted successfully
+        "400":
+          description: Bad request - missing room ID or message ID
+          schema:
+            additionalProperties: true
+            type: object
+        "401":
+          description: Unauthorized - missing authentication or not a member
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Room or message not found
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal server error
+          schema:
+            additionalProperties: true
+            type: object
+      security:
+      - MemberAuth: []
+      summary: Delete a message
+      tags:
+      - messages
+securityDefinitions:
+  MemberAuth:
+    in: cookie
+    name: member_id
+    type: apiKey
+swagger: "2.0"
+tags:
+- description: Room management operations
+  name: rooms
+- description: Message operations
+  name: messages
+- description: Health check endpoints
+  name: health

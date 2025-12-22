@@ -19,6 +19,17 @@ func NewHandler() *Handler {
 	return &Handler{}
 }
 
+// GetHealth godoc
+// @Summary      Health check
+// @Description  Returns the health status of the API, including uptime and current timestamp
+// @Tags         health
+// @Produce      json
+// @Success      200 {object} healthResponse "Service is healthy"
+// @Failure      503 {object} healthResponse "Service is unhealthy"
+// @Router       /health [get]
+// @Router       /healthz [get]
+// @Router       /ready [get]
+// @Router       /live [get]
 func (h *Handler) GetHealth(w http.ResponseWriter, r *http.Request) {
 	if atomic.LoadInt32(&healthy) == 0 {
 		json.Write(w, http.StatusServiceUnavailable, healthResponse{

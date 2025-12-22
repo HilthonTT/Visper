@@ -39,6 +39,20 @@ func NewHandler(
 	}
 }
 
+// CreateRoomHandler godoc
+// @Summary      Create a new chat room
+// @Description  Creates a new chat room with the specified settings and returns room details
+// @Tags         rooms
+// @Accept       json
+// @Produce      json
+// @Param        request body createRoomRequest true "Room creation parameters"
+// @Success      201 {object} createRoomResponse "Room created successfully"
+// @Failure      400 {object} map[string]interface{} "Bad request - validation error or room full"
+// @Failure      401 {object} map[string]interface{} "Unauthorized - missing authentication"
+// @Failure      409 {object} map[string]interface{} "Conflict - room already exists or user already in room"
+// @Failure      500 {object} map[string]interface{} "Internal server error"
+// @Security     MemberAuth
+// @Router       /rooms [post]
 func (h *Handler) CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 	var req createRoomRequest
 	if err := json.Read(r, &req); err != nil {
@@ -100,6 +114,21 @@ func (h *Handler) CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 	json.Write(w, http.StatusCreated, resp)
 }
 
+// JoinRoomHandler godoc
+// @Summary      Join a chat room via WebSocket
+// @Description  Establishes WebSocket connection to join a chat room with the provided join code
+// @Tags         rooms
+// @Accept       json
+// @Produce      json
+// @Param        roomId path string true "Room ID"
+// @Param        joinCode query string true "Join code for the room"
+// @Param        username query string true "Username to join with"
+// @Success      101 {object} map[string]interface{} "Switching Protocols - WebSocket connection established"
+// @Failure      400 {object} map[string]interface{} "Bad request - missing parameters"
+// @Failure      401 {object} map[string]interface{} "Unauthorized - authentication failed"
+// @Failure      404 {object} map[string]interface{} "Room not found"
+// @Security     MemberAuth
+// @Router       /rooms/{roomId}/join [get]
 func (h *Handler) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	roomID := chi.URLParam(r, "roomId")
 	if roomID == "" {
@@ -204,6 +233,21 @@ func (h *Handler) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("User %s (%s) connected to room %s", existingMember.User.Name, memberToken, roomID)
 }
 
+// BootUserHandler godoc
+// @Summary      Boot a user from room
+// @Description  Removes a user from the room (owner only)
+// @Tags         rooms
+// @Accept       json
+// @Produce      json
+// @Param        roomId path string true "Room ID"
+// @Param        request body bootUserRequest true "User to boot"
+// @Success      204 "User booted successfully"
+// @Failure      400 {object} map[string]interface{} "Bad request - cannot boot yourself"
+// @Failure      401 {object} map[string]interface{} "Unauthorized - not owner or not member"
+// @Failure      404 {object} map[string]interface{} "Room or member not found"
+// @Failure      500 {object} map[string]interface{} "Internal server error"
+// @Security     MemberAuth
+// @Router       /rooms/{roomId}/boot [post]
 func (h *Handler) BootUserHandler(w http.ResponseWriter, r *http.Request) {
 	roomID := chi.URLParam(r, "roomId")
 	if roomID == "" {
@@ -273,6 +317,19 @@ func (h *Handler) BootUserHandler(w http.ResponseWriter, r *http.Request) {
 	h.core.Broadcast() <- payload
 }
 
+// LeaveRoomHandler godoc
+// @Summary      Leave a chat room
+// @Description  Removes the current user from the room
+// @Tags         rooms
+// @Produce      json
+// @Param        roomId path string true "Room ID"
+// @Success      204 "Left room successfully"
+// @Failure      400 {object} map[string]interface{} "Bad request - missing room ID"
+// @Failure      401 {object} map[string]interface{} "Unauthorized - not a member"
+// @Failure      404 {object} map[string]interface{} "Room or member not found"
+// @Failure      500 {object} map[string]interface{} "Internal server error"
+// @Security     MemberAuth
+// @Router       /rooms/{roomId}/leave [post]
 func (h *Handler) LeaveRoomHandler(w http.ResponseWriter, r *http.Request) {
 	roomID := chi.URLParam(r, "roomId")
 	if roomID == "" {
@@ -326,6 +383,19 @@ func (h *Handler) LeaveRoomHandler(w http.ResponseWriter, r *http.Request) {
 	h.core.Broadcast() <- payload
 }
 
+// DeleteRoomHandler godoc
+// @Summary      Delete a chat room
+// @Description  Permanently deletes a room and all its messages (owner only)
+// @Tags         rooms
+// @Produce      json
+// @Param        roomId path string true "Room ID"
+// @Success      204 "Room deleted successfully"
+// @Failure      400 {object} map[string]interface{} "Bad request - missing room ID"
+// @Failure      401 {object} map[string]interface{} "Unauthorized - not owner or not member"
+// @Failure      404 {object} map[string]interface{} "Room not found"
+// @Failure      500 {object} map[string]interface{} "Internal server error"
+// @Security     MemberAuth
+// @Router       /rooms/{roomId} [delete]
 func (h *Handler) DeleteRoomHandler(w http.ResponseWriter, r *http.Request) {
 	roomID := chi.URLParam(r, "roomId")
 	if roomID == "" {
@@ -384,6 +454,19 @@ func (h *Handler) DeleteRoomHandler(w http.ResponseWriter, r *http.Request) {
 	h.core.Broadcast() <- payload
 }
 
+// GetRoomHandler godoc
+// @Summary      Get room details
+// @Description  Retrieves room information including messages and members
+// @Tags         rooms
+// @Produce      json
+// @Param        roomId path string true "Room ID"
+// @Success      200 {object} roomResponse "Room details"
+// @Failure      400 {object} map[string]interface{} "Bad request - missing room ID"
+// @Failure      401 {object} map[string]interface{} "Unauthorized - not a member"
+// @Failure      404 {object} map[string]interface{} "Room not found"
+// @Failure      500 {object} map[string]interface{} "Internal server error"
+// @Security     MemberAuth
+// @Router       /rooms/{roomId} [get]
 func (h *Handler) GetRoomHandler(w http.ResponseWriter, r *http.Request) {
 	roomID := chi.URLParam(r, "roomId")
 	if roomID == "" {
