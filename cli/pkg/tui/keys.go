@@ -15,11 +15,12 @@ type keyMap struct {
 	MenuPage     key.Binding
 
 	// Context-specific (can be enabled/disabled per page)
-	Enter  key.Binding
-	Tab    key.Binding
-	Submit key.Binding
-	Yes    key.Binding
-	No     key.Binding
+	Enter        key.Binding
+	Tab          key.Binding
+	Submit       key.Binding
+	Yes          key.Binding
+	No           key.Binding
+	ToggleSearch key.Binding
 
 	// Navigation arrows
 	Left  key.Binding
@@ -79,6 +80,10 @@ var keys = keyMap{
 	No: key.NewBinding(
 		key.WithKeys("n", "N"),
 		key.WithHelp("n", "no"),
+	),
+	ToggleSearch: key.NewBinding(
+		key.WithKeys("ctrl+s"),
+		key.WithHelp("ctrl+s", "toggle search"),
 	),
 
 	// Navigation arrows

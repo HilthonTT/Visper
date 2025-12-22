@@ -22,24 +22,24 @@ func NewRoomService(opts ...option.RequestOption) *RoomService {
 	return r
 }
 
-func (r *RoomService) New(ctx context.Context, body roomNewParams, opts ...option.RequestOption) (*roomNewResponse, error) {
+func (r *RoomService) New(ctx context.Context, body roomNewParams, opts ...option.RequestOption) (*RoomNewResponse, error) {
 	opts = slices.Concat(r.Options, opts)
 	path := "api/rooms"
 
-	res := &roomNewResponse{}
+	res := &RoomNewResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, &res, opts...)
 
 	return res, err
 }
 
-func (r *RoomService) Get(ctx context.Context, id string, opts ...option.RequestOption) (*roomNewResponse, error) {
+func (r *RoomService) Get(ctx context.Context, id string, opts ...option.RequestOption) (*RoomResponse, error) {
 	opts = slices.Concat(r.Options, opts)
 	if id == "" {
 		return nil, ErrMissingIDParameter
 	}
 
 	path := fmt.Sprintf("api/rooms/%s", id)
-	res := &roomNewResponse{}
+	res := &RoomResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
 
 	return res, err
@@ -113,14 +113,14 @@ func (r roomNewParams) MarshalJSON() ([]byte, error) {
 	return apijson.MarshalRoot(r)
 }
 
-type roomNewResponse struct {
+type RoomNewResponse struct {
 	RoomID     string    `json:"roomId"`
 	JoinCode   string    `json:"joinCode"`
 	CreatedAt  time.Time `json:"createdAt"`
 	Persistent bool      `json:"persistent"`
 }
 
-func (r roomNewResponse) UnmarshalJSON(data []byte) error {
+func (r RoomNewResponse) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
@@ -132,4 +132,26 @@ type joinRoomOpts struct {
 
 type bootUserParams struct {
 	MemberID string `json:"memberId"`
+}
+
+type UserResponse struct {
+	ID   string `json:"id"`
+	Name string `json:"name" example:"john_doe"`
+}
+
+type MessageResponse struct {
+	ID        string       `json:"id"`
+	User      UserResponse `json:"user"`
+	Content   string       `json:"content"`
+	CreatedAt time.Time    `json:"createdAt"`
+}
+
+type RoomResponse struct {
+	ID         string            `json:"id"`
+	JoinCode   string            `json:"joinCode"`
+	Owner      UserResponse      `json:"owner"`
+	Persistent bool              `json:"persistent"`
+	CreatedAt  time.Time         `json:"createdAt"`
+	Messages   []MessageResponse `json:"messages"`
+	Members    []UserResponse    `json:"members"`
 }

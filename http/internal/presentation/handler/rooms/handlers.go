@@ -505,7 +505,6 @@ func (h *Handler) GetRoomHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mappedMessages := make([]messageResponse, 0, len(messages))
-
 	for i, message := range messages {
 		mappedMessages[i] = messageResponse{
 			ID:      message.ID,
@@ -514,6 +513,15 @@ func (h *Handler) GetRoomHandler(w http.ResponseWriter, r *http.Request) {
 				ID:   message.User.ID,
 				Name: message.User.Name,
 			},
+			CreatedAt: message.CreatedAt,
+		}
+	}
+
+	mappedMembers := make([]userResponse, 0, len(room.Members))
+	for i, member := range room.Members {
+		mappedMembers[i] = userResponse{
+			ID:   member.User.ID,
+			Name: member.User.Name,
 		}
 	}
 
@@ -525,6 +533,7 @@ func (h *Handler) GetRoomHandler(w http.ResponseWriter, r *http.Request) {
 			Name: room.Owner.User.Name,
 		},
 		Messages:   mappedMessages,
+		Members:    mappedMembers,
 		Persistent: room.Persistent,
 		CreatedAt:  room.CreatedAt,
 	}

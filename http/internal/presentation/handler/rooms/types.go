@@ -29,9 +29,10 @@ type userResponse struct {
 
 // messageResponse represents a chat message
 type messageResponse struct {
-	ID      string       `json:"id" example:"550e8400-e29b-41d4-a716-446655440003"` // Unique message identifier
-	User    userResponse `json:"user"`                                              // User who sent the message
-	Content string       `json:"content" example:"Hello, world!"`                   // Message content
+	ID        string       `json:"id" example:"550e8400-e29b-41d4-a716-446655440003"` // Unique message identifier
+	User      userResponse `json:"user"`                                              // User who sent the message
+	Content   string       `json:"content" example:"Hello, world!"`                   // Message content
+	CreatedAt time.Time    `json:"createdAt"`                                         // Message timestamp
 }
 
 // roomResponse represents detailed room information
@@ -42,4 +43,5 @@ type roomResponse struct {
 	Persistent bool              `json:"persistent" example:"true"`                         // Whether the room is persistent
 	CreatedAt  time.Time         `json:"createdAt" example:"2024-01-01T12:00:00Z"`          // Room creation timestamp
 	Messages   []messageResponse `json:"messages"`                                          // List of messages in the room
+	Members    []userResponse    `json:"members"`                                           // List of members in the room
 }

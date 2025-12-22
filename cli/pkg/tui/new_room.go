@@ -178,7 +178,7 @@ func (m model) NewRoomUpdate(msg tea.Msg) (model, tea.Cmd) {
 			// m.state.newRoom.roomCode = "ABC-123-XYZ"
 			// m.state.newRoom.creating = false
 
-			return m, nil
+			return m.ChatSwitch()
 		}
 	}
 

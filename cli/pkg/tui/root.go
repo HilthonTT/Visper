@@ -39,6 +39,7 @@ type state struct {
 	menu     menuState
 	joinRoom joinRoomState
 	newRoom  newRoomState
+	chat     chatState
 }
 
 type visibleError struct {
@@ -80,6 +81,7 @@ func NewModel(renderer *lipgloss.Renderer, generator *generator.Generator) (tea.
 			menu:     menuState{},
 			joinRoom: joinRoomState{},
 			newRoom:  newRoomState{},
+			chat:     chatState{},
 		},
 		theme:     theme.BasicTheme(renderer, nil),
 		faqs:      LoadFaqs(),

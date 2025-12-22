@@ -1,16 +1,455 @@
 package tui
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	apisdk "github.com/hilthontt/visper/api-sdk"
+	"github.com/hilthontt/visper/cli/pkg/utils"
+	"github.com/reinhrst/fzf-lib"
+)
+
+type chatFocus int
+
+const (
+	focusMessage chatFocus = iota
+	focusSearch
+)
+
+type chatState struct {
+	roomCode         string
+	participants     []apisdk.UserResponse
+	filteredIndices  []int
+	messages         []apisdk.MessageResponse
+	messageInput     textinput.Model
+	searchInput      textinput.Model
+	messagesViewport viewport.Model
+	focusedInput     chatFocus
+	searchActive     bool
+	searchCtx        context.Context
+	searchCancel     context.CancelFunc
+}
+
+type participantSearchResultMsg struct {
+	results []fzf.MatchResult
+}
 
 func (m model) ChatSwitch() (model, tea.Cmd) {
 	m = m.SwitchPage(chatPage)
+	if m.state.chat.roomCode == "" {
+		msgInput := textinput.New()
+		msgInput.Placeholder = "Type a message..."
+		msgInput.Focus()
+		msgInput.Width = 50
+
+		searchInput := textinput.New()
+		searchInput.Placeholder = "Search participants..."
+		searchInput.Width = 20
+
+		vp := viewport.New(50, 20)
+
+		participants := []apisdk.UserResponse{
+			{Name: "Alice", ID: "abc"},
+			{Name: "Bob", ID: "def"},
+			{Name: "Charlie", ID: "ghij"},
+			{Name: "David", ID: "klmn"},
+			{Name: "Eve", ID: "opqrs"},
+		}
+
+		// Initialize with all participants visible
+		filteredIndices := make([]int, len(participants))
+		for i := range filteredIndices {
+			filteredIndices[i] = i
+		}
+
+		m.state.chat = chatState{
+			roomCode:        "ABC-123",
+			participants:    participants,
+			filteredIndices: filteredIndices,
+			messages: []apisdk.MessageResponse{
+				{
+					User:      apisdk.UserResponse{Name: "Alice", ID: "abc"},
+					Content:   "Hello all!",
+					CreatedAt: time.Now(),
+				},
+				{
+					User:      apisdk.UserResponse{Name: "Bob", ID: "def"},
+					Content:   "Hey everyone!",
+					CreatedAt: time.Now().Add(1 * time.Minute),
+				},
+				{
+					User:      apisdk.UserResponse{Name: "Charlie", ID: "ghij"},
+					Content:   "Good to be here!",
+					CreatedAt: time.Now().Add(2 * time.Minute),
+				},
+				{
+					User:      apisdk.UserResponse{Name: "David", ID: "klmn"},
+					Content:   "Welcome all!",
+					CreatedAt: time.Now().Add(3 * time.Minute),
+				},
+			},
+			messageInput:     msgInput,
+			searchInput:      searchInput,
+			messagesViewport: vp,
+			focusedInput:     focusMessage,
+			searchActive:     false,
+		}
+	}
+
 	return m, nil
 }
 
 func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
-	return m, nil
+	var cmd tea.Cmd
+	var cmds []tea.Cmd
+
+	switch msg := msg.(type) {
+	case participantSearchResultMsg:
+
+		if len(msg.results) == 0 {
+			// No results, show all
+			m.state.chat.filteredIndices = make([]int, len(m.state.chat.participants))
+			for i := range m.state.chat.filteredIndices {
+				m.state.chat.filteredIndices[i] = i
+			}
+		} else {
+			// Show only matching results in FZF order
+			m.state.chat.filteredIndices = make([]int, len(msg.results))
+			for i, result := range msg.results {
+				m.state.chat.filteredIndices[i] = int(result.HayIndex)
+			}
+		}
+		return m, nil
+
+	case tea.WindowSizeMsg:
+		leftWidth := 25
+		rightWidth := 20
+		centerWidth := m.widthContainer - leftWidth - rightWidth - 4
+
+		messagesHeight := m.heightContainer - 8
+		m.state.chat.messagesViewport.Width = centerWidth
+		m.state.chat.messagesViewport.Height = messagesHeight
+		m.state.chat.messageInput.Width = centerWidth - 2
+
+	case tea.KeyMsg:
+		switch {
+		case key.Matches(msg, keys.ToggleSearch):
+			// Toggle search focus
+			m.state.chat.searchActive = !m.state.chat.searchActive
+			if m.state.chat.searchActive {
+				m.state.chat.focusedInput = focusSearch
+				m.state.chat.searchInput.Focus()
+				m.state.chat.messageInput.Blur()
+			} else {
+				m.state.chat.focusedInput = focusMessage
+				m.state.chat.messageInput.Focus()
+				m.state.chat.searchInput.Blur()
+				// Cancel any ongoing search
+				if m.state.chat.searchCancel != nil {
+					m.state.chat.searchCancel()
+				}
+				// Reset to show all participants
+				m.state.chat.searchInput.SetValue("")
+				m.state.chat.filteredIndices = make([]int, len(m.state.chat.participants))
+				for i := range m.state.chat.filteredIndices {
+					m.state.chat.filteredIndices[i] = i
+				}
+			}
+			return m, nil
+		case key.Matches(msg, keys.Enter):
+			if m.state.chat.focusedInput == focusMessage && m.state.chat.messageInput.Value() != "" {
+				// Add new message
+				newMsg := apisdk.MessageResponse{
+					User: apisdk.UserResponse{
+						Name: "You",
+						ID:   "you",
+					},
+					Content:   m.state.chat.messageInput.Value(),
+					CreatedAt: time.Now(),
+				}
+				m.state.chat.messages = append(m.state.chat.messages, newMsg)
+				m.state.chat.messageInput.SetValue("")
+
+				m.state.chat.messagesViewport.SetContent(m.renderMessages())
+				m.state.chat.messagesViewport.GotoBottom()
+
+				return m, nil
+			}
+		case key.Matches(msg, keys.Back):
+			if m.state.chat.searchActive {
+				m.state.chat.searchActive = false
+				m.state.chat.focusedInput = focusMessage
+				m.state.chat.searchInput.Blur()
+				m.state.chat.messageInput.Focus()
+				// Cancel any ongoing search
+				if m.state.chat.searchCancel != nil {
+					m.state.chat.searchCancel()
+				}
+				// Reset to show all participants
+				m.state.chat.searchInput.SetValue("")
+				m.state.chat.filteredIndices = make([]int, len(m.state.chat.participants))
+				for i := range m.state.chat.filteredIndices {
+					m.state.chat.filteredIndices[i] = i
+				}
+				return m, nil
+			}
+		}
+	}
+
+	// Update the appropriate input
+	switch m.state.chat.focusedInput {
+	case focusMessage:
+		m.state.chat.messageInput, cmd = m.state.chat.messageInput.Update(msg)
+		cmds = append(cmds, cmd)
+	case focusSearch:
+		oldValue := m.state.chat.searchInput.Value()
+		m.state.chat.searchInput, cmd = m.state.chat.searchInput.Update(msg)
+		cmds = append(cmds, cmd)
+
+		// Trigger search if value changed
+		newValue := m.state.chat.searchInput.Value()
+		if oldValue != newValue {
+			// Cancel previous search if any
+			if m.state.chat.searchCancel != nil {
+				m.state.chat.searchCancel()
+			}
+
+			// Start new search
+			cmds = append(cmds, m.searchParticipants(newValue))
+		}
+	}
+
+	// Update viewport
+	m.state.chat.messagesViewport, cmd = m.state.chat.messagesViewport.Update(msg)
+	cmds = append(cmds, cmd)
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m model) searchParticipants(query string) tea.Cmd {
+	return func() tea.Msg {
+		if query == "" {
+			return participantSearchResultMsg{results: nil}
+		}
+
+		// Build source list from participant names
+		source := make([]string, len(m.state.chat.participants))
+		for i, p := range m.state.chat.participants {
+			source[i] = p.Name
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		m.state.chat.searchCtx = ctx
+		m.state.chat.searchCancel = cancel
+
+		results, err := utils.FzfSearch(query, source, 500*time.Millisecond)
+		if err != nil {
+			// On timeout or error, show all participants
+			return participantSearchResultMsg{results: nil}
+		}
+
+		return participantSearchResultMsg{results: results}
+	}
 }
 
 func (m model) ChatView() string {
-	return "chat view"
+	if m.size == undersized || m.size == small {
+		return m.chatViewCompact()
+	}
+
+	leftWidth := 25
+	rightWidth := 20
+	centerWidth := m.viewportWidth - leftWidth - rightWidth - 4
+
+	messagesHeight := m.viewportHeight - 6
+	m.state.chat.messagesViewport.Width = centerWidth
+	m.state.chat.messagesViewport.Height = messagesHeight
+	m.state.chat.messageInput.Width = centerWidth - 2
+
+	m.state.chat.messagesViewport.SetContent(m.renderMessages())
+
+	leftColumn := m.renderParticipantsSidebar(leftWidth, m.viewportHeight-2)
+	centerColumn := m.renderChatCenter(centerWidth, m.viewportHeight-2)
+	rightColumn := m.renderRightSidebar(rightWidth, m.viewportHeight-2)
+
+	header := m.renderChatHeader()
+
+	body := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		leftColumn,
+		centerColumn,
+		rightColumn,
+	)
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		header,
+		body,
+	)
+
+	return m.theme.Base().
+		Width(m.viewportWidth).
+		Height(m.viewportHeight).
+		Render(content)
+}
+
+func (m model) renderChatHeader() string {
+	roomInfo := fmt.Sprintf("Room: %s", m.state.chat.roomCode)
+	participantCount := fmt.Sprintf("🍣 %d", len(m.state.chat.participants))
+
+	leftPart := m.theme.TextBrand().Bold(true).Render(roomInfo)
+	rightPart := m.theme.TextBody().Render(participantCount)
+
+	spacer := m.viewportWidth - lipgloss.Width(leftPart) - lipgloss.Width(rightPart) - 4
+	if spacer < 0 {
+		spacer = 0
+	}
+
+	header := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		leftPart,
+		strings.Repeat(" ", spacer),
+		rightPart,
+	)
+
+	return m.theme.Base().
+		Width(m.viewportWidth).
+		BorderBottom(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(m.theme.Border()).
+		Padding(0, 1).
+		Render(header)
+}
+
+func (m model) renderParticipantsSidebar(width, height int) string {
+	sb := strings.Builder{}
+
+	searchStyle := m.theme.Base().
+		Width(width-2).
+		Padding(0, 1)
+
+	sb.WriteString(searchStyle.Render(m.state.chat.searchInput.View()))
+	sb.WriteString("\n")
+
+	titleText := fmt.Sprintf("Participants (%d)", len(m.state.chat.filteredIndices))
+	title := m.theme.TextAccent().Bold(true).Render(titleText)
+	sb.WriteString(m.theme.Base().Padding(0, 1).Render(title))
+	sb.WriteString("\n\n")
+
+	for _, idx := range m.state.chat.filteredIndices {
+		if idx >= len(m.state.chat.participants) {
+			continue
+		}
+
+		p := m.state.chat.participants[idx]
+		statusIcon := "●"
+		status := m.theme.Base().Foreground(lipgloss.Color("#10B981")).Render(statusIcon)
+		username := m.theme.TextBody().Render(p.Name)
+
+		line := lipgloss.JoinHorizontal(lipgloss.Left, status, " ", username)
+		sb.WriteString(m.theme.Base().Padding(0, 1).Render(line))
+		sb.WriteString("\n")
+	}
+
+	content := sb.String()
+
+	return m.theme.Base().
+		Width(width).
+		Height(height).
+		BorderRight(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(m.theme.Border()).
+		Render(content)
+}
+
+func (m model) renderChatCenter(width, height int) string {
+	sb := strings.Builder{}
+
+	messagesContainer := m.theme.Base().
+		Width(width).
+		Height(height - 4).
+		Render(m.state.chat.messagesViewport.View())
+
+	sb.WriteString(messagesContainer)
+	sb.WriteString("\n")
+
+	inputBorder := m.theme.Base().
+		Width(width).
+		BorderTop(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(m.theme.Border()).
+		Padding(0, 1).
+		Render(m.state.chat.messageInput.View())
+
+	sb.WriteString(inputBorder)
+
+	hint := m.theme.TextBody().Faint(true).Render("Press Ctrl+S to search participants")
+	sb.WriteString(m.theme.Base().Padding(0, 1).Render(hint))
+
+	return m.theme.Base().
+		Width(width).
+		Height(height).
+		Render(sb.String())
+}
+
+func (m model) renderMessages() string {
+	sb := strings.Builder{}
+	userID := "you" // TODO: use actual ID
+
+	for _, msg := range m.state.chat.messages {
+		timestamp := m.theme.TextBody().Faint(true).Render(msg.CreatedAt.Format("3:04 PM"))
+
+		var username string
+		if userID == msg.User.ID {
+			username = m.theme.TextBrand().Bold(true).Render(msg.User.Name)
+		} else {
+			username = m.theme.TextAccent().Bold(true).Render(msg.User.Name)
+		}
+
+		header := lipgloss.JoinHorizontal(lipgloss.Left, timestamp, " ", username)
+
+		var content string
+		if userID == msg.User.ID {
+			content = m.theme.TextAccent().Render(msg.Content)
+		} else {
+			content = m.theme.TextBody().Render(msg.Content)
+		}
+
+		msgStyle := m.theme.Base().
+			Padding(0, 1).
+			MarginBottom(1)
+
+		fullMsg := lipgloss.JoinVertical(lipgloss.Left, header, content)
+		sb.WriteString(msgStyle.Render(fullMsg))
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
+}
+
+func (m model) renderRightSidebar(width, height int) string {
+	content := m.theme.TextBody().Faint(true).Render("Coming soon...")
+
+	return m.theme.Base().
+		Width(width).
+		Height(height).
+		BorderLeft(true).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(m.theme.Border()).
+		Padding(1).
+		Render(content)
+}
+
+func (m model) chatViewCompact() string {
+	return m.theme.Base().
+		Width(m.widthContainer).
+		Height(m.heightContainer).
+		Render(m.theme.TextBody().Render("Chat view requires a larger terminal window"))
 }
