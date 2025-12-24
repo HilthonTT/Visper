@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	apisdk "github.com/hilthontt/visper/api-sdk"
+	filepreview "github.com/hilthontt/visper/cli/pkg/file_preview"
 	"github.com/hilthontt/visper/cli/pkg/generator"
 	"github.com/hilthontt/visper/cli/pkg/tui/theme"
 )
@@ -64,6 +65,7 @@ type model struct {
 	theme           theme.Theme
 	faqs            []FAQ
 	generator       *generator.Generator
+	imagePreviewer  *filepreview.ImagePreviewer
 }
 
 func NewModel(renderer *lipgloss.Renderer, generator *generator.Generator) (tea.Model, error) {
@@ -83,9 +85,10 @@ func NewModel(renderer *lipgloss.Renderer, generator *generator.Generator) (tea.
 			newRoom:  newRoomState{},
 			chat:     chatState{},
 		},
-		theme:     theme.BasicTheme(renderer, nil),
-		faqs:      LoadFaqs(),
-		generator: generator,
+		theme:          theme.BasicTheme(renderer, nil),
+		faqs:           LoadFaqs(),
+		generator:      generator,
+		imagePreviewer: filepreview.NewImagePreviewer(),
 	}
 
 	return m, nil

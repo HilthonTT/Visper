@@ -1,6 +1,8 @@
 package theme
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+)
 
 type Theme struct {
 	renderer *lipgloss.Renderer
@@ -54,6 +56,33 @@ func (b Theme) Background() lipgloss.TerminalColor {
 	return b.background
 }
 
+func (b Theme) BackgroundHex() string {
+	switch bg := b.background.(type) {
+	case lipgloss.AdaptiveColor:
+		if b.renderer.HasDarkBackground() {
+			return bg.Dark
+		}
+		return bg.Light
+	case lipgloss.Color:
+		return string(bg)
+	case lipgloss.CompleteAdaptiveColor:
+		if b.renderer.HasDarkBackground() {
+			return bg.Dark.TrueColor
+		}
+		return bg.Light.TrueColor
+	case lipgloss.CompleteColor:
+		return bg.TrueColor
+	case lipgloss.NoColor:
+		// Return a sensible default for no color
+		if b.renderer.HasDarkBackground() {
+			return "#000000"
+		}
+		return "#FFFFFF"
+	default:
+		// Fallback
+		return "#000000"
+	}
+}
 func (b Theme) Accent() lipgloss.TerminalColor {
 	return b.accent
 }

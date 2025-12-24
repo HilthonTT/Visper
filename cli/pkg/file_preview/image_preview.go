@@ -176,10 +176,11 @@ func ConvertImageToANSI(img image.Image, defaultBGColor color.Color) string {
 	cache := newColorCache()
 	defaultBGHex := colorToHex(defaultBGColor)
 
+	lowerColor := cache.getTermenvColor(defaultBGColor, "")
+
 	for y := 0; y < height; y += 2 {
 		for x := range width {
 			upperColor := cache.getTermenvColor(img.At(x, y), defaultBGHex)
-			lowerColor := cache.getTermenvColor(defaultBGColor, "")
 
 			if y+1 < height {
 				lowerColor = cache.getTermenvColor(img.At(x, y+1), defaultBGHex)
@@ -197,8 +198,69 @@ func ConvertImageToANSI(img image.Image, defaultBGColor color.Color) string {
 	return output
 }
 
-func (p *ImagePreviewer) ImagePreview(path string, maxWidth int, maxHeight int,
-	defaultBGColor string, sideAreaWidth int) (string, error) {
+func ConvertImageToANSITransparent(img image.Image) string {
+	width := img.Bounds().Dx()
+	height := img.Bounds().Dy()
+	output := ""
+	cache := newColorCache()
+
+	for y := 0; y < height; y += 2 {
+		for x := range width {
+			upperPixel := img.At(x, y)
+			var lowerPixel color.Color
+
+			if y+1 < height {
+				lowerPixel = img.At(x, y+1)
+			} else {
+				lowerPixel = color.RGBA{R: 0, G: 0, B: 0, A: 0}
+			}
+
+			// Check transparency for both pixels (including near-black pixels)
+			upperTransparent := isTransparentOrBlack(upperPixel)
+			lowerTransparent := isTransparentOrBlack(lowerPixel)
+
+			// Both transparent - output space (let terminal background show through)
+			if upperTransparent && lowerTransparent {
+				output += " "
+				continue
+			}
+
+			// Only upper transparent - show lower half block
+			if upperTransparent {
+				lowerColor := cache.getTermenvColor(lowerPixel, "")
+				cell := termenv.String("▄").Foreground(lowerColor)
+				output += cell.String()
+				continue
+			}
+
+			// Only lower transparent - show upper half block
+			if lowerTransparent {
+				upperColor := cache.getTermenvColor(upperPixel, "")
+				cell := termenv.String("▀").Foreground(upperColor)
+				output += cell.String()
+				continue
+			}
+
+			// Both opaque - standard rendering
+			upperColor := cache.getTermenvColor(upperPixel, "")
+			lowerColor := cache.getTermenvColor(lowerPixel, "")
+			cell := termenv.String("▄").Foreground(lowerColor).Background(upperColor)
+			output += cell.String()
+		}
+		// Only add newline if this is not the last row
+		if y+2 < height {
+			output += "\n"
+		}
+	}
+	return output
+}
+
+func (p *ImagePreviewer) ImagePreview(
+	path string,
+	maxWidth int,
+	maxHeight int,
+	defaultBGColor string,
+	sideAreaWidth int) (string, error) {
 	// Validate dimensions
 	if maxWidth <= 0 || maxHeight <= 0 {
 		return "", fmt.Errorf("dimensions must be positive (maxWidth=%d, maxHeight=%d)", maxWidth, maxHeight)
@@ -246,9 +308,49 @@ func (p *ImagePreviewer) ImagePreview(path string, maxWidth int, maxHeight int,
 	return preview, err
 }
 
+func (p *ImagePreviewer) ImagePreviewFromBytes(
+	data []byte,
+	maxWidth int,
+	maxHeight int,
+	defaultBGColor string,
+) (string, error) {
+	if maxWidth <= 0 || maxHeight <= 0 {
+		return "", fmt.Errorf("dimensions must be positive (maxWidth=%d, maxHeight=%d)", maxWidth, maxHeight)
+	}
+	if len(data) == 0 {
+		return "", fmt.Errorf("image data is empty")
+	}
+
+	const maxFileSize = 100 * 1024 * 1024
+	if len(data) >= maxFileSize {
+		return "", fmt.Errorf("image data too large: %d bytes", len(data))
+	}
+
+	img, _, _, err := prepareImageForPreview(data)
+	if err != nil {
+		return "", err
+	}
+
+	if defaultBGColor == "" {
+		return p.ANSIRendererTransparent(img, maxWidth, maxHeight)
+	}
+
+	return p.ANSIRenderer(img, defaultBGColor, maxWidth, maxHeight)
+}
+
+func (p *ImagePreviewer) ANSIRendererTransparent(img image.Image, maxWidth int, maxHeight int) (string, error) {
+	fittedImg := resizeForANSI(img, maxWidth, maxHeight)
+	return ConvertImageToANSITransparent(fittedImg), nil
+}
+
 // ImagePreviewWithRenderer generates an image preview using the specified renderer
-func (p *ImagePreviewer) ImagePreviewWithRenderer(path string, maxWidth int, maxHeight int,
-	defaultBGColor string, renderer ImageRenderer, sideAreaWidth int) (string, error) {
+func (p *ImagePreviewer) ImagePreviewWithRenderer(
+	path string,
+	maxWidth int,
+	maxHeight int,
+	defaultBGColor string,
+	renderer ImageRenderer,
+	sideAreaWidth int) (string, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return "", err
@@ -288,8 +390,11 @@ func (p *ImagePreviewer) ImagePreviewWithRenderer(path string, maxWidth int, max
 }
 
 // Convert image to ansi
-func (p *ImagePreviewer) ANSIRenderer(img image.Image, defaultBGColor string,
-	maxWidth int, maxHeight int) (string, error) {
+func (p *ImagePreviewer) ANSIRenderer(
+	img image.Image,
+	defaultBGColor string,
+	maxWidth,
+	maxHeight int) (string, error) {
 	bgColor, err := hexToColor(defaultBGColor)
 	if err != nil {
 		return "", fmt.Errorf("invalid background color: %w", err)
@@ -312,6 +417,6 @@ func hexToColor(hex string) (color.RGBA, error) {
 }
 
 func colorToHex(color color.Color) string {
-	r, g, b, _ := color.RGBA()
-	return fmt.Sprintf("#%02x%02x%02x", uint8(r>>8), uint8(g>>8), uint8(b>>8))
+	r, g, b, a := color.RGBA()
+	return fmt.Sprintf("#%02x%02x%02x%02x", uint8(r>>8), uint8(g>>8), uint8(b>>8), uint8(a>>8))
 }

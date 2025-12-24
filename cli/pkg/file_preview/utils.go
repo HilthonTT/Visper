@@ -1,6 +1,7 @@
 package filepreview
 
 import (
+	"image/color"
 	"log/slog"
 	"runtime"
 	"sync"
@@ -111,4 +112,58 @@ func getDefaultCellSize() TerminalCellSize {
 		PixelsPerColumn: DefaultPixelsPerColumn,
 		PixelsPerRow:    DefaultPixelsPerRow,
 	}
+}
+
+func isTransparent(c color.Color) bool {
+	_, _, _, a := c.RGBA()
+	return a == 0
+}
+
+func isTranslucent(c color.Color) bool {
+	_, _, _, a := c.RGBA()
+	return a > 0 && a < 0xFFFF
+}
+
+func blendWithBackground(fg color.Color, bg color.Color) color.Color {
+	fgR, fgG, fgB, fgA := fg.RGBA()
+	bgR, bgG, bgB, _ := bg.RGBA()
+
+	// If fully transparent, return background
+	if fgA == 0 {
+		return bg
+	}
+
+	// If fully opaque, return foreground
+	if fgA == 0xFFFF {
+		return fg
+	}
+
+	// Alpha blending formula
+	alpha := float64(fgA) / 0xFFFF
+
+	r := uint8((float64(fgR>>8)*alpha + float64(bgR>>8)*(1-alpha)))
+	g := uint8((float64(fgG>>8)*alpha + float64(bgG>>8)*(1-alpha)))
+	b := uint8((float64(fgB>>8)*alpha + float64(bgB>>8)*(1-alpha)))
+
+	return color.RGBA{R: r, G: g, B: b, A: 255}
+}
+
+func isTransparentOrBlack(c color.Color) bool {
+	r, g, b, a := c.RGBA()
+
+	// Check if transparent
+	if a == 0 {
+		return true
+	}
+
+	// Check if near-black (adjust threshold as needed)
+	// Values are in range 0-65535, so we convert to 0-255 range
+	const threshold = 20 // Adjust this value (0-255) to be more/less aggressive
+
+	r8 := uint8(r >> 8)
+	g8 := uint8(g >> 8)
+	b8 := uint8(b >> 8)
+
+	// Consider it "black" if all RGB components are below threshold
+	return r8 < threshold && g8 < threshold && b8 < threshold
 }

@@ -18,6 +18,10 @@ type headerStyles struct {
 }
 
 func (m model) HeaderUpdate(msg tea.Msg) (model, tea.Cmd) {
+	if m.page == chatPage {
+		return m, nil
+	}
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {

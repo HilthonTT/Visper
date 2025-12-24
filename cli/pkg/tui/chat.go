@@ -2,7 +2,9 @@ package tui
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -15,6 +17,9 @@ import (
 	"github.com/hilthontt/visper/cli/pkg/utils"
 	"github.com/reinhrst/fzf-lib"
 )
+
+//go:embed waifu2.png
+var waifuImage []byte
 
 type chatFocus int
 
@@ -35,6 +40,11 @@ type chatState struct {
 	searchActive     bool
 	searchCtx        context.Context
 	searchCancel     context.CancelFunc
+
+	// Cache for the sidebar image
+	cachedImageContent string
+	cachedImageWidth   int
+	cachedImageHeight  int
 }
 
 type participantSearchResultMsg struct {
@@ -130,13 +140,15 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 
 	case tea.WindowSizeMsg:
 		leftWidth := 25
-		rightWidth := 20
+		rightWidth := 40
 		centerWidth := m.widthContainer - leftWidth - rightWidth - 4
 
 		messagesHeight := m.heightContainer - 8
 		m.state.chat.messagesViewport.Width = centerWidth
 		m.state.chat.messagesViewport.Height = messagesHeight
 		m.state.chat.messageInput.Width = centerWidth - 2
+
+		m.state.chat.cachedImageContent = ""
 
 	case tea.KeyMsg:
 		switch {
@@ -265,7 +277,7 @@ func (m model) ChatView() string {
 	}
 
 	leftWidth := 25
-	rightWidth := 20
+	rightWidth := 40
 	centerWidth := m.viewportWidth - leftWidth - rightWidth - 4
 
 	messagesHeight := m.viewportHeight - 6
@@ -435,7 +447,54 @@ func (m model) renderMessages() string {
 }
 
 func (m model) renderRightSidebar(width, height int) string {
-	content := m.theme.TextBody().Faint(true).Render("Coming soon...")
+	textHeight := 2
+	imageHeight := height - textHeight - 2
+
+	// Check if we need to re-render the image
+	var imageContent string
+	if m.state.chat.cachedImageContent != "" &&
+		m.state.chat.cachedImageWidth == width-2 &&
+		m.state.chat.cachedImageHeight == imageHeight {
+		// Use cached image
+		log.Println("Hit cahing wiauf")
+		imageContent = m.state.chat.cachedImageContent
+	} else {
+		// Render new image
+		var err error
+		imageContent, err = m.imagePreviewer.ImagePreviewFromBytes(
+			waifuImage,
+			width-2,
+			imageHeight,
+			"",
+		)
+		if err != nil {
+			log.Printf("Failed to load embedded image: %v\n", err)
+			imageContent = m.theme.TextBody().Faint(true).Render("Image unavailable")
+		}
+
+		// Cache the image
+		m.state.chat.cachedImageContent = imageContent
+		m.state.chat.cachedImageWidth = width - 2
+		m.state.chat.cachedImageHeight = imageHeight
+	}
+
+	// Text rendering is cheap, so we can do it every time
+	waifuText := m.theme.TextAccent().
+		Italic(true).
+		Render("Your waifu approves")
+
+	textStyle := m.theme.Base().
+		Width(width - 2).
+		Align(lipgloss.Center)
+
+	centeredText := textStyle.Render(waifuText)
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Left,
+		imageContent,
+		"",
+		centeredText,
+	)
 
 	return m.theme.Base().
 		Width(width).
@@ -443,7 +502,6 @@ func (m model) renderRightSidebar(width, height int) string {
 		BorderLeft(true).
 		BorderStyle(lipgloss.NormalBorder()).
 		BorderForeground(m.theme.Border()).
-		Padding(1).
 		Render(content)
 }
 
