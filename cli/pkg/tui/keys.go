@@ -22,6 +22,7 @@ type keyMap struct {
 	Yes          key.Binding
 	No           key.Binding
 	ToggleSearch key.Binding
+	BackToMenu   key.Binding
 
 	// Navigation arrows
 	Left  key.Binding
@@ -89,6 +90,10 @@ var keys = keyMap{
 	ToggleSearch: key.NewBinding(
 		key.WithKeys("ctrl+s"),
 		key.WithHelp("ctrl+s", "toggle search"),
+	),
+	BackToMenu: key.NewBinding(
+		key.WithKeys("ctrl+b"),
+		key.WithHelp("ctrl+backspace", "delete word"),
 	),
 
 	// Navigation arrows

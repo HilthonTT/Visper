@@ -13,8 +13,12 @@ type newRoomState struct {
 }
 
 func (m model) NewRoomSwitch() (model, tea.Cmd) {
+	m.state.newRoom.creating = false
+	m.state.newRoom.roomCode = ""
+
 	m = m.SwitchPage(newRoomPage)
 	m = m.initNewRoom()
+
 	return m, nil
 }
 

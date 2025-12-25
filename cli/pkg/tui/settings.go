@@ -5,11 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/hilthontt/visper/cli/pkg/settings_manager"
+)
+
+const (
+	waifu1 = 1
+	waifu2 = 2
 )
 
 //go:embed waifus.json
@@ -39,6 +46,10 @@ func LoadWaifus() []WaifuOption {
 }
 
 func (m model) SettingsSwitch() (model, tea.Cmd) {
+	userConfig := m.settingsManager.GetUserConfig()
+	m.state.settings.selectedWaifuID = userConfig.SelectedWaifu
+	m.state.settings.focusedOptionIdx = userConfig.SelectedWaifu
+
 	m = m.SwitchPage(settingsPage)
 	return m, nil
 }
@@ -56,6 +67,13 @@ func (m model) SettingsUpdate(msg tea.Msg) (model, tea.Cmd) {
 				for _, option := range m.waifus {
 					if fmt.Sprintf("%d", option.ID) == input {
 						m.state.settings.selectedWaifuID = option.ID
+
+						config := &settings_manager.UserConfig{
+							SelectedWaifu: option.ID,
+						}
+						if err := m.settingsManager.SetUserConfig(config); err != nil {
+							slog.Error("error saving user config", "error", err)
+						}
 
 						return m, nil
 					}

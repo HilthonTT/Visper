@@ -18,8 +18,11 @@ import (
 	"github.com/reinhrst/fzf-lib"
 )
 
-//go:embed waifu2.png
+//go:embed waifu.png
 var waifuImage []byte
+
+//go:embed waifu2.png
+var waifu2Image []byte
 
 type chatFocus int
 
@@ -152,6 +155,9 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch {
+		case key.Matches(msg, keys.BackToMenu):
+			m.clearChatState()
+			return m.NewRoomSwitch()
 		case key.Matches(msg, keys.ToggleSearch):
 			// Toggle search focus
 			m.state.chat.searchActive = !m.state.chat.searchActive
@@ -455,14 +461,22 @@ func (m model) renderRightSidebar(width, height int) string {
 	if m.state.chat.cachedImageContent != "" &&
 		m.state.chat.cachedImageWidth == width-2 &&
 		m.state.chat.cachedImageHeight == imageHeight {
-		// Use cached image
-		log.Println("Hit cahing wiauf")
 		imageContent = m.state.chat.cachedImageContent
 	} else {
-		// Render new image
+		userConfig := m.settingsManager.GetUserConfig()
+
+		var img []byte
+		switch userConfig.SelectedWaifu {
+		case waifu1:
+			img = waifuImage
+		case waifu2:
+			img = waifu2Image
+		default:
+			img = waifuImage
+		}
 		var err error
 		imageContent, err = m.imagePreviewer.ImagePreviewFromBytes(
-			waifuImage,
+			img,
 			width-2,
 			imageHeight,
 			"",
@@ -510,4 +524,8 @@ func (m model) chatViewCompact() string {
 		Width(m.widthContainer).
 		Height(m.heightContainer).
 		Render(m.theme.TextBody().Render("Chat view requires a larger terminal window"))
+}
+
+func (m *model) clearChatState() {
+	m.state.chat = chatState{}
 }

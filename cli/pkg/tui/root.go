@@ -11,6 +11,7 @@ import (
 	apisdk "github.com/hilthontt/visper/api-sdk"
 	filepreview "github.com/hilthontt/visper/cli/pkg/file_preview"
 	"github.com/hilthontt/visper/cli/pkg/generator"
+	"github.com/hilthontt/visper/cli/pkg/settings_manager"
 	"github.com/hilthontt/visper/cli/pkg/tui/theme"
 )
 
@@ -69,6 +70,7 @@ type model struct {
 	waifus          []WaifuOption
 	generator       *generator.Generator
 	imagePreviewer  *filepreview.ImagePreviewer
+	settingsManager settings_manager.SettingsManager
 }
 
 func NewModel(renderer *lipgloss.Renderer, generator *generator.Generator) (tea.Model, error) {
@@ -89,11 +91,12 @@ func NewModel(renderer *lipgloss.Renderer, generator *generator.Generator) (tea.
 			chat:     chatState{},
 			settings: settingsState{},
 		},
-		theme:          theme.BasicTheme(renderer, nil),
-		faqs:           LoadFaqs(),
-		waifus:         LoadWaifus(),
-		generator:      generator,
-		imagePreviewer: filepreview.NewImagePreviewer(),
+		theme:           theme.BasicTheme(renderer, nil),
+		faqs:            LoadFaqs(),
+		waifus:          LoadWaifus(),
+		generator:       generator,
+		imagePreviewer:  filepreview.NewImagePreviewer(),
+		settingsManager: settings_manager.NewSettingsManager(),
 	}
 
 	return m, nil
