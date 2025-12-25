@@ -47,6 +47,10 @@ func (m model) HeaderUpdate(msg tea.Msg) (model, tea.Cmd) {
 			if m.page != menuPage {
 				return m.MenuSwitch()
 			}
+		case key.Matches(msg, keys.SettingsPage):
+			if m.page != settingsPage {
+				return m.SettingsSwitch()
+			}
 		case key.Matches(msg, keys.Quit):
 			return m, tea.Quit
 		}
@@ -109,6 +113,7 @@ func (m model) buildHeaderTabs(styles headerStyles) []string {
 	newRoom := m.buildTab("n", "new room", m.page == newRoomPage, styles)
 	joinRoom := m.buildTab("j", "join room", m.page == joinRoomPage, styles)
 	faq := m.buildTab("f", "faq", m.page == faqPage, styles)
+	settings := m.buildTab("s", "settings", m.page == settingsPage, styles)
 
 	switch m.size {
 	case small:
@@ -116,7 +121,7 @@ func (m model) buildHeaderTabs(styles headerStyles) []string {
 	case medium:
 		return []string{menu, logo, newRoom, joinRoom}
 	default:
-		return []string{menu, logo, newRoom, joinRoom, faq}
+		return []string{menu, logo, newRoom, joinRoom, faq, settings}
 	}
 }
 
@@ -134,7 +139,7 @@ func (m model) getNavigablePages() []page {
 	case medium:
 		return []page{newRoomPage, joinRoomPage}
 	default:
-		return []page{newRoomPage, joinRoomPage, faqPage}
+		return []page{newRoomPage, joinRoomPage, faqPage, settingsPage}
 	}
 }
 
@@ -167,6 +172,8 @@ func (m model) navigateToPage(direction int) (model, tea.Cmd) {
 		return m.JoinRoomSwitch()
 	case faqPage:
 		return m.FaqSwitch()
+	case settingsPage:
+		return m.SettingsSwitch()
 	default:
 		return m, nil
 	}

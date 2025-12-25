@@ -13,6 +13,7 @@ type keyMap struct {
 	JoinRoomPage key.Binding
 	FaqPage      key.Binding
 	MenuPage     key.Binding
+	SettingsPage key.Binding
 
 	// Context-specific (can be enabled/disabled per page)
 	Enter        key.Binding
@@ -58,6 +59,10 @@ var keys = keyMap{
 	MenuPage: key.NewBinding(
 		key.WithKeys("m"),
 		key.WithHelp("m", "menu"),
+	),
+	SettingsPage: key.NewBinding(
+		key.WithKeys("s"),
+		key.WithHelp("s", "settings"),
 	),
 
 	// Context-specific

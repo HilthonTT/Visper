@@ -24,6 +24,7 @@ const (
 	joinRoomPage
 	chatPage
 	menuPage
+	settingsPage
 )
 
 const (
@@ -41,6 +42,7 @@ type state struct {
 	joinRoom joinRoomState
 	newRoom  newRoomState
 	chat     chatState
+	settings settingsState
 }
 
 type visibleError struct {
@@ -64,6 +66,7 @@ type model struct {
 	size            size
 	theme           theme.Theme
 	faqs            []FAQ
+	waifus          []WaifuOption
 	generator       *generator.Generator
 	imagePreviewer  *filepreview.ImagePreviewer
 }
@@ -84,9 +87,11 @@ func NewModel(renderer *lipgloss.Renderer, generator *generator.Generator) (tea.
 			joinRoom: joinRoomState{},
 			newRoom:  newRoomState{},
 			chat:     chatState{},
+			settings: settingsState{},
 		},
 		theme:          theme.BasicTheme(renderer, nil),
 		faqs:           LoadFaqs(),
+		waifus:         LoadWaifus(),
 		generator:      generator,
 		imagePreviewer: filepreview.NewImagePreviewer(),
 	}
@@ -159,6 +164,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, cmd = m.NewRoomUpdate(msg)
 	case chatPage:
 		m, cmd = m.ChatUpdate(msg)
+	case settingsPage:
+		m, cmd = m.SettingsUpdate(msg)
 	}
 
 	var headerCmd tea.Cmd
@@ -239,6 +246,8 @@ func (m model) getContent() string {
 		page = m.JoinRoomView()
 	case faqPage:
 		page = m.FaqView()
+	case settingsPage:
+		page = m.SettingsView()
 	}
 	return page
 }
