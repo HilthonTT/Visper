@@ -44,6 +44,7 @@ type state struct {
 	newRoom  newRoomState
 	chat     chatState
 	settings settingsState
+	notify   notifyState
 }
 
 type visibleError struct {
@@ -90,6 +91,7 @@ func NewModel(renderer *lipgloss.Renderer, generator *generator.Generator) (tea.
 			newRoom:  newRoomState{},
 			chat:     chatState{},
 			settings: settingsState{},
+			notify:   notifyState{},
 		},
 		theme:           theme.BasicTheme(renderer, nil),
 		faqs:            LoadFaqs(),

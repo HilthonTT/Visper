@@ -15,6 +15,8 @@ type Theme struct {
 	body       lipgloss.TerminalColor
 	accent     lipgloss.TerminalColor
 
+	borderStyle lipgloss.Border
+
 	base lipgloss.Style
 }
 
@@ -35,6 +37,7 @@ func BasicTheme(renderer *lipgloss.Renderer, highlight *string) Theme {
 	}
 	base.error = lipgloss.Color("#EF4444") // Red
 
+	base.borderStyle = generateBorder()
 	base.base = renderer.NewStyle().Foreground(base.body)
 
 	return base
@@ -117,4 +120,25 @@ func (b Theme) PanelError() lipgloss.Style {
 
 func (b Theme) Border() lipgloss.TerminalColor {
 	return b.border
+}
+
+func (b Theme) Modal() lipgloss.Style {
+	return b.Base().
+		Border(b.borderStyle).
+		BorderForeground(b.border).
+		Foreground(b.accent).
+		Align(lipgloss.Center)
+}
+
+func generateBorder() lipgloss.Border {
+	return lipgloss.Border{
+		Top:         "─",
+		Bottom:      "─",
+		Left:        "│",
+		Right:       "│",
+		TopLeft:     "╭",
+		TopRight:    "╮",
+		BottomLeft:  "╰",
+		BottomRight: "╯",
+	}
 }

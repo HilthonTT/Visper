@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	apisdk "github.com/hilthontt/visper/api-sdk"
+	stringfunction "github.com/hilthontt/visper/cli/pkg/string_function"
 	"github.com/hilthontt/visper/cli/pkg/utils"
 	"github.com/reinhrst/fzf-lib"
 )
@@ -125,15 +126,12 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case participantSearchResultMsg:
-
 		if len(msg.results) == 0 {
-			// No results, show all
 			m.state.chat.filteredIndices = make([]int, len(m.state.chat.participants))
 			for i := range m.state.chat.filteredIndices {
 				m.state.chat.filteredIndices[i] = i
 			}
 		} else {
-			// Show only matching results in FZF order
 			m.state.chat.filteredIndices = make([]int, len(msg.results))
 			for i, result := range msg.results {
 				m.state.chat.filteredIndices[i] = int(result.HayIndex)
@@ -154,12 +152,27 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		m.state.chat.cachedImageContent = ""
 
 	case tea.KeyMsg:
+		// Handle modal input first if modal is open
+		if m.state.notify.open {
+			switch msg.String() {
+			case "y", "Y", "enter":
+				m = m.closeModal()
+				m.clearChatState()
+				return m.NewRoomSwitch()
+			case "n", "N", "esc":
+				m = m.closeModal()
+				return m, nil
+			}
+			// Don't process other keys when modal is open
+			return m, nil
+		}
+
 		switch {
 		case key.Matches(msg, keys.BackToMenu):
-			m.clearChatState()
-			return m.NewRoomSwitch()
+			// Open modal instead of going back directly
+			m = m.openWarnModalForLeaveRoom()
+			return m, nil
 		case key.Matches(msg, keys.ToggleSearch):
-			// Toggle search focus
 			m.state.chat.searchActive = !m.state.chat.searchActive
 			if m.state.chat.searchActive {
 				m.state.chat.focusedInput = focusSearch
@@ -169,11 +182,9 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 				m.state.chat.focusedInput = focusMessage
 				m.state.chat.messageInput.Focus()
 				m.state.chat.searchInput.Blur()
-				// Cancel any ongoing search
 				if m.state.chat.searchCancel != nil {
 					m.state.chat.searchCancel()
 				}
-				// Reset to show all participants
 				m.state.chat.searchInput.SetValue("")
 				m.state.chat.filteredIndices = make([]int, len(m.state.chat.participants))
 				for i := range m.state.chat.filteredIndices {
@@ -183,7 +194,6 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 			return m, nil
 		case key.Matches(msg, keys.Enter):
 			if m.state.chat.focusedInput == focusMessage && m.state.chat.messageInput.Value() != "" {
-				// Add new message
 				newMsg := apisdk.MessageResponse{
 					User: apisdk.UserResponse{
 						Name: "You",
@@ -206,11 +216,9 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 				m.state.chat.focusedInput = focusMessage
 				m.state.chat.searchInput.Blur()
 				m.state.chat.messageInput.Focus()
-				// Cancel any ongoing search
 				if m.state.chat.searchCancel != nil {
 					m.state.chat.searchCancel()
 				}
-				// Reset to show all participants
 				m.state.chat.searchInput.SetValue("")
 				m.state.chat.filteredIndices = make([]int, len(m.state.chat.participants))
 				for i := range m.state.chat.filteredIndices {
@@ -221,32 +229,29 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		}
 	}
 
-	// Update the appropriate input
-	switch m.state.chat.focusedInput {
-	case focusMessage:
-		m.state.chat.messageInput, cmd = m.state.chat.messageInput.Update(msg)
-		cmds = append(cmds, cmd)
-	case focusSearch:
-		oldValue := m.state.chat.searchInput.Value()
-		m.state.chat.searchInput, cmd = m.state.chat.searchInput.Update(msg)
-		cmds = append(cmds, cmd)
+	// Update the appropriate input (only if modal is not open)
+	if !m.state.notify.open {
+		switch m.state.chat.focusedInput {
+		case focusMessage:
+			m.state.chat.messageInput, cmd = m.state.chat.messageInput.Update(msg)
+			cmds = append(cmds, cmd)
+		case focusSearch:
+			oldValue := m.state.chat.searchInput.Value()
+			m.state.chat.searchInput, cmd = m.state.chat.searchInput.Update(msg)
+			cmds = append(cmds, cmd)
 
-		// Trigger search if value changed
-		newValue := m.state.chat.searchInput.Value()
-		if oldValue != newValue {
-			// Cancel previous search if any
-			if m.state.chat.searchCancel != nil {
-				m.state.chat.searchCancel()
+			newValue := m.state.chat.searchInput.Value()
+			if oldValue != newValue {
+				if m.state.chat.searchCancel != nil {
+					m.state.chat.searchCancel()
+				}
+				cmds = append(cmds, m.searchParticipants(newValue))
 			}
-
-			// Start new search
-			cmds = append(cmds, m.searchParticipants(newValue))
 		}
-	}
 
-	// Update viewport
-	m.state.chat.messagesViewport, cmd = m.state.chat.messagesViewport.Update(msg)
-	cmds = append(cmds, cmd)
+		m.state.chat.messagesViewport, cmd = m.state.chat.messagesViewport.Update(msg)
+		cmds = append(cmds, cmd)
+	}
 
 	return m, tea.Batch(cmds...)
 }
@@ -312,10 +317,20 @@ func (m model) ChatView() string {
 		body,
 	)
 
-	return m.theme.Base().
+	baseView := m.theme.Base().
 		Width(m.viewportWidth).
 		Height(m.viewportHeight).
 		Render(content)
+
+	// Show modal if open
+	if m.state.notify.open {
+		notifyModal := m.RenderWarnModal()
+		overlayX := (m.viewportWidth - ModalWidth) / 2
+		overlayY := (m.viewportHeight - ModalHeight) / 2
+		return stringfunction.PlaceOverlay(overlayX, overlayY, notifyModal, baseView)
+	}
+
+	return baseView
 }
 
 func (m model) renderChatHeader() string {
@@ -325,10 +340,7 @@ func (m model) renderChatHeader() string {
 	leftPart := m.theme.TextBrand().Bold(true).Render(roomInfo)
 	rightPart := m.theme.TextBody().Render(participantCount)
 
-	spacer := m.viewportWidth - lipgloss.Width(leftPart) - lipgloss.Width(rightPart) - 4
-	if spacer < 0 {
-		spacer = 0
-	}
+	spacer := max(m.viewportWidth-lipgloss.Width(leftPart)-lipgloss.Width(rightPart)-4, 0)
 
 	header := lipgloss.JoinHorizontal(
 		lipgloss.Top,
