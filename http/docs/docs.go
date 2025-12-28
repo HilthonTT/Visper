@@ -755,6 +755,13 @@ const docTemplate = `{
                     "type": "string",
                     "example": "ABC123"
                 },
+                "members": {
+                    "description": "List of members in the room",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/rooms.userResponse"
+                    }
+                },
                 "persistent": {
                     "description": "Whether the room is persistent",
                     "type": "boolean",
@@ -774,6 +781,10 @@ const docTemplate = `{
                     "description": "Message content",
                     "type": "string",
                     "example": "Hello, world!"
+                },
+                "createdAt": {
+                    "description": "Message timestamp",
+                    "type": "string"
                 },
                 "id": {
                     "description": "Unique message identifier",
@@ -807,6 +818,13 @@ const docTemplate = `{
                     "description": "Code required to join the room",
                     "type": "string",
                     "example": "ABC123"
+                },
+                "members": {
+                    "description": "List of members in the room",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/rooms.userResponse"
+                    }
                 },
                 "messages": {
                     "description": "List of messages in the room",

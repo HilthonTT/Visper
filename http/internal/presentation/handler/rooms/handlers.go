@@ -105,6 +105,13 @@ func (h *Handler) CreateRoomHandler(w http.ResponseWriter, r *http.Request) {
 		JoinCode:   newRoom.JoinCode,
 		CreatedAt:  newRoom.CreatedAt,
 		Persistent: newRoom.Persistent,
+		Members: []userResponse{
+			{
+				ID:   user.ID,
+				Name: user.Name,
+			},
+		},
+		MemberToken: memberToken,
 	}
 
 	if err := h.roomPublisher.PublishRoomCreated(ctx, *newRoom); err != nil {
@@ -148,36 +155,30 @@ func (h *Handler) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := h.roomManager.Upgrade(w, r)
-	if err != nil {
-		log.Printf("WebSocket upgrade failed for room %s: %v", roomID, err)
-		return
-	}
-
+	// Get or create member token BEFORE upgrade
 	memberToken := utils.EnsureMemberID(w, r)
 	if memberToken == "" {
-		_ = conn.WriteJSON(ws.NewAuthError(roomID, "Failed to establish identity"))
-		_ = conn.Close()
+		http.Error(w, "Failed to establish identity", http.StatusInternalServerError)
 		return
 	}
 
+	// Validate room and member BEFORE upgrade
 	room, err := h.roomRepository.GetByID(r.Context(), roomID)
 	if err != nil {
-		msg := "Failed to load room"
 		if errors.Is(err, domain.ErrRoomNotFound) {
-			msg = "Room not found"
+			http.Error(w, "Room not found", http.StatusNotFound)
+		} else {
+			http.Error(w, "Failed to load room", http.StatusInternalServerError)
 		}
-		_ = conn.WriteJSON(ws.NewJoinFailed(roomID, msg))
-		_ = conn.Close()
 		return
 	}
 
 	if room.JoinCode != joinCode {
-		_ = conn.WriteJSON(ws.NewJoinFailed(roomID, "Invalid join code"))
-		_ = conn.Close()
+		http.Error(w, "Invalid join code", http.StatusUnauthorized)
 		return
 	}
 
+	// Check/create member BEFORE upgrade
 	wasAlreadyMember := false
 	existingMember := room.FindMemberByID(memberToken)
 
@@ -187,36 +188,47 @@ func (h *Handler) JoinRoomHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		user, err := domain.NewUser(username)
 		if err != nil {
-			_ = conn.WriteJSON(ws.NewError(roomID, "Invalid username"))
-			_ = conn.Close()
+			http.Error(w, "Invalid username", http.StatusBadRequest)
 			return
 		}
 
 		existingMember = domain.NewMember(memberToken, user)
 
 		if err := room.AddMember(existingMember); err != nil {
-			_ = conn.WriteJSON(ws.NewJoinFailed(roomID, "Cannot join room"))
-			_ = conn.Close()
+			http.Error(w, "Cannot join room", http.StatusForbidden)
 			return
 		}
 
 		if err := h.roomRepository.Update(r.Context(), room); err != nil {
 			log.Printf("Failed to persist room %s after new member join: %v", roomID, err)
+			http.Error(w, "Failed to persist room", http.StatusInternalServerError)
+			return
 		}
 	}
 
+	// Set cookies BEFORE upgrade
 	roomPath := utils.FormatRoomPath(room.ID)
 	utils.SetAuthenticatedMemberCookies(existingMember, roomPath, w)
 
+	// NOW upgrade to WebSocket - this MUST be done AFTER all HTTP writes
+	conn, err := h.roomManager.Upgrade(w, r)
+	if err != nil {
+		log.Printf("WebSocket upgrade failed for room %s: %v", roomID, err)
+		return
+	}
+
+	// Create WebSocket client
 	client := ws.NewClient(conn, existingMember.User.ID, roomID, existingMember.User.Name)
 
+	// Register client
 	h.roomManager.AddClient(client)
 	h.core.Register() <- client
 
+	// Start goroutines for reading/writing
 	go client.WriteMessage()
 	go client.ReadMessage(h.core)
 
-	// Broadcast join
+	// Broadcast join event if new member
 	if !wasAlreadyMember {
 		wsPayload := ws.NewMemberJoined(roomID, ws.MemberPayload{
 			UserID:   existingMember.User.ID,

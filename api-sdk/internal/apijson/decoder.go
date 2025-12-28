@@ -59,7 +59,13 @@ type decoderEntry struct {
 }
 
 func (d *decoderBuilder) unmarshal(raw []byte, to any) error {
-	value := reflect.ValueOf(to).Elem()
+	value := reflect.ValueOf(to)
+
+	if value.Kind() != reflect.Pointer {
+		return fmt.Errorf("apijson: to must be a pointer, got %s", value.Kind())
+	}
+
+	value = value.Elem()
 	result := gjson.ParseBytes(raw)
 	if !value.IsValid() {
 		return fmt.Errorf("apijson: cannot marshal into invalid value")

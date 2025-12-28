@@ -22,7 +22,7 @@ func NewRoomService(opts ...option.RequestOption) *RoomService {
 	return r
 }
 
-func (r *RoomService) New(ctx context.Context, body roomNewParams, opts ...option.RequestOption) (*RoomNewResponse, error) {
+func (r *RoomService) New(ctx context.Context, body RoowNewParams, opts ...option.RequestOption) (*RoomNewResponse, error) {
 	opts = slices.Concat(r.Options, opts)
 	path := "api/rooms"
 
@@ -57,7 +57,7 @@ func (r *RoomService) Delete(ctx context.Context, id string, opts ...option.Requ
 	return err
 }
 
-func (r *RoomService) Join(ctx context.Context, joinOpts joinRoomOpts, opts ...option.RequestOption) error {
+func (r *RoomService) Join(ctx context.Context, joinOpts JoinRoomOpts, opts ...option.RequestOption) error {
 	opts = slices.Concat(r.Options, opts)
 	if joinOpts.RoomID == "" {
 		return ErrMissingIDParameter
@@ -92,7 +92,7 @@ func (r *RoomService) Leave(ctx context.Context, id string, opts ...option.Reque
 	return err
 }
 
-func (r *RoomService) Boot(ctx context.Context, id string, body bootUserParams, opts ...option.RequestOption) error {
+func (r *RoomService) Boot(ctx context.Context, id string, body BootUserParams, opts ...option.RequestOption) error {
 	opts = slices.Concat(r.Options, opts)
 	if id == "" {
 		return ErrMissingIDParameter
@@ -104,33 +104,35 @@ func (r *RoomService) Boot(ctx context.Context, id string, body bootUserParams, 
 	return err
 }
 
-type roomNewParams struct {
+type RoowNewParams struct {
 	Persistent bool   `json:"persistent"`
 	Username   string `json:"username"`
 }
 
-func (r roomNewParams) MarshalJSON() ([]byte, error) {
+func (r *RoowNewParams) MarshalJSON() ([]byte, error) {
 	return apijson.MarshalRoot(r)
 }
 
 type RoomNewResponse struct {
-	RoomID     string    `json:"roomId"`
-	JoinCode   string    `json:"joinCode"`
-	CreatedAt  time.Time `json:"createdAt"`
-	Persistent bool      `json:"persistent"`
+	RoomID      string         `json:"roomId"`
+	JoinCode    string         `json:"joinCode"`
+	CreatedAt   time.Time      `json:"createdAt"`
+	Persistent  bool           `json:"persistent"`
+	Members     []UserResponse `json:"members"`
+	MemberToken string         `json:"memberToken"`
 }
 
-func (r RoomNewResponse) UnmarshalJSON(data []byte) error {
+func (r *RoomNewResponse) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
 
-type joinRoomOpts struct {
+type JoinRoomOpts struct {
 	RoomID   string
 	JoinCode string
 	Username string
 }
 
-type bootUserParams struct {
+type BootUserParams struct {
 	MemberID string `json:"memberId"`
 }
 

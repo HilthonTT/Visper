@@ -72,6 +72,8 @@ type model struct {
 	generator       *generator.Generator
 	imagePreviewer  *filepreview.ImagePreviewer
 	settingsManager settings_manager.SettingsManager
+	username        *string
+	userID          *string
 }
 
 func NewModel(renderer *lipgloss.Renderer, generator *generator.Generator) (tea.Model, error) {

@@ -58,10 +58,10 @@ func (app *Application) Mount() http.Handler {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	r.Use(app.loggerMiddleware)
-	r.Use(app.prometheusMiddleware)
+	// r.Use(app.loggerMiddleware)
+	// r.Use(app.prometheusMiddleware)
 	r.Use(app.enableCors)
-	r.Use(app.rateLimiterMiddleware)
+	// r.Use(app.rateLimiterMiddleware)
 
 	if app.config.Environment != "production" {
 		r.Get("/swagger/*", httpSwagger.Handler(

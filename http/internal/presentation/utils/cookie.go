@@ -89,3 +89,13 @@ func SetPersistentMemberIDCookie(memberID string, w http.ResponseWriter) {
 		Secure:   true,
 	})
 }
+
+func GetMemberIDFromRequest(r *http.Request) string {
+	// First try header (for API clients)
+	if token := r.Header.Get("X-Member-Token"); token != "" {
+		return token
+	}
+
+	// Fall back to cookie (for WebSocket)
+	return GetMemberIDFromCookie(r)
+}

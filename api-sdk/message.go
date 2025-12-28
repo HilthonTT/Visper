@@ -19,11 +19,11 @@ func NewMessageService(opts ...option.RequestOption) *MessageService {
 	return m
 }
 
-func (m *MessageService) Create(ctx context.Context, roomID string, body createMessageParam, opts ...option.RequestOption) (*createMessageResponse, error) {
+func (m *MessageService) Create(ctx context.Context, roomID string, body CreateMessageParam, opts ...option.RequestOption) (*CreateMessageResponse, error) {
 	opts = slices.Concat(m.Options, opts)
 	path := fmt.Sprintf("api/rooms/%s/messages", roomID)
 
-	res := &createMessageResponse{}
+	res := &CreateMessageResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, &res, opts...)
 
 	return res, err
@@ -38,12 +38,12 @@ func (m *MessageService) Delete(ctx context.Context, roomID, messageID string, o
 	return err
 }
 
-type createMessageParam struct {
+type CreateMessageParam struct {
 	RoomID  string `json:"roomId"`
 	Content string `json:"content"`
 }
 
-type createMessageResponse struct {
+type CreateMessageResponse struct {
 	ID      string `json:"id"`
 	RoomID  string `json:"roomId"`
 	Content string `json:"content"`

@@ -72,6 +72,11 @@ definitions:
         description: Code required to join the room
         example: ABC123
         type: string
+      members:
+        description: List of members in the room
+        items:
+          $ref: '#/definitions/rooms.userResponse'
+        type: array
       persistent:
         description: Whether the room is persistent
         example: true
@@ -86,6 +91,9 @@ definitions:
       content:
         description: Message content
         example: Hello, world!
+        type: string
+      createdAt:
+        description: Message timestamp
         type: string
       id:
         description: Unique message identifier
@@ -110,6 +118,11 @@ definitions:
         description: Code required to join the room
         example: ABC123
         type: string
+      members:
+        description: List of members in the room
+        items:
+          $ref: '#/definitions/rooms.userResponse'
+        type: array
       messages:
         description: List of messages in the room
         items:

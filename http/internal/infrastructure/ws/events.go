@@ -5,8 +5,8 @@ const (
 	MemberLeft   = "member.left"
 	MemberList   = "member.list"
 
-	MessageReceived = "member.received"
-	MessageDeleted  = "member.deleted"
+	MessageReceived = "message.received"
+	MessageDeleted  = "message.deleted"
 
 	ErrorEvent          = "error"
 	AuthenticationError = "error.auth"

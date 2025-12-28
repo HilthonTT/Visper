@@ -10,10 +10,12 @@ type createRoomRequest struct {
 
 // createRoomResponse represents the response after creating a room
 type createRoomResponse struct {
-	RoomID     string    `json:"roomId" example:"550e8400-e29b-41d4-a716-446655440000"` // Unique room identifier
-	JoinCode   string    `json:"joinCode" example:"ABC123"`                             // Code required to join the room
-	CreatedAt  time.Time `json:"createdAt" example:"2024-01-01T12:00:00Z"`              // Room creation timestamp
-	Persistent bool      `json:"persistent" example:"true"`                             // Whether the room is persistent
+	RoomID      string         `json:"roomId" example:"550e8400-e29b-41d4-a716-446655440000"` // Unique room identifier
+	JoinCode    string         `json:"joinCode" example:"ABC123"`                             // Code required to join the room
+	CreatedAt   time.Time      `json:"createdAt" example:"2024-01-01T12:00:00Z"`              // Room creation timestamp
+	Persistent  bool           `json:"persistent" example:"true"`                             // Whether the room is persistent
+	Members     []userResponse `json:"members"`                                               // List of members in the room
+	MemberToken string         `json:"memberToken"`                                           // The Member Token
 }
 
 // bootUserRequest represents the request to remove a user from a room

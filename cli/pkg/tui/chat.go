@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	apisdk "github.com/hilthontt/visper/api-sdk"
+	"github.com/hilthontt/visper/api-sdk/option"
 	stringfunction "github.com/hilthontt/visper/cli/pkg/string_function"
 	"github.com/hilthontt/visper/cli/pkg/utils"
 	"github.com/reinhrst/fzf-lib"
@@ -49,14 +50,24 @@ type chatState struct {
 	cachedImageContent string
 	cachedImageWidth   int
 	cachedImageHeight  int
+
+	memberToken string
+	room        *apisdk.RoomNewResponse
+	wsConn      *apisdk.RoomWebSocket
+	wsCtx       context.Context
+	wsCancel    context.CancelFunc
+	wsMsgChan   chan tea.Msg
 }
 
 type participantSearchResultMsg struct {
 	results []fzf.MatchResult
 }
 
-func (m model) ChatSwitch() (model, tea.Cmd) {
+func (m model) ChatSwitch(newRoom *apisdk.RoomNewResponse) (model, tea.Cmd) {
 	m = m.SwitchPage(chatPage)
+
+	m.state.chat.room = newRoom
+
 	if m.state.chat.roomCode == "" {
 		msgInput := textinput.New()
 		msgInput.Placeholder = "Type a message..."
@@ -69,52 +80,35 @@ func (m model) ChatSwitch() (model, tea.Cmd) {
 
 		vp := viewport.New(50, 20)
 
-		participants := []apisdk.UserResponse{
-			{Name: "Alice", ID: "abc"},
-			{Name: "Bob", ID: "def"},
-			{Name: "Charlie", ID: "ghij"},
-			{Name: "David", ID: "klmn"},
-			{Name: "Eve", ID: "opqrs"},
-		}
+		participants := []apisdk.UserResponse{}
 
-		// Initialize with all participants visible
 		filteredIndices := make([]int, len(participants))
 		for i := range filteredIndices {
 			filteredIndices[i] = i
 		}
 
+		wsCtx, wsCancel := context.WithCancel(context.Background())
+
+		yourself := newRoom.Members[0]
+		m.userID = &yourself.ID
+
 		m.state.chat = chatState{
-			roomCode:        "ABC-123",
-			participants:    participants,
-			filteredIndices: filteredIndices,
-			messages: []apisdk.MessageResponse{
-				{
-					User:      apisdk.UserResponse{Name: "Alice", ID: "abc"},
-					Content:   "Hello all!",
-					CreatedAt: time.Now(),
-				},
-				{
-					User:      apisdk.UserResponse{Name: "Bob", ID: "def"},
-					Content:   "Hey everyone!",
-					CreatedAt: time.Now().Add(1 * time.Minute),
-				},
-				{
-					User:      apisdk.UserResponse{Name: "Charlie", ID: "ghij"},
-					Content:   "Good to be here!",
-					CreatedAt: time.Now().Add(2 * time.Minute),
-				},
-				{
-					User:      apisdk.UserResponse{Name: "David", ID: "klmn"},
-					Content:   "Welcome all!",
-					CreatedAt: time.Now().Add(3 * time.Minute),
-				},
-			},
+			roomCode:         newRoom.JoinCode,
+			participants:     participants,
+			filteredIndices:  filteredIndices,
+			messages:         []apisdk.MessageResponse{},
 			messageInput:     msgInput,
 			searchInput:      searchInput,
 			messagesViewport: vp,
 			focusedInput:     focusMessage,
 			searchActive:     false,
+			wsCtx:            wsCtx,
+			wsCancel:         wsCancel,
+			room:             newRoom,
+			memberToken:      newRoom.MemberToken,
 		}
+
+		return m, m.connectWebSocket(newRoom.RoomID, newRoom.JoinCode, yourself.Name)
 	}
 
 	return m, nil
@@ -125,6 +119,167 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case wsConnectedMsg:
+		m.state.chat.wsConn = msg.conn
+		return m, m.listenWebSocket()
+
+	case wsChannelReadyMsg:
+		m.state.chat.wsMsgChan = msg.msgChan
+		// Start listening immediately after storing the channel
+		return m, waitForWSMessage(msg.msgChan)
+
+	case wsMessageReceivedMsg:
+
+		m.state.chat.messages = append(m.state.chat.messages, msg.message)
+		m.state.chat.messagesViewport.SetContent(m.renderMessages())
+		m.state.chat.messagesViewport.GotoBottom()
+
+		// Continue listening for more messages
+		if m.state.chat.wsMsgChan != nil {
+
+			return m, waitForWSMessage(m.state.chat.wsMsgChan)
+		}
+		return m, nil
+	case wsMessageDeletedMsg:
+		// Remove message with matching ID
+		for i, message := range m.state.chat.messages {
+			if message.ID == msg.messageID {
+				m.state.chat.messages = append(m.state.chat.messages[:i], m.state.chat.messages[i+1:]...)
+				break
+			}
+		}
+		m.state.chat.messagesViewport.SetContent(m.renderMessages())
+		// Continue listening
+		if m.state.chat.wsMsgChan != nil {
+			return m, waitForWSMessage(m.state.chat.wsMsgChan)
+		}
+		return m, nil
+	case wsMemberJoinedMsg:
+		// Check if member already exists
+		exists := false
+		for _, p := range m.state.chat.participants {
+			if p.ID == msg.member.ID {
+				exists = true
+				break
+			}
+		}
+
+		if !exists {
+			m.state.chat.participants = append(m.state.chat.participants, msg.member)
+			// Update filtered indices if not searching
+			if !m.state.chat.searchActive || m.state.chat.searchInput.Value() == "" {
+				m.state.chat.filteredIndices = append(m.state.chat.filteredIndices, len(m.state.chat.participants)-1)
+			}
+		}
+		// Continue listening
+		if m.state.chat.wsMsgChan != nil {
+			return m, waitForWSMessage(m.state.chat.wsMsgChan)
+		}
+		return m, nil
+	case wsMemberLeftMsg:
+		// Remove member from participants
+		for i, p := range m.state.chat.participants {
+			if p.ID == msg.userID {
+				m.state.chat.participants = append(m.state.chat.participants[:i], m.state.chat.participants[i+1:]...)
+				break
+			}
+		}
+		// Rebuild filtered indices
+		m.state.chat.filteredIndices = make([]int, 0)
+		for i := range m.state.chat.participants {
+			m.state.chat.filteredIndices = append(m.state.chat.filteredIndices, i)
+		}
+		// Continue listening
+		if m.state.chat.wsMsgChan != nil {
+			return m, waitForWSMessage(m.state.chat.wsMsgChan)
+		}
+		return m, nil
+
+	case wsMemberListMsg:
+		// Replace entire member list
+		m.state.chat.participants = msg.members
+		m.state.chat.filteredIndices = make([]int, len(msg.members))
+		for i := range m.state.chat.filteredIndices {
+			m.state.chat.filteredIndices[i] = i
+		}
+		// Continue listening
+		if m.state.chat.wsMsgChan != nil {
+			return m, waitForWSMessage(m.state.chat.wsMsgChan)
+		}
+		return m, nil
+
+	case wsKickTimeoutMsg:
+		m = m.closeModal()
+		m.clearChatState()
+		return m.NewRoomSwitch()
+
+	case wsRoomDeletedTimeoutMsg:
+		m = m.closeModal()
+		m.clearChatState()
+		return m.NewRoomSwitch()
+
+	case wsKickedMsg:
+		// Show modal that user was kicked
+		m.state.notify = notifyState{
+			open:          true,
+			title:         "Kicked from Room",
+			content:       fmt.Sprintf("You were kicked by %s\nReason: %s", msg.username, msg.reason),
+			confirmAction: NoAction,
+		}
+		// Auto-close after a delay and return to menu
+		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+			return wsKickTimeoutMsg{}
+		})
+
+	case wsRoomDeletedMsg:
+		// Show modal that room was deleted
+		m.state.notify = notifyState{
+			open:          true,
+			title:         "Room Deleted",
+			content:       "This room has been deleted by the owner",
+			confirmAction: NoAction,
+		}
+		return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+			return wsRoomDeletedTimeoutMsg{}
+		})
+
+	case wsErrorMsg:
+		// Handle fatal errors
+		if msg.code == "AUTH_FAILED" || msg.code == "JOIN_FAILED" {
+			m.state.notify = notifyState{
+				open:          true,
+				title:         "Connection Error",
+				content:       msg.message,
+				confirmAction: NoAction,
+			}
+			return m, nil
+		}
+
+		// Handle rate limiting
+		if msg.code == "RATE_LIMITED" {
+			m.state.notify = notifyState{
+				open:          true,
+				title:         "Rate Limited",
+				content:       "You're sending messages too quickly. Please slow down.",
+				confirmAction: NoAction,
+			}
+			// Continue listening
+			return m, waitForWSMessage(m.state.chat.wsMsgChan)
+		}
+
+		// Continue listening for other errors
+		return m, waitForWSMessage(m.state.chat.wsMsgChan)
+
+	case wsDisconnectedMsg:
+		// Show disconnection message
+		m.state.notify = notifyState{
+			open:          true,
+			title:         "Disconnected",
+			content:       "Lost connection to the chat room",
+			confirmAction: NoAction,
+		}
+		return m, nil
+
 	case participantSearchResultMsg:
 		if len(msg.results) == 0 {
 			m.state.chat.filteredIndices = make([]int, len(m.state.chat.participants))
@@ -154,14 +309,25 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 	case tea.KeyMsg:
 		// Handle modal input first if modal is open
 		if m.state.notify.open {
-			switch msg.String() {
-			case "y", "Y", "enter":
-				m = m.closeModal()
-				m.clearChatState()
-				return m.NewRoomSwitch()
-			case "n", "N", "esc":
-				m = m.closeModal()
-				return m, nil
+			switch m.state.notify.confirmAction {
+			case NoAction:
+				// OK button modal - any key closes it
+				switch msg.String() {
+				case "enter", "esc", " ", "o", "O":
+					m = m.closeModal()
+					return m, nil
+				}
+			case GoBackAction:
+				// Confirm/Cancel modal
+				switch msg.String() {
+				case "y", "Y", "enter":
+					m = m.closeModal()
+					m.clearChatState()
+					return m.NewRoomSwitch()
+				case "n", "N", "esc":
+					m = m.closeModal()
+					return m, nil
+				}
 			}
 			// Don't process other keys when modal is open
 			return m, nil
@@ -194,19 +360,25 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 			return m, nil
 		case key.Matches(msg, keys.Enter):
 			if m.state.chat.focusedInput == focusMessage && m.state.chat.messageInput.Value() != "" {
-				newMsg := apisdk.MessageResponse{
-					User: apisdk.UserResponse{
-						Name: "You",
-						ID:   "you",
-					},
-					Content:   m.state.chat.messageInput.Value(),
-					CreatedAt: time.Now(),
-				}
-				m.state.chat.messages = append(m.state.chat.messages, newMsg)
+				content := m.state.chat.messageInput.Value()
 				m.state.chat.messageInput.SetValue("")
 
-				m.state.chat.messagesViewport.SetContent(m.renderMessages())
-				m.state.chat.messagesViewport.GotoBottom()
+				if m.state.chat.room != nil && m.state.chat.memberToken != "" {
+					go func() {
+						_, err := m.client.Message.Create(
+							m.context,
+							m.state.chat.room.RoomID,
+							apisdk.CreateMessageParam{
+								RoomID:  m.state.chat.room.RoomID,
+								Content: content,
+							},
+							option.WithHeader("X-Member-Token", m.state.chat.memberToken),
+						)
+						if err != nil {
+							log.Printf("Failed to send message: %v", err)
+						}
+					}()
+				}
 
 				return m, nil
 			}
@@ -431,7 +603,13 @@ func (m model) renderChatCenter(width, height int) string {
 
 func (m model) renderMessages() string {
 	sb := strings.Builder{}
-	userID := "you" // TODO: use actual ID
+
+	var userID string
+	if m.userID == nil {
+		userID = "You"
+	} else {
+		userID = *m.userID
+	}
 
 	for _, msg := range m.state.chat.messages {
 		timestamp := m.theme.TextBody().Faint(true).Render(msg.CreatedAt.Format("3:04 PM"))
@@ -539,5 +717,20 @@ func (m model) chatViewCompact() string {
 }
 
 func (m *model) clearChatState() {
+	// Cancel WebSocket context
+	if m.state.chat.wsCancel != nil {
+		m.state.chat.wsCancel()
+	}
+
+	// Close WebSocket connection
+	if m.state.chat.wsConn != nil {
+		m.state.chat.wsConn.Close()
+	}
+
+	// Close message channel
+	if m.state.chat.wsMsgChan != nil {
+		close(m.state.chat.wsMsgChan)
+	}
+
 	m.state.chat = chatState{}
 }

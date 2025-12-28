@@ -47,7 +47,7 @@ func NewMessage(member *Member, rawContent string, roomID string) (*Message, err
 		return nil, fmt.Errorf("message cannot be empty or only whitespace")
 	}
 
-	now := time.Now().UTC()
+	now := time.Now()
 
 	return &Message{
 		ID:        uuid.NewString(),

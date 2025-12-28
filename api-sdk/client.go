@@ -6,6 +6,8 @@ import (
 	"os"
 	"slices"
 
+	"net/http/cookiejar"
+
 	"github.com/hilthontt/visper/api-sdk/internal/requestconfig"
 	"github.com/hilthontt/visper/api-sdk/option"
 )
@@ -18,8 +20,14 @@ type Client struct {
 }
 
 func DefaultClientOptions() []option.RequestOption {
+	jar, _ := cookiejar.New(nil)
+	httpClient := &http.Client{
+		Jar: jar,
+	}
+
 	defaults := []option.RequestOption{
 		option.WithEnvironmentDev(),
+		option.WithHTTPClient(httpClient),
 	}
 	if o, ok := os.LookupEnv("VISPER_BASE_URL"); ok {
 		defaults = append(defaults, option.WithBaseURL(o))

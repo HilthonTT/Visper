@@ -4,6 +4,7 @@ import (
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	apisdk "github.com/hilthontt/visper/api-sdk"
 )
 
 type newRoomState struct {
@@ -175,14 +176,25 @@ func (m model) NewRoomUpdate(msg tea.Msg) (model, tea.Cmd) {
 			m.state.newRoom.creating = true
 			m.state.newRoom.error = ""
 
-			// TODO: Implement actual room creation logic
-			// return m, m.createRoomCmd()
+			generatedUsername := m.generator.Generate()
+			m.username = &generatedUsername
 
-			// For now, simulate success (remove this in production)
-			// m.state.newRoom.roomCode = "ABC-123-XYZ"
-			// m.state.newRoom.creating = false
+			newRoom, err := m.client.Room.New(m.context, apisdk.RoowNewParams{
+				Persistent: true,
+				Username:   generatedUsername,
+			})
 
-			return m.ChatSwitch()
+			if err != nil {
+				m.error = &visibleError{
+					message: "Failed to create a new room",
+				}
+				return m, nil
+			}
+
+			m.state.newRoom.roomCode = newRoom.JoinCode
+			m.state.newRoom.creating = false
+
+			return m.ChatSwitch(newRoom)
 		}
 	}
 

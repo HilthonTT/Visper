@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bufio"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -21,7 +23,7 @@ func newResponseWriter(w http.ResponseWriter) *responseWriter {
 	}
 }
 
-func (rw *responseWriter) WriterHeader(statusCode int) {
+func (rw *responseWriter) WriteHeader(statusCode int) {
 	rw.statusCode = statusCode
 	rw.ResponseWriter.WriteHeader(statusCode)
 }
@@ -30,6 +32,27 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	n, err := rw.ResponseWriter.Write(b)
 	rw.bytes += n
 	return n, err
+}
+
+func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := rw.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("responseWriter does not implement http.Hijacker")
+	}
+	return hijacker.Hijack()
+}
+
+func (rw *responseWriter) Flush() {
+	if flusher, ok := rw.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (rw *responseWriter) Push(target string, opts *http.PushOptions) error {
+	if pusher, ok := rw.ResponseWriter.(http.Pusher); ok {
+		return pusher.Push(target, opts)
+	}
+	return fmt.Errorf("responseWriter does not implement http.Pusher")
 }
 
 func (app *Application) rateLimiterMiddleware(next http.Handler) http.Handler {

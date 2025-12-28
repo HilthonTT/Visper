@@ -62,7 +62,7 @@ func (h *Handler) CreateNewMessageHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	currentMemberID := utils.GetMemberIDFromCookie(r)
+	currentMemberID := utils.GetMemberIDFromRequest(r)
 	if currentMemberID == "" {
 		json.WriteError(w, http.StatusUnauthorized, errors.New("unauthorized"), "Missing or invalid authentication")
 		return
@@ -81,7 +81,14 @@ func (h *Handler) CreateNewMessageHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	existingMember := room.FindMemberByID(currentMemberID)
+
+	// If not found by token, check if it's the owner's token
+	if existingMember == nil && room.Owner != nil && room.Owner.Token == currentMemberID {
+		existingMember = room.Owner
+	}
+
 	if existingMember == nil {
+		log.Printf("Member not found - currentMemberID: %s, room members: %+v", currentMemberID, room.Members)
 		json.WriteError(w, http.StatusUnauthorized, errors.New("unauthorized"), "You are not a member")
 		return
 	}
@@ -146,7 +153,7 @@ func (h *Handler) DeleteMessageHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	currentMemberID := utils.GetMemberIDFromCookie(r)
+	currentMemberID := utils.GetMemberIDFromRequest(r)
 	if currentMemberID == "" {
 		json.WriteError(w, http.StatusUnauthorized, errors.New("unauthorized"), "Missing or invalid authentication")
 		return
