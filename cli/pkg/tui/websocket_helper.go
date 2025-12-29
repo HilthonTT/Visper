@@ -88,7 +88,6 @@ func (m model) listenWebSocket() tea.Cmd {
 
 	// Set up message handler
 	ws.SetMessageHandler(func(msg apisdk.WSMessage) {
-
 		teaMsg := m.handleWSMessage(msg)
 		if teaMsg != nil {
 
@@ -128,10 +127,8 @@ func (m model) listenWebSocket() tea.Cmd {
 
 func waitForWSMessage(msgChan chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
-
 		msg, ok := <-msgChan
 		if !ok {
-
 			return wsDisconnectedMsg{}
 		}
 
@@ -244,7 +241,6 @@ func (m model) handleWSMessage(msg apisdk.WSMessage) tea.Msg {
 		}
 
 	default:
-
 		return nil
 	}
 }
