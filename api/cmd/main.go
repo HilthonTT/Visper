@@ -54,11 +54,9 @@ func main() {
 		gin.SetMode(gin.DebugMode)
 	}
 
-	router := gin.New()
-
-	router.Use(gin.Recovery())
-	router.Use(GinLogger(loggerInstance))
-	router.Use(CorsMiddleware(cfg))
+	router := gin.Default()
+	router.Use(middlewares.GinLogger(loggerInstance))
+	router.Use(middlewares.CorsMiddleware(cfg))
 
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
@@ -78,6 +76,7 @@ func main() {
 	v1 := router.Group("/api/v1")
 	{
 		v1.Use(middlewares.UserMiddleware(userUC, loggerInstance))
+		v1.Use(middlewares.RateLimiterMiddleware(cache.GetRedis(), loggerInstance, middlewares.ModerateRateLimiterConfig()))
 
 		messageController := message.NewMessageController(messageUC, roomUC)
 		roomController := room.NewRoomController(roomUC)
@@ -124,56 +123,4 @@ func main() {
 	}
 
 	loggerInstance.Info("Server exited successfully")
-}
-
-func GinLogger(logger *logger.Logger) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		start := time.Now()
-		path := c.Request.URL.Path
-		query := c.Request.URL.RawQuery
-
-		c.Next()
-
-		latency := time.Since(start)
-		statusCode := c.Writer.Status()
-		method := c.Request.Method
-		clientIP := c.ClientIP()
-
-		if len(c.Errors) > 0 {
-			logger.Error("Request error",
-				zap.String("method", method),
-				zap.String("path", path),
-				zap.String("query", query),
-				zap.Int("status", statusCode),
-				zap.Duration("latency", latency),
-				zap.String("ip", clientIP),
-				zap.String("errors", c.Errors.String()),
-			)
-		} else {
-			logger.Info("Request",
-				zap.String("method", method),
-				zap.String("path", path),
-				zap.String("query", query),
-				zap.Int("status", statusCode),
-				zap.Duration("latency", latency),
-				zap.String("ip", clientIP),
-			)
-		}
-	}
-}
-
-func CorsMiddleware(cfg *config.Config) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", cfg.Cors.AllowOrigins)
-		c.Writer.Header().Set("Access-Control-Allow-Credentials", "true")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
-
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
-			return
-		}
-
-		c.Next()
-	}
 }
