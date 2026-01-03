@@ -49,7 +49,7 @@ func (uc *roomUseCase) Create(ctx context.Context, owner model.User, expiry time
 		return nil, fmt.Errorf("failed to create room: %w", err)
 	}
 
-	if err := uc.repository.AddUser(ctx, room.ID, owner.ID); err != nil {
+	if err := uc.repository.AddUser(ctx, room.ID, owner); err != nil {
 		uc.logger.Error("failed to add owner to room", zap.Error(err), zap.String("roomID", room.ID), zap.String("ownerID", owner.ID))
 		// Attempt cleanup
 		_ = uc.repository.Delete(ctx, room.ID)
@@ -177,7 +177,7 @@ func (uc *roomUseCase) JoinRoom(ctx context.Context, roomID string, user model.U
 		}
 	}
 
-	if err := uc.repository.AddUser(ctx, roomID, user.ID); err != nil {
+	if err := uc.repository.AddUser(ctx, roomID, user); err != nil {
 		uc.logger.Error("failed to add user to room", zap.Error(err), zap.String("roomID", roomID), zap.String("userID", user.ID))
 		return fmt.Errorf("failed to join room: %w", err)
 	}

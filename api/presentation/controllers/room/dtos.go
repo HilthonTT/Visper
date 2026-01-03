@@ -3,8 +3,7 @@ package room
 import "time"
 
 type CreateRoomRequest struct {
-	Username  string `json:"username" binding:"required"`
-	ExpiryHrs int    `json:"expiry_hours" binding:"required,min=1,max=168"` // 1 hour to 7 days
+	ExpiryHrs int `json:"expiry_hours" binding:"required,min=1,max=168"` // 1 hour to 7 days
 }
 
 type JoinRoomRequest struct {

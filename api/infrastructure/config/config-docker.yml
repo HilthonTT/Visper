@@ -1,0 +1,37 @@
+server:
+  internalPort: "5005"
+  externalPort: "5005"
+  runMode: "release"
+  domain: "localhost"
+
+logger:
+  filePath: "/app/logs/"
+  encoding: "json"
+  level: "info"
+  logger: "zap"
+
+cors:
+  allowOrigins: "*"
+
+postgres:
+  host: "postgres" # Use service name from docker-compose
+  port: "5432"
+  user: "postgres"
+  password: "admin"
+  dbName: "visper_db"
+  sslMode: "disable"
+  maxIdleConns: 15
+  maxOpenConns: 100
+  connMaxLifetime: 5s
+
+redis:
+  host: "redis" # Use service name from docker-compose
+  port: "6379"
+  password: "password"
+  db: "0"
+  dialTimeout: 5s
+  readTimeout: 5s
+  writeTimeout: 5s
+  poolSize: 10
+  poolTimeout: 15s
+  idleCheckFrequency: 500ms

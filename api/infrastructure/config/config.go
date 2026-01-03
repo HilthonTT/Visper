@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/viper"
@@ -55,6 +56,7 @@ type RedisConfig struct {
 	PoolSize           int
 	PoolTimeout        time.Duration
 }
+
 type CorsConfig struct {
 	AllowOrigins string
 }
@@ -97,7 +99,21 @@ func LoadConfig(filename string, fileType string) (*viper.Viper, error) {
 	v := viper.New()
 	v.SetConfigType(fileType)
 	v.SetConfigName(filename)
-	v.AddConfigPath(".")
+
+	// Add multiple possible config paths
+	v.AddConfigPath(".")                        // Current directory
+	v.AddConfigPath("./config")                 // ./config
+	v.AddConfigPath("./infrastructure/config")  // ./infrastructure/config
+	v.AddConfigPath("../config")                // ../config
+	v.AddConfigPath("../infrastructure/config") // ../infrastructure/config (from cmd)
+	v.AddConfigPath("../../config")             // ../../config
+
+	// Add absolute path if running from project root
+	if wd, err := os.Getwd(); err == nil {
+		v.AddConfigPath(filepath.Join(wd, "config"))
+		v.AddConfigPath(filepath.Join(wd, "infrastructure", "config"))
+	}
+
 	v.AutomaticEnv()
 
 	err := v.ReadInConfig()
@@ -108,16 +124,18 @@ func LoadConfig(filename string, fileType string) (*viper.Viper, error) {
 		}
 		return nil, err
 	}
+
+	log.Printf("Using config file: %s", v.ConfigFileUsed())
 	return v, nil
 }
 
 func getConfigPath(env string) string {
 	switch env {
 	case "docker":
-		return "/app/config/config-docker"
+		return "config-docker"
 	case "production":
-		return "/config/config-production"
+		return "config-production"
 	default:
-		return "../config/config-development"
+		return "config-development"
 	}
 }

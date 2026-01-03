@@ -12,16 +12,47 @@ import (
 )
 
 type roomRepository struct {
-	client *redis.Client
+	client         *redis.Client
+	userRepository repository.UserRepository
 }
 
-func NewRoomRepository(client *redis.Client) repository.RoomRepository {
-	return &roomRepository{client: client}
+func NewRoomRepository(client *redis.Client, userRepository repository.UserRepository) repository.RoomRepository {
+	return &roomRepository{
+		client:         client,
+		userRepository: userRepository,
+	}
 }
 
-func (r *roomRepository) AddUser(ctx context.Context, roomID string, userID string) error {
-	key := fmt.Sprintf("room:%s:users", roomID)
-	return r.client.SAdd(ctx, key, userID).Err()
+func (r *roomRepository) AddUser(ctx context.Context, roomID string, user model.User) error {
+	userKey := fmt.Sprintf("room:%s:users", roomID)
+	if err := r.client.SAdd(ctx, userKey, user.ID).Err(); err != nil {
+		return err
+	}
+
+	roomKey := fmt.Sprintf("room:%s", roomID)
+	data, err := r.client.Get(ctx, roomKey).Bytes()
+	if err != nil {
+		return err
+	}
+
+	var room model.Room
+	if err := json.Unmarshal(data, &room); err != nil {
+		return err
+	}
+
+	// Check if user already exists in members
+	if room.IsMember(user.ID) {
+		return nil
+	}
+
+	room.Members = append(room.Members, user)
+
+	updatedData, err := json.Marshal(room)
+	if err != nil {
+		return err
+	}
+
+	return r.client.Set(ctx, roomKey, updatedData, 0).Err()
 }
 
 func (r *roomRepository) Create(ctx context.Context, room *model.Room) error {
@@ -78,6 +109,21 @@ func (r *roomRepository) GetByID(ctx context.Context, id string) (*model.Room, e
 		return nil, err
 	}
 
+	userIDs, err := r.GetUsers(ctx, id)
+	if err != nil && err != redis.Nil {
+		return nil, err
+	}
+
+	room.Members = make([]model.User, 0, len(userIDs))
+	for _, userID := range userIDs {
+		user, err := r.userRepository.GetByID(ctx, userID)
+		if err != nil {
+			// User might have been deleted, skip them
+			continue
+		}
+		room.Members = append(room.Members, *user)
+	}
+
 	return &room, nil
 }
 
@@ -87,6 +133,33 @@ func (r *roomRepository) GetUsers(ctx context.Context, roomID string) ([]string,
 }
 
 func (r *roomRepository) RemoveUser(ctx context.Context, roomID string, userID string) error {
-	key := fmt.Sprintf("room:%s:users", roomID)
-	return r.client.SRem(ctx, key, userID).Err()
+	userKey := fmt.Sprintf("room:%s:users", roomID)
+	if err := r.client.SRem(ctx, userKey, userID).Err(); err != nil {
+		return err
+	}
+
+	roomKey := fmt.Sprintf("room:%s", roomID)
+	data, err := r.client.Get(ctx, roomKey).Bytes()
+	if err != nil {
+		return err
+	}
+
+	var room model.Room
+	if err := json.Unmarshal(data, &room); err != nil {
+		return err
+	}
+
+	for i, member := range room.Members {
+		if member.ID == userID {
+			room.Members = append(room.Members[:i], room.Members[i+1:]...)
+			break
+		}
+	}
+
+	updatedData, err := json.Marshal(room)
+	if err != nil {
+		return err
+	}
+
+	return r.client.Set(ctx, roomKey, updatedData, 0).Err()
 }

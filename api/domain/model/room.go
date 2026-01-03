@@ -10,3 +10,13 @@ type Room struct {
 	Expiry    time.Duration `json:"expiry"`
 	Members   []User        `json:"members"`
 }
+
+func (r Room) IsMember(userID string) bool {
+	for _, user := range r.Members {
+		if user.ID == userID {
+			return true
+		}
+	}
+
+	return false
+}

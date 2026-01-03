@@ -8,6 +8,7 @@ import (
 	"github.com/hilthontt/visper/api/application/usecases/room"
 	"github.com/hilthontt/visper/api/domain/model"
 	"github.com/hilthontt/visper/api/infrastructure/security"
+	"github.com/hilthontt/visper/api/presentation/middlewares"
 )
 
 type RoomController interface {
@@ -40,17 +41,18 @@ func (c *roomController) CreateRoom(ctx *gin.Context) {
 		return
 	}
 
-	userID := security.GetOrCreateUserID(ctx.Writer, ctx.Request)
-
-	owner := model.User{
-		ID:        userID,
-		Username:  req.Username,
-		CreatedAt: time.Now(),
+	user, exists := middlewares.GetUserFromContext(ctx)
+	if !exists {
+		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "unauthorized",
+			Message: "user not found in context",
+		})
+		return
 	}
 
 	expiry := time.Duration(req.ExpiryHrs) * time.Hour
 
-	room, err := c.usecase.Create(ctx.Request.Context(), owner, expiry)
+	room, err := c.usecase.Create(ctx.Request.Context(), *user, expiry)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, ErrorResponse{
 			Error:   "creation_failed",
@@ -59,7 +61,7 @@ func (c *roomController) CreateRoom(ctx *gin.Context) {
 		return
 	}
 
-	if err := security.SetRoomAuth(ctx.Writer, &owner, room.ID); err != nil {
+	if err := security.SetRoomAuth(ctx.Writer, user, room.ID); err != nil {
 		ctx.JSON(http.StatusInternalServerError, ErrorResponse{
 			Error:   "auth_failed",
 			Message: "failed to set authentication",
@@ -120,15 +122,20 @@ func (c *roomController) GetRoomByJoinCode(ctx *gin.Context) {
 		return
 	}
 
-	userID := security.GetOrCreateUserID(ctx.Writer, ctx.Request)
-
-	user := model.User{
-		ID:        userID,
-		Username:  req.Username,
-		CreatedAt: time.Now(),
+	user, exists := middlewares.GetUserFromContext(ctx)
+	if !exists {
+		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "unauthorized",
+			Message: "user not found in context",
+		})
+		return
 	}
 
-	if err := c.usecase.JoinRoom(ctx.Request.Context(), room.ID, user); err != nil {
+	if req.Username != "" {
+		user.Username = req.Username
+	}
+
+	if err := c.usecase.JoinRoom(ctx.Request.Context(), room.ID, *user); err != nil {
 		ctx.JSON(http.StatusInternalServerError, ErrorResponse{
 			Error:   "join_failed",
 			Message: err.Error(),
@@ -136,7 +143,7 @@ func (c *roomController) GetRoomByJoinCode(ctx *gin.Context) {
 		return
 	}
 
-	if err := security.SetRoomAuth(ctx.Writer, &user, room.ID); err != nil {
+	if err := security.SetRoomAuth(ctx.Writer, user, room.ID); err != nil {
 		ctx.JSON(http.StatusInternalServerError, ErrorResponse{
 			Error:   "auth_failed",
 			Message: "failed to set authentication",
@@ -159,7 +166,6 @@ func (c *roomController) DeleteRoom(ctx *gin.Context) {
 		return
 	}
 
-	// Get authenticated user from room cookie
 	user, err := security.GetRoomAuth(ctx.Request)
 	if err != nil {
 		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
@@ -183,7 +189,6 @@ func (c *roomController) DeleteRoom(ctx *gin.Context) {
 		return
 	}
 
-	// Clear room authentication cookies
 	security.ClearRoomAuth(ctx.Writer, roomID)
 
 	ctx.JSON(http.StatusOK, SuccessResponse{
@@ -210,15 +215,20 @@ func (c *roomController) JoinRoom(ctx *gin.Context) {
 		return
 	}
 
-	userID := security.GetOrCreateUserID(ctx.Writer, ctx.Request)
-
-	user := model.User{
-		ID:        userID,
-		Username:  req.Username,
-		CreatedAt: time.Now(),
+	user, exists := middlewares.GetUserFromContext(ctx)
+	if !exists {
+		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "unauthorized",
+			Message: "user not found in context",
+		})
+		return
 	}
 
-	if err := c.usecase.JoinRoom(ctx.Request.Context(), roomID, user); err != nil {
+	if req.Username != "" {
+		user.Username = req.Username
+	}
+
+	if err := c.usecase.JoinRoom(ctx.Request.Context(), roomID, *user); err != nil {
 		status := http.StatusInternalServerError
 		if err.Error() == "room not found" || err.Error() == "room has expired" {
 			status = http.StatusNotFound
@@ -230,8 +240,7 @@ func (c *roomController) JoinRoom(ctx *gin.Context) {
 		return
 	}
 
-	// Set room authentication cookie
-	if err := security.SetRoomAuth(ctx.Writer, &user, roomID); err != nil {
+	if err := security.SetRoomAuth(ctx.Writer, user, roomID); err != nil {
 		ctx.JSON(http.StatusInternalServerError, ErrorResponse{
 			Error:   "auth_failed",
 			Message: "failed to set authentication",
@@ -298,8 +307,8 @@ func (c *roomController) CheckMembership(ctx *gin.Context) {
 		return
 	}
 
-	userID := security.GetUserID(ctx.Request)
-	if userID == "" {
+	user, exists := middlewares.GetUserFromContext(ctx)
+	if !exists {
 		ctx.JSON(http.StatusOK, map[string]any{
 			"is_member": false,
 			"room_id":   roomID,
@@ -307,7 +316,7 @@ func (c *roomController) CheckMembership(ctx *gin.Context) {
 		return
 	}
 
-	isMember, err := c.usecase.IsUserInRoom(ctx.Request.Context(), roomID, userID)
+	isMember, err := c.usecase.IsUserInRoom(ctx.Request.Context(), roomID, user.ID)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, ErrorResponse{
 			Error:   "check_failed",
@@ -319,7 +328,7 @@ func (c *roomController) CheckMembership(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, map[string]any{
 		"is_member": isMember,
 		"room_id":   roomID,
-		"user_id":   userID,
+		"user_id":   user.ID,
 	})
 }
 

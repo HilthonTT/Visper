@@ -7,8 +7,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/hilthontt/visper/api/application/usecases/message"
+	"github.com/hilthontt/visper/api/application/usecases/room"
 	"github.com/hilthontt/visper/api/domain/model"
-	"github.com/hilthontt/visper/api/infrastructure/security"
+	"github.com/hilthontt/visper/api/presentation/middlewares"
 )
 
 type MessageController interface {
@@ -19,12 +20,14 @@ type MessageController interface {
 }
 
 type messageController struct {
-	usecase message.MessageUseCase
+	usecase     message.MessageUseCase
+	roomUseCase room.RoomUseCase
 }
 
-func NewMessageController(usecase message.MessageUseCase) MessageController {
+func NewMessageController(usecase message.MessageUseCase, roomUseCase room.RoomUseCase) MessageController {
 	return &messageController{
-		usecase: usecase,
+		usecase:     usecase,
+		roomUseCase: roomUseCase,
 	}
 }
 
@@ -47,11 +50,11 @@ func (c *messageController) SendMessage(ctx *gin.Context) {
 		return
 	}
 
-	user, err := security.GetRoomAuth(ctx.Request)
-	if err != nil {
+	user, exists := middlewares.GetUserFromContext(ctx)
+	if !exists {
 		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
 			Error:   "unauthorized",
-			Message: "room authentication required",
+			Message: "user not found in context",
 		})
 		return
 	}
@@ -84,7 +87,31 @@ func (c *messageController) GetMessages(ctx *gin.Context) {
 		return
 	}
 
-	// Parse optional limit parameter
+	user, exists := middlewares.GetUserFromContext(ctx)
+	if !exists {
+		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "unauthorized",
+			Message: "user not found in context",
+		})
+		return
+	}
+
+	room, err := c.roomUseCase.GetByID(ctx.Request.Context(), roomID)
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, ErrorResponse{
+			Error:   "not-found",
+			Message: "room not found",
+		})
+	}
+
+	if !room.IsMember(user.ID) {
+		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "unauthorized",
+			Message: "you are not a member of this room",
+		})
+		return
+	}
+
 	limit := int64(50) // default
 	if limitStr := ctx.Query("limit"); limitStr != "" {
 		if parsedLimit, err := strconv.ParseInt(limitStr, 10, 64); err == nil {

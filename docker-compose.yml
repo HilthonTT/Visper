@@ -1,53 +1,104 @@
+# services:
+#   rabbitmq:
+#     image: rabbitmq:3-management
+#     container_name: rabbitmq
+#     ports:
+#       - "5672:5672" # AMQP port
+#       - "15672:15672" # Management UI
+#     environment:
+#       RABBITMQ_DEFAULT_USER: guest
+#       RABBITMQ_DEFAULT_PASS: guest
+#     volumes:
+#       - rabbitmq_data:/var/lib/rabbitmq
+#     healthcheck:
+#       test: rabbitmq-diagnostics -q ping
+#       interval: 10s
+#       timeout: 5s
+#       retries: 5
+
+#   jaeger:
+#     image: jaegertracing/all-in-one:latest
+#     container_name: jaeger
+#     ports:
+#       - "5775:5775/udp" # Zipkin compact thrift
+#       - "6831:6831/udp" # Jaeger compact thrift
+#       - "6832:6832/udp" # Jaeger binary thrift
+#       - "5778:5778" # Config server
+#       - "16686:16686" # Jaeger UI
+#       - "14268:14268" # Jaeger collector HTTP
+#       - "14250:14250" # Jaeger gRPC
+#       - "9411:9411" # Zipkin compatible endpoint
+#     environment:
+#       COLLECTOR_ZIPKIN_HOST_PORT: ":9411"
+#       COLLECTOR_OTLP_ENABLED: "true"
+
+#   mongodb:
+#     image: mongo:latest
+#     container_name: mongodb
+#     ports:
+#       - "27017:27017"
+#     environment:
+#       MONGO_INITDB_ROOT_USERNAME: admin
+#       MONGO_INITDB_ROOT_PASSWORD: password
+#     volumes:
+#       - mongodb_data:/data/db
+#     healthcheck:
+#       test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+#       interval: 10s
+#       timeout: 5s
+#       retries: 5
+
+# volumes:
+#   rabbitmq_data:
+#   mongodb_data:
+
+version: "3.8"
+
 services:
-  rabbitmq:
-    image: rabbitmq:3-management
-    container_name: rabbitmq
-    ports:
-      - "5672:5672" # AMQP port
-      - "15672:15672" # Management UI
+  postgres:
+    image: postgres:latest
+    container_name: visper-postgres
+    restart: unless-stopped
     environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: visper_db
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
     volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: rabbitmq-diagnostics -q ping
+      test: ["CMD-SHELL", "pg_isready -U postgres -d visper_db"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - visper-network
 
-  jaeger:
-    image: jaegertracing/all-in-one:latest
-    container_name: jaeger
+  redis:
+    image: redis:latest
+    container_name: visper-redis
+    restart: unless-stopped
+    command: redis-server --requirepass password --appendonly yes
     ports:
-      - "5775:5775/udp" # Zipkin compact thrift
-      - "6831:6831/udp" # Jaeger compact thrift
-      - "6832:6832/udp" # Jaeger binary thrift
-      - "5778:5778" # Config server
-      - "16686:16686" # Jaeger UI
-      - "14268:14268" # Jaeger collector HTTP
-      - "14250:14250" # Jaeger gRPC
-      - "9411:9411" # Zipkin compatible endpoint
-    environment:
-      COLLECTOR_ZIPKIN_HOST_PORT: ":9411"
-      COLLECTOR_OTLP_ENABLED: "true"
-
-  mongodb:
-    image: mongo:latest
-    container_name: mongodb
-    ports:
-      - "27017:27017"
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: password
+      - "6379:6379"
     volumes:
-      - mongodb_data:/data/db
+      - redis_data:/data
     healthcheck:
-      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - visper-network
 
 volumes:
-  rabbitmq_data:
-  mongodb_data:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  visper-network:
+    driver: bridge

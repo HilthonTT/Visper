@@ -10,10 +10,12 @@ import (
 	"github.com/hilthontt/visper/api/domain/model"
 	"github.com/hilthontt/visper/api/domain/repository"
 	"github.com/hilthontt/visper/api/infrastructure/logger"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
 type UserUseCase interface {
+	GetOrCreateUser(ctx context.Context, id string) (*model.User, error)
 	Create(ctx context.Context, username string) (*model.User, error)
 	GetByID(ctx context.Context, id string) (*model.User, error)
 	GetByUsername(ctx context.Context, username string) (*model.User, error)
@@ -32,6 +34,43 @@ func NewUserUseCase(repository repository.UserRepository, logger *logger.Logger)
 		repository: repository,
 		logger:     logger,
 	}
+}
+
+func (uc *userUseCase) GetOrCreateUser(ctx context.Context, id string) (*model.User, error) {
+	if id == "" {
+		return nil, fmt.Errorf("user ID cannot be empty")
+	}
+
+	// Try to get existing user
+	user, err := uc.repository.GetByID(ctx, id)
+	if err == nil {
+		// User exists, return it
+		return user, nil
+	}
+
+	// Check if error is "not found" (redis.Nil)
+	if err == redis.Nil {
+		// User doesn't exist, create a new one
+		newUser := &model.User{
+			ID:        id,
+			Username:  generateAnonymousUsername(id),
+			IsGuest:   true,
+			CreatedAt: time.Now(),
+		}
+
+		if err := uc.repository.Create(ctx, newUser); err != nil {
+			uc.logger.Error("failed to create user", zap.Error(err), zap.String("userID", id))
+			return nil, fmt.Errorf("failed to create user: %w", err)
+		}
+
+		uc.logger.Info("created new user", zap.String("userID", newUser.ID), zap.String("username", newUser.Username))
+		return newUser, nil
+	}
+
+	// Other error occurred
+	uc.logger.Error("failed to get user by ID", zap.Error(err), zap.String("userID", id))
+	return nil, fmt.Errorf("failed to get user: %w", err)
+
 }
 
 func (uc *userUseCase) Create(ctx context.Context, username string) (*model.User, error) {
@@ -226,4 +265,12 @@ func isAlphanumeric(char rune) bool {
 	return (char >= 'a' && char <= 'z') ||
 		(char >= 'A' && char <= 'Z') ||
 		(char >= '0' && char <= '9')
+}
+
+func generateAnonymousUsername(userID string) string {
+	// Use first 8 characters of UUID for uniqueness
+	if len(userID) >= 8 {
+		return fmt.Sprintf("Guest-%s", userID[:8])
+	}
+	return fmt.Sprintf("Guest-%s", userID)
 }
