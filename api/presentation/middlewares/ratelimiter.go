@@ -69,7 +69,6 @@ func RateLimiterMiddleware(redisClient *redis.Client, logger *logger.Logger, con
 		c.Header("X-RateLimit-Reset", fmt.Sprintf("%d", resetTime.Unix()))
 
 		if !allowed {
-			// Block the user for BlockDuration
 			if err := blockUser(ctx, redisClient, user.ID, config.BlockDuration); err != nil {
 				logger.Error("failed to block user", zap.Error(err), zap.String("userID", user.ID))
 			}
@@ -94,14 +93,44 @@ func RateLimiterMiddleware(redisClient *redis.Client, logger *logger.Logger, con
 	}
 }
 
+func acquireLock(ctx context.Context, client *redis.Client, lockKey string, ttl time.Duration) (bool, error) {
+	return client.SetNX(ctx, lockKey, "1", ttl).Result()
+}
+
+func releaseLock(ctx context.Context, client *redis.Client, lockKey string) error {
+	return client.Del(ctx, lockKey).Err()
+}
+
 func checkRateLimit(ctx context.Context, client *redis.Client, userID string, config RateLimiterConfig) (allowed bool, remaining int, resetTime time.Time, err error) {
+	lockKey := fmt.Sprintf("ratelimit:lock:%s", userID)
 	key := fmt.Sprintf("ratelimit:%s", userID)
+
+	maxRetries := 10
+	retryDelay := 10 * time.Millisecond
+
+	for i := range maxRetries {
+		locked, err := acquireLock(ctx, client, lockKey, 2*time.Second)
+		if err != nil {
+			return false, 0, time.Time{}, fmt.Errorf("failed to acquire lock: %w", err)
+		}
+
+		if locked {
+			defer releaseLock(ctx, client, lockKey)
+			break
+		}
+
+		if i < maxRetries-1 {
+			time.Sleep(retryDelay)
+		} else {
+			return false, 0, time.Time{}, fmt.Errorf("could not acquire lock after %d retries", maxRetries)
+		}
+	}
+
 	now := time.Now()
 	windowStart := now.Add(-config.Window)
 
 	pipe := client.Pipeline()
 
-	// Remove old entries outside the current window
 	pipe.ZRemRangeByScore(ctx, key, "0", fmt.Sprintf("%d", windowStart.UnixNano()))
 
 	countCmd := pipe.ZCard(ctx, key)
@@ -119,10 +148,7 @@ func checkRateLimit(ctx context.Context, client *redis.Client, userID string, co
 	}
 
 	currentCount := countCmd.Val()
-	remaining = int(config.RequestsPerWindow) - int(currentCount) - 1
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining = max(int(config.RequestsPerWindow)-int(currentCount)-1, 0)
 
 	resetTime = now.Add(config.Window)
 

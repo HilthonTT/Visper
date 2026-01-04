@@ -8,6 +8,7 @@ import (
 	"github.com/hilthontt/visper/api/application/usecases/room"
 	"github.com/hilthontt/visper/api/domain/model"
 	"github.com/hilthontt/visper/api/infrastructure/security"
+	"github.com/hilthontt/visper/api/infrastructure/websocket"
 	"github.com/hilthontt/visper/api/presentation/middlewares"
 )
 
@@ -22,12 +23,20 @@ type RoomController interface {
 }
 
 type roomController struct {
-	usecase room.RoomUseCase
+	usecase       room.RoomUseCase
+	wsRoomManager *websocket.RoomManager
+	wsCore        *websocket.Core
 }
 
-func NewRoomController(usecase room.RoomUseCase) RoomController {
+func NewRoomController(
+	usecase room.RoomUseCase,
+	wsRoomManager *websocket.RoomManager,
+	wsCore *websocket.Core,
+) RoomController {
 	return &roomController{
-		usecase: usecase,
+		usecase:       usecase,
+		wsRoomManager: wsRoomManager,
+		wsCore:        wsCore,
 	}
 }
 
@@ -151,7 +160,18 @@ func (c *roomController) GetRoomByJoinCode(ctx *gin.Context) {
 		return
 	}
 
-	room, _ = c.usecase.GetByID(ctx.Request.Context(), room.ID)
+	room, err = c.usecase.GetByID(ctx.Request.Context(), room.ID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if err.Error() == "room not found" || err.Error() == "room has expired" {
+			status = http.StatusNotFound
+		}
+		ctx.JSON(status, ErrorResponse{
+			Error:   "not_found",
+			Message: err.Error(),
+		})
+		return
+	}
 
 	ctx.JSON(http.StatusOK, c.toRoomResponse(room))
 }
@@ -190,6 +210,9 @@ func (c *roomController) DeleteRoom(ctx *gin.Context) {
 	}
 
 	security.ClearRoomAuth(ctx.Writer, roomID)
+
+	deleteMessage := websocket.NewRoomDeleted(roomID)
+	c.wsCore.Broadcast() <- deleteMessage
 
 	ctx.JSON(http.StatusOK, SuccessResponse{
 		Message: "room deleted successfully",
@@ -248,6 +271,13 @@ func (c *roomController) JoinRoom(ctx *gin.Context) {
 		return
 	}
 
+	joinMessage := websocket.NewMemberJoined(roomID, websocket.MemberPayload{
+		UserID:   user.ID,
+		Username: user.Username,
+		JoinedAt: time.Now().String(),
+	})
+	c.wsCore.Broadcast() <- joinMessage
+
 	ctx.JSON(http.StatusOK, SuccessResponse{
 		Message: "successfully joined room",
 		Data: map[string]string{
@@ -291,6 +321,9 @@ func (c *roomController) LeaveRoom(ctx *gin.Context) {
 	}
 
 	security.ClearRoomAuth(ctx.Writer, roomID)
+
+	leaveMessage := websocket.NewMemberLeft(roomID, user.ID, user.Username)
+	c.wsCore.Broadcast() <- leaveMessage
 
 	ctx.JSON(http.StatusOK, SuccessResponse{
 		Message: "successfully left room",

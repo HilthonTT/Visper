@@ -9,6 +9,7 @@ import (
 	"github.com/hilthontt/visper/api/application/usecases/message"
 	"github.com/hilthontt/visper/api/application/usecases/room"
 	"github.com/hilthontt/visper/api/domain/model"
+	"github.com/hilthontt/visper/api/infrastructure/websocket"
 	"github.com/hilthontt/visper/api/presentation/middlewares"
 )
 
@@ -20,14 +21,23 @@ type MessageController interface {
 }
 
 type messageController struct {
-	usecase     message.MessageUseCase
-	roomUseCase room.RoomUseCase
+	usecase       message.MessageUseCase
+	roomUseCase   room.RoomUseCase
+	wsRoomManager *websocket.RoomManager
+	wsCore        *websocket.Core
 }
 
-func NewMessageController(usecase message.MessageUseCase, roomUseCase room.RoomUseCase) MessageController {
+func NewMessageController(
+	usecase message.MessageUseCase,
+	roomUseCase room.RoomUseCase,
+	wsRoomManager *websocket.RoomManager,
+	wsCore *websocket.Core,
+) MessageController {
 	return &messageController{
-		usecase:     usecase,
-		roomUseCase: roomUseCase,
+		usecase:       usecase,
+		roomUseCase:   roomUseCase,
+		wsRoomManager: wsRoomManager,
+		wsCore:        wsCore,
 	}
 }
 
@@ -74,6 +84,9 @@ func (c *messageController) SendMessage(ctx *gin.Context) {
 		return
 	}
 
+	wsMessage := websocket.NewMessageReceived(roomID, msg.ID, msg.Content, msg.UserID, msg.Username, msg.CreatedAt.String())
+	c.wsCore.Broadcast() <- wsMessage
+
 	ctx.JSON(http.StatusCreated, c.toMessageResponse(msg))
 }
 
@@ -102,6 +115,7 @@ func (c *messageController) GetMessages(ctx *gin.Context) {
 			Error:   "not-found",
 			Message: "room not found",
 		})
+		return
 	}
 
 	if !room.IsMember(user.ID) {

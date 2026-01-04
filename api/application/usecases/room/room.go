@@ -9,6 +9,7 @@ import (
 	"github.com/hilthontt/visper/api/domain/model"
 	"github.com/hilthontt/visper/api/domain/repository"
 	"github.com/hilthontt/visper/api/infrastructure/logger"
+	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
@@ -97,6 +98,9 @@ func (uc *roomUseCase) GetByID(ctx context.Context, id string) (*model.Room, err
 
 	room, err := uc.repository.GetByID(ctx, id)
 	if err != nil {
+		if err == redis.Nil {
+			return nil, fmt.Errorf("room not found")
+		}
 		uc.logger.Error("failed to get room by ID", zap.Error(err), zap.String("roomID", id))
 		return nil, fmt.Errorf("failed to get room: %w", err)
 	}

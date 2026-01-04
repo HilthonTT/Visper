@@ -18,8 +18,10 @@ import (
 	"github.com/hilthontt/visper/api/infrastructure/config"
 	"github.com/hilthontt/visper/api/infrastructure/logger"
 	repositories "github.com/hilthontt/visper/api/infrastructure/persistence/repository"
+	"github.com/hilthontt/visper/api/infrastructure/websocket"
 	"github.com/hilthontt/visper/api/presentation/controllers/message"
 	"github.com/hilthontt/visper/api/presentation/controllers/room"
+	wsCtrl "github.com/hilthontt/visper/api/presentation/controllers/websocket"
 	"github.com/hilthontt/visper/api/presentation/middlewares"
 	"github.com/hilthontt/visper/api/presentation/routes"
 	"go.uber.org/zap"
@@ -69,6 +71,13 @@ func main() {
 	userRepo := repositories.NewUserRepository(cache.GetRedis())
 	roomRepo := repositories.NewRoomRepository(cache.GetRedis(), userRepo)
 
+	wsRoomManager := websocket.NewRoomManager()
+	wsCore := websocket.NewCore(roomRepo, messageRepo)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go wsCore.Run(ctx)
+
 	messageUC := messageUseCase.NewMessageUseCase(messageRepo, loggerInstance)
 	roomUC := roomUseCase.NewRoomUseCase(roomRepo, loggerInstance)
 	userUC := userUseCase.NewUserUseCase(userRepo, loggerInstance)
@@ -78,11 +87,13 @@ func main() {
 		v1.Use(middlewares.UserMiddleware(userUC, loggerInstance))
 		v1.Use(middlewares.RateLimiterMiddleware(cache.GetRedis(), loggerInstance, middlewares.ModerateRateLimiterConfig()))
 
-		messageController := message.NewMessageController(messageUC, roomUC)
-		roomController := room.NewRoomController(roomUC)
+		messageController := message.NewMessageController(messageUC, roomUC, wsRoomManager, wsCore)
+		roomController := room.NewRoomController(roomUC, wsRoomManager, wsCore)
+		websocketController := wsCtrl.NewWebSocketController(roomUC, userUC, wsRoomManager, wsCore)
 
 		routes.MessageRoutes(v1, messageController)
 		routes.RoomRoutes(v1, roomController)
+		routes.WebsocketRoutes(v1, websocketController)
 	}
 
 	srv := &http.Server{
@@ -114,9 +125,6 @@ func main() {
 	<-quit
 
 	loggerInstance.Info("Shutting down server...")
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
 		loggerInstance.Fatal("Server forced to shutdown", zap.Error(err))
