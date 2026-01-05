@@ -3,7 +3,7 @@ package message
 import "time"
 
 type SendMessageRequest struct {
-	Content string `json:"content" binding:"required"`
+	Content string `json:"content" binding:"required,max=1000"`
 }
 
 type MessageResponse struct {

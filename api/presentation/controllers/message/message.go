@@ -55,7 +55,7 @@ func (c *messageController) SendMessage(ctx *gin.Context) {
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, ErrorResponse{
 			Error:   "invalid_request",
-			Message: err.Error(),
+			Message: middlewares.TranslateValidationError(err),
 		})
 		return
 	}

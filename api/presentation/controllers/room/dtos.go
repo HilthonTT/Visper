@@ -7,12 +7,12 @@ type CreateRoomRequest struct {
 }
 
 type JoinRoomRequest struct {
-	Username string `json:"username" binding:"required"`
+	Username string `json:"username" binding:"omitempty,max=50"`
 }
 
 type JoinByCodeRequest struct {
 	JoinCode string `json:"join_code" binding:"required,len=6"`
-	Username string `json:"username" binding:"required"`
+	Username string `json:"username" binding:"omitempty,max=50"`
 }
 
 type RoomResponse struct {

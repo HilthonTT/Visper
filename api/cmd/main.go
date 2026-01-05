@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin/binding"
 	messageUseCase "github.com/hilthontt/visper/api/application/usecases/message"
 	roomUseCase "github.com/hilthontt/visper/api/application/usecases/room"
 	userUseCase "github.com/hilthontt/visper/api/application/usecases/user"
@@ -56,6 +57,7 @@ func main() {
 		gin.SetMode(gin.DebugMode)
 	}
 
+	binding.Validator = new(middlewares.DefaultValidator)
 	router := gin.Default()
 	router.Use(middlewares.GinLogger(loggerInstance))
 	router.Use(middlewares.CorsMiddleware(cfg))

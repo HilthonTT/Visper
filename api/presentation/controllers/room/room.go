@@ -45,7 +45,7 @@ func (c *roomController) CreateRoom(ctx *gin.Context) {
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, ErrorResponse{
 			Error:   "invalid_request",
-			Message: err.Error(),
+			Message: middlewares.TranslateValidationError(err),
 		})
 		return
 	}
@@ -112,7 +112,7 @@ func (c *roomController) GetRoomByJoinCode(ctx *gin.Context) {
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, ErrorResponse{
 			Error:   "invalid_request",
-			Message: err.Error(),
+			Message: middlewares.TranslateValidationError(err),
 		})
 		return
 	}
@@ -233,7 +233,7 @@ func (c *roomController) JoinRoom(ctx *gin.Context) {
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, ErrorResponse{
 			Error:   "invalid_request",
-			Message: err.Error(),
+			Message: middlewares.TranslateValidationError(err),
 		})
 		return
 	}
