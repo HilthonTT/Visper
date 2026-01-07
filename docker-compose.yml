@@ -52,8 +52,6 @@
 #   rabbitmq_data:
 #   mongodb_data:
 
-version: "3.8"
-
 services:
   postgres:
     image: postgres:latest
@@ -87,6 +85,34 @@ services:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - visper-network
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: visper-jaeger
+    restart: unless-stopped
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686" # Jaeger UI (main interface)
+      - "14268:14268" # Jaeger collector HTTP (used by your app)
+      - "14250:14250" # Jaeger gRPC
+      - "4317:4317" # OTLP gRPC receiver
+      - "4318:4318" # OTLP HTTP receiver
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:14269/",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5

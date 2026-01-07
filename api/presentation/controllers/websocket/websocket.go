@@ -106,7 +106,6 @@ func (c *webSocketController) HandleConnection(ctx *gin.Context) {
 }
 
 func (c *webSocketController) getUserFromRequest(ctx *gin.Context) (*model.User, error) {
-
 	if user, exists := middlewares.GetUserFromContext(ctx); exists {
 		log.Printf("User authenticated via middleware context: %s", user.ID)
 		return user, nil

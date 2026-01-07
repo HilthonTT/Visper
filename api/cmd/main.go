@@ -18,6 +18,8 @@ import (
 	"github.com/hilthontt/visper/api/infrastructure/cache"
 	"github.com/hilthontt/visper/api/infrastructure/config"
 	"github.com/hilthontt/visper/api/infrastructure/logger"
+	"github.com/hilthontt/visper/api/infrastructure/metrics"
+	"github.com/hilthontt/visper/api/infrastructure/metrics/exporters"
 	repositories "github.com/hilthontt/visper/api/infrastructure/persistence/repository"
 	"github.com/hilthontt/visper/api/infrastructure/websocket"
 	"github.com/hilthontt/visper/api/presentation/controllers/message"
@@ -57,6 +59,50 @@ func main() {
 		gin.SetMode(gin.DebugMode)
 	}
 
+	tracerProvider, err := exporters.InitJaegerExporter(cfg)
+	if err != nil {
+		loggerInstance.Error("failed to initialize Jaeger exporter", zap.Error(err))
+	} else {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := tracerProvider.Shutdown(ctx); err != nil {
+				loggerInstance.Error("failed to shutdown tracer provider", zap.Error(err))
+			}
+		}()
+		loggerInstance.Info("Jaeger exporter initialized successfully",
+			zap.String("endpoint", cfg.Jaeger.Endpoint),
+			zap.String("service", cfg.Jaeger.ServiceName),
+		)
+
+		// Send startup telemetry
+		go exporters.SendTelemetryTrace(cfg)
+	}
+
+	meter := exporters.Prometheus(cfg.Jaeger.ServiceName, cfg.Jaeger.ServiceVersion)
+	if meter == nil {
+		loggerInstance.Panic("failed to initialize Prometheus exporter")
+	}
+
+	metricsManager := metrics.NewMetricsManager(meter, loggerInstance)
+
+	// Register system metrics gauges
+	metricsManager.NewGauge("app_go_routines", "Number of goroutines")
+	metricsManager.NewGauge("app_sys_memory_alloc", "Bytes allocated and in use")
+	metricsManager.NewGauge("app_sys_total_alloc", "Total bytes allocated")
+	metricsManager.NewGauge("app_go_numGC", "Number of completed GC cycles")
+	metricsManager.NewGauge("app_go_sys", "Total bytes of memory obtained from OS")
+
+	// Register application metrics
+	metricsManager.NewCounter("http_requests_total", "Total number of HTTP requests")
+	metricsManager.NewHistogram("http_request_duration_seconds", "HTTP request duration in seconds",
+		0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)
+	metricsManager.NewUpDownCounter("active_websocket_connections", "Number of active WebSocket connections")
+	metricsManager.NewCounter("websocket_messages_sent", "Total number of WebSocket messages sent")
+	metricsManager.NewCounter("websocket_messages_received", "Total number of WebSocket messages received")
+
+	loggerInstance.Info("Metrics initialized successfully")
+
 	binding.Validator = new(middlewares.DefaultValidator)
 	router := gin.Default()
 	router.Use(middlewares.GinLogger(loggerInstance))
@@ -68,6 +114,11 @@ func main() {
 			"time":   time.Now().Format(time.RFC3339),
 		})
 	})
+
+	metricsGroup := router.Group("/observability")
+	{
+		metrics.GetHandler(metricsGroup, metricsManager)
+	}
 
 	messageRepo := repositories.NewMessageRepository(cache.GetRedis())
 	userRepo := repositories.NewUserRepository(cache.GetRedis())
@@ -120,6 +171,8 @@ func main() {
 	loggerInstance.Info("Server started successfully",
 		zap.String("port", cfg.Server.ExternalPort),
 		zap.String("domain", cfg.Server.Domain),
+		zap.String("metrics_url", fmt.Sprintf("http://%s:%s/observability/metrics", cfg.Server.Domain, cfg.Server.ExternalPort)),
+		zap.String("pprof_url", fmt.Sprintf("http://%s:%s/observability/debug/pprof/", cfg.Server.Domain, cfg.Server.ExternalPort)),
 	)
 
 	quit := make(chan os.Signal, 1)

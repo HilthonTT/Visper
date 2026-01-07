@@ -35,3 +35,8 @@ redis:
   poolSize: 10
   poolTimeout: 15s # 15 seconds
   idleCheckFrequency: 500ms # 500 milliseconds
+
+jaeger:
+  serviceName: "visper-api"
+  serviceVersion: "v1.0.0"
+  endpoint: "http://localhost:14268/api/traces"

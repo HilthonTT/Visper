@@ -16,6 +16,7 @@ type Config struct {
 	Redis    RedisConfig
 	Cors     CorsConfig
 	Logger   LoggerConfig
+	Jaeger   JaegerConfig
 }
 
 type ServerConfig struct {
@@ -59,6 +60,12 @@ type RedisConfig struct {
 
 type CorsConfig struct {
 	AllowOrigins string
+}
+
+type JaegerConfig struct {
+	ServiceName    string
+	ServiceVersion string
+	Endpoint       string
 }
 
 func GetConfig() *Config {
