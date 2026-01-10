@@ -135,10 +135,13 @@ func main() {
 	roomUC := roomUseCase.NewRoomUseCase(roomRepo, loggerInstance)
 	userUC := userUseCase.NewUserUseCase(userRepo, loggerInstance)
 
+	eTagStore := middlewares.NewInMemoryETagStore()
+
 	v1 := router.Group("/api/v1")
 	{
-		v1.Use(middlewares.UserMiddleware(userUC, loggerInstance))
 		v1.Use(middlewares.RateLimiterMiddleware(cache.GetRedis(), loggerInstance, middlewares.ModerateRateLimiterConfig()))
+		v1.Use(middlewares.ETagMiddleware(eTagStore))
+		v1.Use(middlewares.UserMiddleware(userUC, loggerInstance))
 
 		messageController := message.NewMessageController(messageUC, roomUC, wsRoomManager, wsCore)
 		roomController := room.NewRoomController(roomUC, userUC, wsRoomManager, wsCore)
