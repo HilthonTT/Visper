@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"slices"
 	"time"
 
@@ -22,138 +21,178 @@ func NewRoomService(opts ...option.RequestOption) *RoomService {
 	return r
 }
 
-func (r *RoomService) New(ctx context.Context, body RoowNewParams, opts ...option.RequestOption) (*RoomNewResponse, error) {
+// Create creates a new room with specified expiry hours
+func (r *RoomService) Create(ctx context.Context, body RoomCreateParams, opts ...option.RequestOption) (*RoomResponse, error) {
 	opts = slices.Concat(r.Options, opts)
-	path := "api/rooms"
+	path := "api/v1/rooms"
 
-	res := &RoomNewResponse{}
+	res := &RoomResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, &res, opts...)
 
 	return res, err
 }
 
+// Get retrieves a room by ID
 func (r *RoomService) Get(ctx context.Context, id string, opts ...option.RequestOption) (*RoomResponse, error) {
 	opts = slices.Concat(r.Options, opts)
 	if id == "" {
 		return nil, ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("api/rooms/%s", id)
+	path := fmt.Sprintf("api/v1/rooms/%s", id)
 	res := &RoomResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
 
 	return res, err
 }
 
+// Delete deletes a room (only owner can delete)
 func (r *RoomService) Delete(ctx context.Context, id string, opts ...option.RequestOption) error {
 	opts = slices.Concat(r.Options, opts)
 	if id == "" {
 		return ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("api/rooms/%s", id)
+	path := fmt.Sprintf("api/v1/rooms/%s", id)
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodDelete, path, nil, nil, opts...)
 
 	return err
 }
 
-func (r *RoomService) Join(ctx context.Context, joinOpts JoinRoomOpts, opts ...option.RequestOption) error {
+// GetByJoinCode retrieves a room by join code and joins the user to it
+func (r *RoomService) GetByJoinCode(ctx context.Context, body JoinByCodeParams, opts ...option.RequestOption) (*RoomResponse, error) {
 	opts = slices.Concat(r.Options, opts)
-	if joinOpts.RoomID == "" {
-		return ErrMissingIDParameter
-	}
-	if joinOpts.JoinCode == "" {
-		return ErrMissingJoinCodeParameter
-	}
-	if joinOpts.Username == "" {
-		return ErrMissingUsername
+	if body.JoinCode == "" {
+		return nil, ErrMissingJoinCodeParameter
 	}
 
-	path := fmt.Sprintf("api/rooms/%s/join", joinOpts.RoomID)
-	query := url.Values{}
-	query.Set("joinCode", joinOpts.JoinCode)
-	query.Set("username", joinOpts.Username)
-	fullURL := fmt.Sprintf("%s?%s", path, query.Encode())
+	path := "api/v1/rooms/join-code"
+	res := &RoomResponse{}
+	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, &res, opts...)
 
-	err := requestconfig.ExecuteNewRequest(ctx, http.MethodGet, fullURL, nil, nil, opts...)
-
-	return err
+	return res, err
 }
 
-func (r *RoomService) Leave(ctx context.Context, id string, opts ...option.RequestOption) error {
+// Join joins an existing room by room ID
+func (r *RoomService) Join(ctx context.Context, id string, body JoinRoomParams, opts ...option.RequestOption) (*SuccessResponse, error) {
 	opts = slices.Concat(r.Options, opts)
 	if id == "" {
-		return ErrMissingIDParameter
+		return nil, ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("api/rooms/%s/leave", id)
-	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, nil, opts...)
+	path := fmt.Sprintf("api/v1/rooms/%s/join", id)
+	res := &SuccessResponse{}
+	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, &res, opts...)
 
-	return err
+	return res, err
 }
 
-func (r *RoomService) Boot(ctx context.Context, id string, body BootUserParams, opts ...option.RequestOption) error {
+// Leave leaves a room
+func (r *RoomService) Leave(ctx context.Context, id string, opts ...option.RequestOption) (*SuccessResponse, error) {
 	opts = slices.Concat(r.Options, opts)
 	if id == "" {
-		return ErrMissingIDParameter
+		return nil, ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("api/rooms/%s/boot", id)
-	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, nil, opts...)
+	path := fmt.Sprintf("api/v1/rooms/%s/leave", id)
+	res := &SuccessResponse{}
+	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, &res, opts...)
 
-	return err
+	return res, err
 }
 
-type RoowNewParams struct {
-	Persistent bool   `json:"persistent"`
-	Username   string `json:"username"`
+// CheckMembership checks if the current user is a member of a room
+func (r *RoomService) CheckMembership(ctx context.Context, id string, opts ...option.RequestOption) (*MembershipResponse, error) {
+	opts = slices.Concat(r.Options, opts)
+	if id == "" {
+		return nil, ErrMissingIDParameter
+	}
+
+	path := fmt.Sprintf("api/v1/rooms/%s/membership", id)
+	res := &MembershipResponse{}
+	err := requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
+
+	return res, err
 }
 
-func (r *RoowNewParams) MarshalJSON() ([]byte, error) {
+// KickMember kicks a member from the room (only owner can kick)
+func (r *RoomService) KickMember(ctx context.Context, roomID, userID string, opts ...option.RequestOption) (*SuccessResponse, error) {
+	opts = slices.Concat(r.Options, opts)
+	if roomID == "" {
+		return nil, ErrMissingIDParameter
+	}
+	if userID == "" {
+		return nil, fmt.Errorf("user ID is required")
+	}
+
+	path := fmt.Sprintf("api/v1/rooms/%s/membership/%s", roomID, userID)
+	res := &SuccessResponse{}
+	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, &res, opts...)
+
+	return res, err
+}
+
+// Request/Response types
+
+type RoomCreateParams struct {
+	ExpiryHours int `json:"expiry_hours"` // 1 to 168 hours (1 hour to 7 days)
+}
+
+func (r *RoomCreateParams) MarshalJSON() ([]byte, error) {
 	return apijson.MarshalRoot(r)
 }
 
-type RoomNewResponse struct {
-	RoomID      string         `json:"roomId"`
-	JoinCode    string         `json:"joinCode"`
-	CreatedAt   time.Time      `json:"createdAt"`
-	Persistent  bool           `json:"persistent"`
-	Members     []UserResponse `json:"members"`
-	MemberToken string         `json:"memberToken"`
+type JoinByCodeParams struct {
+	JoinCode string `json:"join_code"` // 6-character join code
+	Username string `json:"username,omitempty"`
 }
 
-func (r *RoomNewResponse) UnmarshalJSON(data []byte) error {
-	return apijson.UnmarshalRoot(data, r)
+func (r *JoinByCodeParams) MarshalJSON() ([]byte, error) {
+	return apijson.MarshalRoot(r)
 }
 
-type JoinRoomOpts struct {
-	RoomID   string
-	JoinCode string
-	Username string
+type JoinRoomParams struct {
+	Username string `json:"username,omitempty"`
 }
 
-type BootUserParams struct {
-	MemberID string `json:"memberId"`
+func (r *JoinRoomParams) MarshalJSON() ([]byte, error) {
+	return apijson.MarshalRoot(r)
 }
 
 type UserResponse struct {
-	ID   string `json:"id"`
-	Name string `json:"name" example:"john_doe"`
-}
-
-type MessageResponse struct {
-	ID        string       `json:"id"`
-	User      UserResponse `json:"user"`
-	Content   string       `json:"content"`
-	CreatedAt time.Time    `json:"createdAt"`
+	ID       string `json:"id"`
+	Username string `json:"username"`
 }
 
 type RoomResponse struct {
-	ID         string            `json:"id"`
-	JoinCode   string            `json:"joinCode"`
-	Owner      UserResponse      `json:"owner"`
-	Persistent bool              `json:"persistent"`
-	CreatedAt  time.Time         `json:"createdAt"`
-	Messages   []MessageResponse `json:"messages"`
-	Members    []UserResponse    `json:"members"`
+	ID          string         `json:"id"`
+	JoinCode    string         `json:"join_code"`
+	Owner       UserResponse   `json:"owner"`
+	CreatedAt   time.Time      `json:"created_at"`
+	ExpiresAt   time.Time      `json:"expires_at"`
+	Members     []UserResponse `json:"members"`
+	CurrentUser UserResponse   `json:"current_user"`
+}
+
+func (r *RoomResponse) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+type SuccessResponse struct {
+	Message string         `json:"message"`
+	Data    map[string]any `json:"data,omitempty"`
+}
+
+func (r *SuccessResponse) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+type MembershipResponse struct {
+	IsMember bool   `json:"is_member"`
+	RoomID   string `json:"room_id"`
+	UserID   string `json:"user_id,omitempty"`
+}
+
+func (r *MembershipResponse) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
 }

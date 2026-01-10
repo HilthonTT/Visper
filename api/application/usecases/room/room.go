@@ -21,6 +21,7 @@ type RoomUseCase interface {
 	JoinRoom(ctx context.Context, roomID string, user model.User) error
 	LeaveRoom(ctx context.Context, roomID string, userID string) error
 	IsUserInRoom(ctx context.Context, roomID string, userID string) (bool, error)
+	KickMember(ctx context.Context, roomID, userID, requesterID string) error
 }
 
 type roomUseCase struct {
@@ -116,6 +117,48 @@ func (uc *roomUseCase) GetByID(ctx context.Context, id string) (*model.Room, err
 	}
 
 	return room, nil
+}
+
+func (uc *roomUseCase) KickMember(ctx context.Context, roomID, userID, requesterID string) error {
+	if roomID == "" || userID == "" || requesterID == "" {
+		return fmt.Errorf("room ID, user ID, and requester ID cannot be empty")
+	}
+
+	room, err := uc.repository.GetByID(ctx, roomID)
+	if err != nil {
+		uc.logger.Error("failed to get room for kicking member", zap.Error(err), zap.String("roomID", roomID))
+		return fmt.Errorf("failed to get room: %w", err)
+	}
+
+	if room == nil {
+		return fmt.Errorf("room not found")
+	}
+
+	if room.Owner.ID != requesterID {
+		uc.logger.Warn("unauthorized kick attempt", zap.String("roomID", roomID), zap.String("requesterID", requesterID), zap.String("ownerID", room.Owner.ID))
+		return fmt.Errorf("only the room owner can kick members")
+	}
+
+	if userID == room.Owner.ID {
+		return fmt.Errorf("room owner cannot be kicked, delete the room instead")
+	}
+
+	isInRoom, err := uc.IsUserInRoom(ctx, roomID, userID)
+	if err != nil {
+		return fmt.Errorf("failed to verify user membership: %w", err)
+	}
+
+	if !isInRoom {
+		return fmt.Errorf("user is not a member of this room")
+	}
+
+	if err := uc.repository.RemoveUser(ctx, roomID, userID); err != nil {
+		uc.logger.Error("failed to kick user from room", zap.Error(err), zap.String("roomID", roomID), zap.String("userID", userID))
+		return fmt.Errorf("failed to kick member: %w", err)
+	}
+
+	uc.logger.Info("user kicked from room", zap.String("roomID", roomID), zap.String("kickedUserID", userID), zap.String("kickedBy", requesterID))
+	return nil
 }
 
 func (uc *roomUseCase) GetByJoinCode(ctx context.Context, joinCode string) (*model.Room, error) {

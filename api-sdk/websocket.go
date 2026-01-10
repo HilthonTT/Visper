@@ -160,19 +160,13 @@ func (ws *RoomWebSocket) SendMessage(content string) error {
 
 func (r *RoomService) ConnectWebSocket(
 	ctx context.Context,
-	joinOpts JoinRoomOpts,
+	roomID string,
 	opts ...option.RequestOption,
 ) (*RoomWebSocket, error) {
 	opts = append(r.Options, opts...)
 
-	if joinOpts.RoomID == "" {
+	if roomID == "" {
 		return nil, ErrMissingIDParameter
-	}
-	if joinOpts.JoinCode == "" {
-		return nil, ErrMissingJoinCodeParameter
-	}
-	if joinOpts.Username == "" {
-		return nil, ErrMissingUsername
 	}
 
 	cfg, err := requestconfig.NewRequestConfig(ctx, http.MethodGet, "", nil, nil, opts...)
@@ -190,12 +184,7 @@ func (r *RoomService) ConnectWebSocket(
 		wsURL = "ws://" + after0
 	}
 
-	path := fmt.Sprintf("%s/api/rooms/%s/join?joinCode=%s&username=%s",
-		wsURL,
-		joinOpts.RoomID,
-		url.QueryEscape(joinOpts.JoinCode),
-		url.QueryEscape(joinOpts.Username),
-	)
+	path := fmt.Sprintf("%s/api/v1/rooms/%s/ws", wsURL, roomID)
 
 	log.Printf("[WEBSOCKET_URL]: %s\n", path)
 
@@ -203,15 +192,32 @@ func (r *RoomService) ConnectWebSocket(
 		HandshakeTimeout: 10 * time.Second,
 	}
 
-	conn, _, err := dialer.DialContext(ctx, path, nil)
+	headers := http.Header{}
+	for key, values := range cfg.Request.Header {
+		for _, value := range values {
+			headers.Add(key, value)
+		}
+	}
+
+	if cfg.HTTPClient != nil {
+		if jar := cfg.HTTPClient.Jar; jar != nil {
+			if parsedURL, err := url.Parse(cfg.BaseURL.String()); err == nil {
+				cookies := jar.Cookies(parsedURL)
+				for _, cookie := range cookies {
+					headers.Add("Cookie", cookie.String())
+				}
+			}
+		}
+	}
+
+	conn, _, err := dialer.DialContext(ctx, path, headers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to websocket: %w", err)
 	}
 
 	ws := &RoomWebSocket{
-		conn:     conn,
-		roomID:   joinOpts.RoomID,
-		username: joinOpts.Username,
+		conn:   conn,
+		roomID: roomID,
 	}
 
 	return ws, nil

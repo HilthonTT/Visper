@@ -141,7 +141,7 @@ func main() {
 		v1.Use(middlewares.RateLimiterMiddleware(cache.GetRedis(), loggerInstance, middlewares.ModerateRateLimiterConfig()))
 
 		messageController := message.NewMessageController(messageUC, roomUC, wsRoomManager, wsCore)
-		roomController := room.NewRoomController(roomUC, wsRoomManager, wsCore)
+		roomController := room.NewRoomController(roomUC, userUC, wsRoomManager, wsCore)
 		websocketController := wsCtrl.NewWebSocketController(roomUC, userUC, wsRoomManager, wsCore)
 
 		routes.MessageRoutes(v1, messageController)

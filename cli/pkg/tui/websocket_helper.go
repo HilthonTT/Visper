@@ -2,16 +2,19 @@ package tui
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"time"
+	"log"
 
 	tea "github.com/charmbracelet/bubbletea"
 	apisdk "github.com/hilthontt/visper/api-sdk"
+	"github.com/hilthontt/visper/api-sdk/option"
 )
 
 type wsConnectedMsg struct {
 	conn *apisdk.RoomWebSocket
+}
+
+type wsChannelReadyMsg struct {
+	msgChan chan tea.Msg
 }
 
 type wsMessageReceivedMsg struct {
@@ -43,83 +46,246 @@ type wsKickedMsg struct {
 type wsRoomDeletedMsg struct{}
 
 type wsErrorMsg struct {
-	err     error
 	code    string
 	message string
-	retry   bool
 }
+
+type wsDisconnectedMsg struct{}
 
 type wsKickTimeoutMsg struct{}
 
 type wsRoomDeletedTimeoutMsg struct{}
 
-type wsDisconnectedMsg struct{}
-
-type wsChannelReadyMsg struct {
-	msgChan chan tea.Msg
+func getStringField(data map[string]any, keys ...string) (string, bool) {
+	for _, key := range keys {
+		if val, ok := data[key].(string); ok && val != "" {
+			return val, true
+		}
+	}
+	return "", false
 }
 
-func (m model) connectWebSocket(roomID, joinCode, username string) tea.Cmd {
+func (m model) connectWebSocket(roomID string) tea.Cmd {
 	return func() tea.Msg {
-		wsConn, err := m.client.Room.ConnectWebSocket(
-			context.Background(),
-			apisdk.JoinRoomOpts{
-				RoomID:   roomID,
-				JoinCode: joinCode,
-				Username: username,
-			},
-		)
+		var userID string
+		if m.userID != nil {
+			userID = *m.userID
+		}
 
+		opts := []option.RequestOption{}
+		if userID != "" {
+			opts = append(opts, option.WithHeader("X-User-ID", userID))
+		}
+
+		ws, err := m.client.Room.ConnectWebSocket(m.context, roomID, opts...)
 		if err != nil {
+			log.Printf("Failed to connect WebSocket: %v", err)
 			return wsErrorMsg{
-				err:     err,
-				message: "Failed to connect",
+				code:    "CONNECTION_FAILED",
+				message: "Failed to connect to chat room",
 			}
 		}
 
-		return wsConnectedMsg{conn: wsConn}
+		return wsConnectedMsg{conn: ws}
 	}
 }
 
 func (m model) listenWebSocket() tea.Cmd {
-	ws := m.state.chat.wsConn
-	ctx := m.state.chat.wsCtx
-	msgChan := make(chan tea.Msg, 100)
-
-	// Set up message handler
-	ws.SetMessageHandler(func(msg apisdk.WSMessage) {
-		teaMsg := m.handleWSMessage(msg)
-		if teaMsg != nil {
-
-			select {
-			case msgChan <- teaMsg:
-
-			default:
-
-			}
-		} else {
-
-		}
-	})
-
-	// Start listening in a goroutine
-	go func() {
-
-		err := ws.Listen(ctx)
-		if err != nil && err != context.Canceled {
-
-			msgChan <- wsErrorMsg{
-				err:     err,
-				message: "Connection lost",
-			}
-		}
-
-		msgChan <- wsDisconnectedMsg{}
-		close(msgChan)
-	}()
-
-	// Return a command that both stores the channel AND starts waiting
 	return func() tea.Msg {
+		msgChan := make(chan tea.Msg, 100)
+
+		m.state.chat.wsConn.SetMessageHandler(func(wsMsg apisdk.WSMessage) {
+			select {
+			case <-m.state.chat.wsCtx.Done():
+				return // Context cancelled, don't process message
+			default:
+				// Continue processing
+			}
+
+			switch wsMsg.Type {
+			case apisdk.MessageReceived:
+				// Parse message payload with safe extraction
+				if data, ok := wsMsg.Data.(map[string]any); ok {
+					id, okID := getStringField(data, "id", "ID")
+					userID, okUserID := getStringField(data, "userId", "UserID", "user_id")
+					username, okUsername := getStringField(data, "username", "Username")
+					content, okContent := getStringField(data, "content", "Content")
+
+					if okID && okUserID && okUsername && okContent {
+						msg := apisdk.MessageResponse{
+							ID:       id,
+							RoomID:   wsMsg.RoomID,
+							UserID:   userID,
+							Username: username,
+							Content:  content,
+						}
+
+						select {
+						case msgChan <- wsMessageReceivedMsg{message: msg}:
+						case <-m.state.chat.wsCtx.Done():
+							return
+						}
+					} else {
+						log.Printf("Invalid message received payload: %+v (missing fields)", data)
+					}
+				}
+
+			case apisdk.MessageDeleted:
+				if data, ok := wsMsg.Data.(map[string]any); ok {
+					id, ok := getStringField(data, "id", "ID")
+					if ok {
+						select {
+						case msgChan <- wsMessageDeletedMsg{messageID: id}:
+						case <-m.state.chat.wsCtx.Done():
+							return
+						}
+					} else {
+						log.Printf("Invalid message deleted payload: %+v", data)
+					}
+				}
+
+			case apisdk.MemberJoined:
+				if data, ok := wsMsg.Data.(map[string]any); ok {
+					userID, okID := getStringField(data, "userId", "UserID", "user_id")
+					username, okUsername := getStringField(data, "username", "Username")
+
+					if okID && okUsername {
+						member := apisdk.UserResponse{
+							ID:       userID,
+							Username: username,
+						}
+
+						select {
+						case msgChan <- wsMemberJoinedMsg{member: member}:
+						case <-m.state.chat.wsCtx.Done():
+							return
+						}
+					} else {
+						log.Printf("Invalid member joined payload: %+v", data)
+					}
+				}
+
+			case apisdk.MemberLeft:
+				if data, ok := wsMsg.Data.(map[string]any); ok {
+					userID, okID := getStringField(data, "userId", "UserID", "user_id")
+					username, okUsername := getStringField(data, "username", "Username")
+
+					if okID && okUsername {
+						select {
+						case msgChan <- wsMemberLeftMsg{
+							userID:   userID,
+							username: username,
+						}:
+						case <-m.state.chat.wsCtx.Done():
+							return
+						}
+					} else {
+						log.Printf("Invalid member left payload: %+v", data)
+					}
+				}
+
+			case apisdk.MemberList:
+				if data, ok := wsMsg.Data.(map[string]any); ok {
+					if membersData, ok := data["members"].([]any); ok {
+						members := make([]apisdk.UserResponse, 0, len(membersData))
+						for _, m := range membersData {
+							if memberMap, ok := m.(map[string]any); ok {
+								userID, okID := getStringField(memberMap, "userId", "UserID", "user_id")
+								username, okUsername := getStringField(memberMap, "username", "Username")
+
+								if okID && okUsername {
+									members = append(members, apisdk.UserResponse{
+										ID:       userID,
+										Username: username,
+									})
+								} else {
+									log.Printf("Skipping invalid member in list: %+v", memberMap)
+								}
+							}
+						}
+
+						select {
+						case msgChan <- wsMemberListMsg{members: members}:
+						case <-m.state.chat.wsCtx.Done():
+							return
+						}
+					} else {
+						log.Printf("Invalid member list payload: %+v", data)
+					}
+				}
+
+			case apisdk.Kicked:
+				if data, ok := wsMsg.Data.(map[string]any); ok {
+					username, okUsername := getStringField(data, "username", "Username")
+					reason, okReason := getStringField(data, "reason", "Reason")
+
+					if okUsername && okReason {
+						select {
+						case msgChan <- wsKickedMsg{
+							username: username,
+							reason:   reason,
+						}:
+						case <-m.state.chat.wsCtx.Done():
+							return
+						}
+					} else {
+						log.Printf("Invalid kicked payload: %+v", data)
+					}
+				}
+
+			case apisdk.RoomDeleted:
+				select {
+				case msgChan <- wsRoomDeletedMsg{}:
+				case <-m.state.chat.wsCtx.Done():
+					return
+				}
+
+			case apisdk.ErrorEvent, apisdk.AuthenticationError, apisdk.JoinFailed, apisdk.RateLimited:
+				if data, ok := wsMsg.Data.(map[string]any); ok {
+					code, okCode := getStringField(data, "code", "Code")
+					message, okMessage := getStringField(data, "message", "Message")
+
+					if okCode && okMessage {
+						select {
+						case msgChan <- wsErrorMsg{
+							code:    code,
+							message: message,
+						}:
+						case <-m.state.chat.wsCtx.Done():
+							return
+						}
+					} else {
+						log.Printf("Invalid error payload: %+v", data)
+						// Send generic error message
+						select {
+						case msgChan <- wsErrorMsg{
+							code:    "UNKNOWN_ERROR",
+							message: "An unknown error occurred",
+						}:
+						case <-m.state.chat.wsCtx.Done():
+							return
+						}
+					}
+				}
+			}
+		})
+
+		// Start listening in background
+		go func() {
+			defer func() {
+				close(msgChan)
+			}()
+
+			if err := m.state.chat.wsConn.Listen(m.state.chat.wsCtx); err != nil {
+				if err != context.Canceled {
+					log.Printf("WebSocket listen error: %v", err)
+					select {
+					case msgChan <- wsDisconnectedMsg{}:
+					case <-m.state.chat.wsCtx.Done():
+					}
+				}
+			}
+		}()
 
 		return wsChannelReadyMsg{msgChan: msgChan}
 	}
@@ -127,120 +293,13 @@ func (m model) listenWebSocket() tea.Cmd {
 
 func waitForWSMessage(msgChan chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
+		if msgChan == nil {
+			return nil
+		}
 		msg, ok := <-msgChan
 		if !ok {
 			return wsDisconnectedMsg{}
 		}
-
 		return msg
-	}
-}
-
-func (m model) handleWSMessage(msg apisdk.WSMessage) tea.Msg {
-	switch msg.Type {
-	case apisdk.MessageReceived:
-		data, _ := json.Marshal(msg.Data)
-		var payload apisdk.MessagePayload
-		if err := json.Unmarshal(data, &payload); err != nil {
-			return nil
-		}
-
-		createdAt, err := time.Parse(time.RFC3339, payload.Timestamp)
-		if err != nil {
-			createdAt = time.Now()
-		}
-
-		result := wsMessageReceivedMsg{
-			message: apisdk.MessageResponse{
-				ID: payload.ID,
-				User: apisdk.UserResponse{
-					ID:   payload.UserID,
-					Name: payload.Username,
-				},
-				Content:   payload.Content,
-				CreatedAt: createdAt,
-			},
-		}
-		return result
-
-	case apisdk.MessageDeleted:
-		data, _ := json.Marshal(msg.Data)
-		var payload apisdk.MessageDeletedPayload
-		if err := json.Unmarshal(data, &payload); err != nil {
-			return nil
-		}
-		return wsMessageDeletedMsg{messageID: payload.MessageID}
-
-	case apisdk.MemberJoined:
-		data, _ := json.Marshal(msg.Data)
-		var payload apisdk.MemberPayload
-		if err := json.Unmarshal(data, &payload); err != nil {
-			return nil
-		}
-		return wsMemberJoinedMsg{
-			member: apisdk.UserResponse{
-				ID:   payload.UserID,
-				Name: payload.Username,
-			},
-		}
-
-	case apisdk.MemberLeft:
-		data, _ := json.Marshal(msg.Data)
-		var payload apisdk.MemberPayload
-		if err := json.Unmarshal(data, &payload); err != nil {
-			return nil
-		}
-		return wsMemberLeftMsg{
-			userID:   payload.UserID,
-			username: payload.Username,
-		}
-
-	case apisdk.MemberList:
-		data, _ := json.Marshal(msg.Data)
-		var payload apisdk.MemberListPayload
-		if err := json.Unmarshal(data, &payload); err != nil {
-			return nil
-		}
-		members := make([]apisdk.UserResponse, len(payload.Members))
-		for i, m := range payload.Members {
-			members[i] = apisdk.UserResponse{
-				ID:   m.UserID,
-				Name: m.Username,
-			}
-		}
-		return wsMemberListMsg{members: members}
-
-	case apisdk.Kicked:
-		data, _ := json.Marshal(msg.Data)
-		var payload apisdk.BootPayload
-		if err := json.Unmarshal(data, &payload); err != nil {
-			return nil
-		}
-		return wsKickedMsg{
-			username: payload.Username,
-			reason:   payload.Reason,
-		}
-
-	case apisdk.RoomDeleted:
-		return wsRoomDeletedMsg{}
-
-	case apisdk.ErrorEvent, apisdk.AuthenticationError, apisdk.JoinFailed, apisdk.RateLimited:
-		data, _ := json.Marshal(msg.Data)
-		var payload apisdk.ErrorPayload
-		if err := json.Unmarshal(data, &payload); err != nil {
-			return wsErrorMsg{
-				err:     fmt.Errorf("unknown error"),
-				message: "An error occurred",
-			}
-		}
-		return wsErrorMsg{
-			err:     fmt.Errorf("%s: %s", payload.Code, payload.Message),
-			code:    payload.Code,
-			message: payload.Message,
-			retry:   payload.Retry,
-		}
-
-	default:
-		return nil
 	}
 }

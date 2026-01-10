@@ -7,6 +7,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	apisdk "github.com/hilthontt/visper/api-sdk"
+	"github.com/hilthontt/visper/api-sdk/option"
 )
 
 type joinRoomState struct {
@@ -105,7 +107,23 @@ func (m model) JoinRoomUpdate(msg tea.Msg) (model, tea.Cmd) {
 			m.state.joinRoom.error = ""
 			m.state.joinRoom.joining = true
 
-			return m, nil
+			opts := []option.RequestOption{}
+			if m.userID != nil && *m.userID != "" {
+				opts = append(opts, option.WithHeader("X-User-ID", *m.userID))
+			}
+
+			roomToJoin, err := m.client.Room.GetByJoinCode(m.context, apisdk.JoinByCodeParams{
+				JoinCode: roomCode,
+				Username: "",
+			}, opts...)
+
+			if err != nil {
+				m.state.joinRoom.error = "Failed to join room"
+				m.state.joinRoom.joining = false
+				return m, nil
+			}
+
+			return m.ChatSwitch(roomToJoin)
 		}
 	}
 

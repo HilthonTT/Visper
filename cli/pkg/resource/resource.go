@@ -13,5 +13,5 @@ type resource struct {
 var Resource resource
 
 func init() {
-	Resource.Api.Url = env.GetString("API_URL", "http://localhost:8080")
+	Resource.Api.Url = env.GetString("API_URL", "http://localhost:5005")
 }

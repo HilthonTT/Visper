@@ -5,6 +5,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	apisdk "github.com/hilthontt/visper/api-sdk"
+	"github.com/hilthontt/visper/api-sdk/option"
 )
 
 type newRoomState struct {
@@ -40,7 +41,7 @@ func (m model) NewRoomView() string {
 	// Description
 	if !s.creating && s.roomCode == "" {
 		description := m.theme.TextBody().
-			Render("Create a new anonymous chat room and get a unique room code\nthat you can share with others.")
+			Render("Create a new anonymous chat room and get a unique room code\nthat you can share with others.\nRoom will expire in 24 hours.")
 		sections = append(sections, description)
 
 		// Spacing
@@ -162,7 +163,7 @@ func (m model) NewRoomUpdate(msg tea.Msg) (model, tea.Cmd) {
 		if s.roomCode != "" {
 			switch {
 			case key.Matches(msg, keys.Enter):
-				// TODO: Navigate to the chat page
+				// Navigate to the chat page handled by ChatSwitch
 			}
 			return m, nil
 		}
@@ -176,18 +177,19 @@ func (m model) NewRoomUpdate(msg tea.Msg) (model, tea.Cmd) {
 			m.state.newRoom.creating = true
 			m.state.newRoom.error = ""
 
-			generatedUsername := m.generator.Generate()
-			m.username = &generatedUsername
+			opts := []option.RequestOption{}
+			if m.userID != nil && *m.userID != "" {
+				opts = append(opts, option.WithHeader("X-User-ID", *m.userID))
+			}
 
-			newRoom, err := m.client.Room.New(m.context, apisdk.RoowNewParams{
-				Persistent: true,
-				Username:   generatedUsername,
-			})
+			// Create room with 24 hour expiry
+			newRoom, err := m.client.Room.Create(m.context, apisdk.RoomCreateParams{
+				ExpiryHours: 24,
+			}, opts...)
 
 			if err != nil {
-				m.error = &visibleError{
-					message: "Failed to create a new room",
-				}
+				m.state.newRoom.creating = false
+				m.state.newRoom.error = "Failed to create room"
 				return m, nil
 			}
 

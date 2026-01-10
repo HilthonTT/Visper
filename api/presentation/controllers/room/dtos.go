@@ -16,12 +16,13 @@ type JoinByCodeRequest struct {
 }
 
 type RoomResponse struct {
-	ID        string         `json:"id"`
-	JoinCode  string         `json:"join_code"`
-	Owner     UserResponse   `json:"owner"`
-	CreatedAt time.Time      `json:"created_at"`
-	ExpiresAt time.Time      `json:"expires_at"`
-	Members   []UserResponse `json:"members"`
+	ID          string         `json:"id"`
+	JoinCode    string         `json:"join_code"`
+	Owner       UserResponse   `json:"owner"`
+	CreatedAt   time.Time      `json:"created_at"`
+	ExpiresAt   time.Time      `json:"expires_at"`
+	Members     []UserResponse `json:"members"`
+	CurrentUser UserResponse   `json:"current_user"`
 }
 
 type UserResponse struct {

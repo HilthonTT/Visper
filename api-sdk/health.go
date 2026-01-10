@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"slices"
 
+	"github.com/hilthontt/visper/api-sdk/internal/apijson"
 	"github.com/hilthontt/visper/api-sdk/internal/requestconfig"
 	"github.com/hilthontt/visper/api-sdk/option"
 )
@@ -18,9 +19,10 @@ func NewHealthService(opts ...option.RequestOption) *HealthService {
 	return h
 }
 
+// Get retrieves the health status of the API
 func (h *HealthService) Get(ctx context.Context, opts ...option.RequestOption) (*HealthResponse, error) {
 	opts = slices.Concat(h.Options, opts)
-	path := "api/health"
+	path := "health"
 
 	res := &HealthResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
@@ -29,7 +31,10 @@ func (h *HealthService) Get(ctx context.Context, opts ...option.RequestOption) (
 }
 
 type HealthResponse struct {
-	Status    string `json:"status"`
-	Timestamp string `json:"timestamp"`
-	Uptime    string `json:"uptime"`
+	Status string `json:"status"`
+	Time   string `json:"time"`
+}
+
+func (r *HealthResponse) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
 }

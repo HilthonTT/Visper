@@ -51,21 +51,19 @@ type chatState struct {
 	cachedImageWidth   int
 	cachedImageHeight  int
 
-	memberToken string
-	room        *apisdk.RoomNewResponse
-	wsConn      *apisdk.RoomWebSocket
-	wsCtx       context.Context
-	wsCancel    context.CancelFunc
-	wsMsgChan   chan tea.Msg
+	room      *apisdk.RoomResponse
+	wsConn    *apisdk.RoomWebSocket
+	wsCtx     context.Context
+	wsCancel  context.CancelFunc
+	wsMsgChan chan tea.Msg
 }
 
 type participantSearchResultMsg struct {
 	results []fzf.MatchResult
 }
 
-func (m model) ChatSwitch(newRoom *apisdk.RoomNewResponse) (model, tea.Cmd) {
+func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 	m = m.SwitchPage(chatPage)
-
 	m.state.chat.room = newRoom
 
 	if m.state.chat.roomCode == "" {
@@ -80,8 +78,7 @@ func (m model) ChatSwitch(newRoom *apisdk.RoomNewResponse) (model, tea.Cmd) {
 
 		vp := viewport.New(50, 20)
 
-		participants := []apisdk.UserResponse{}
-
+		participants := newRoom.Members
 		filteredIndices := make([]int, len(participants))
 		for i := range filteredIndices {
 			filteredIndices[i] = i
@@ -89,8 +86,10 @@ func (m model) ChatSwitch(newRoom *apisdk.RoomNewResponse) (model, tea.Cmd) {
 
 		wsCtx, wsCancel := context.WithCancel(context.Background())
 
-		yourself := newRoom.Members[0]
-		m.userID = &yourself.ID
+		m.userID = &newRoom.CurrentUser.ID
+
+		log.Printf("ChatSwitch: Setting userID to %s (CurrentUser)", *m.userID)
+		log.Printf("Room members: %d", len(participants))
 
 		m.state.chat = chatState{
 			roomCode:         newRoom.JoinCode,
@@ -105,10 +104,9 @@ func (m model) ChatSwitch(newRoom *apisdk.RoomNewResponse) (model, tea.Cmd) {
 			wsCtx:            wsCtx,
 			wsCancel:         wsCancel,
 			room:             newRoom,
-			memberToken:      newRoom.MemberToken,
 		}
 
-		return m, m.connectWebSocket(newRoom.RoomID, newRoom.JoinCode, yourself.Name)
+		return m, m.connectWebSocket(newRoom.ID)
 	}
 
 	return m, nil
@@ -129,17 +127,16 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		return m, waitForWSMessage(msg.msgChan)
 
 	case wsMessageReceivedMsg:
-
 		m.state.chat.messages = append(m.state.chat.messages, msg.message)
 		m.state.chat.messagesViewport.SetContent(m.renderMessages())
 		m.state.chat.messagesViewport.GotoBottom()
 
 		// Continue listening for more messages
 		if m.state.chat.wsMsgChan != nil {
-
 			return m, waitForWSMessage(m.state.chat.wsMsgChan)
 		}
 		return m, nil
+
 	case wsMessageDeletedMsg:
 		// Remove message with matching ID
 		for i, message := range m.state.chat.messages {
@@ -154,6 +151,7 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 			return m, waitForWSMessage(m.state.chat.wsMsgChan)
 		}
 		return m, nil
+
 	case wsMemberJoinedMsg:
 		// Check if member already exists
 		exists := false
@@ -176,6 +174,7 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 			return m, waitForWSMessage(m.state.chat.wsMsgChan)
 		}
 		return m, nil
+
 	case wsMemberLeftMsg:
 		// Remove member from participants
 		for i, p := range m.state.chat.participants {
@@ -363,16 +362,20 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 				content := m.state.chat.messageInput.Value()
 				m.state.chat.messageInput.SetValue("")
 
-				if m.state.chat.room != nil && m.state.chat.memberToken != "" {
+				if m.state.chat.room != nil {
 					go func() {
-						_, err := m.client.Message.Create(
+						opts := []option.RequestOption{}
+						if m.userID != nil && *m.userID != "" {
+							opts = append(opts, option.WithHeader("X-User-ID", *m.userID))
+						}
+
+						_, err := m.client.Message.Send(
 							m.context,
-							m.state.chat.room.RoomID,
-							apisdk.CreateMessageParam{
-								RoomID:  m.state.chat.room.RoomID,
+							m.state.chat.room.ID,
+							apisdk.SendMessageParams{
 								Content: content,
 							},
-							option.WithHeader("X-Member-Token", m.state.chat.memberToken),
+							opts...,
 						)
 						if err != nil {
 							log.Printf("Failed to send message: %v", err)
@@ -434,10 +437,10 @@ func (m model) searchParticipants(query string) tea.Cmd {
 			return participantSearchResultMsg{results: nil}
 		}
 
-		// Build source list from participant names
+		// Build source list from participant usernames
 		source := make([]string, len(m.state.chat.participants))
 		for i, p := range m.state.chat.participants {
-			source[i] = p.Name
+			source[i] = p.Username
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -553,7 +556,7 @@ func (m model) renderParticipantsSidebar(width, height int) string {
 		p := m.state.chat.participants[idx]
 		statusIcon := "●"
 		status := m.theme.Base().Foreground(lipgloss.Color("#10B981")).Render(statusIcon)
-		username := m.theme.TextBody().Render(p.Name)
+		username := m.theme.TextBody().Render(p.Username)
 
 		line := lipgloss.JoinHorizontal(lipgloss.Left, status, " ", username)
 		sb.WriteString(m.theme.Base().Padding(0, 1).Render(line))
@@ -615,16 +618,16 @@ func (m model) renderMessages() string {
 		timestamp := m.theme.TextBody().Faint(true).Render(msg.CreatedAt.Format("3:04 PM"))
 
 		var username string
-		if userID == msg.User.ID {
-			username = m.theme.TextBrand().Bold(true).Render(msg.User.Name)
+		if userID == msg.UserID {
+			username = m.theme.TextBrand().Bold(true).Render(msg.Username)
 		} else {
-			username = m.theme.TextAccent().Bold(true).Render(msg.User.Name)
+			username = m.theme.TextAccent().Bold(true).Render(msg.Username)
 		}
 
 		header := lipgloss.JoinHorizontal(lipgloss.Left, timestamp, " ", username)
 
 		var content string
-		if userID == msg.User.ID {
+		if userID == msg.UserID {
 			content = m.theme.TextAccent().Render(msg.Content)
 		} else {
 			content = m.theme.TextBody().Render(msg.Content)
@@ -727,10 +730,6 @@ func (m *model) clearChatState() {
 		m.state.chat.wsConn.Close()
 	}
 
-	// Close message channel
-	if m.state.chat.wsMsgChan != nil {
-		close(m.state.chat.wsMsgChan)
-	}
-
+	m.state.chat.roomCode = ""
 	m.state.chat = chatState{}
 }
