@@ -13,12 +13,17 @@ import (
 
 var concurrencyCheckMethods = []string{http.MethodPut, http.MethodPatch}
 
+type ETagStore interface {
+	GetETag(resourceURI string) string
+	SetETag(resourceURI, etag string)
+}
+
 type InMemoryETagStore struct {
 	mu    sync.RWMutex
 	store map[string]string
 }
 
-func NewInMemoryETagStore() *InMemoryETagStore {
+func NewInMemoryETagStore() ETagStore {
 	return &InMemoryETagStore{
 		store: make(map[string]string),
 	}
@@ -36,7 +41,7 @@ func (s *InMemoryETagStore) SetETag(resourceURI, etag string) {
 	s.store[resourceURI] = etag
 }
 
-func ETagMiddleware(store *InMemoryETagStore) gin.HandlerFunc {
+func ETagMiddleware(store ETagStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if canSkipETag(c) {
 			c.Next()
