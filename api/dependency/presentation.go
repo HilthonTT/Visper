@@ -44,6 +44,10 @@ func (c *Container) SetupRouter() *gin.Engine {
 
 	router := gin.Default()
 
+	if c.Config.IsProduction() {
+		router.Use(middlewares.ForceHttps(c.Config))
+	}
+
 	router.Use(middlewares.GinLogger(c.Logger))
 	router.Use(middlewares.CorsMiddleware(c.Config))
 

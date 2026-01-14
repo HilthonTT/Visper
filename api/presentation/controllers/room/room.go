@@ -206,11 +206,11 @@ func (c *roomController) DeleteRoom(ctx *gin.Context) {
 		return
 	}
 
-	user, err := security.GetRoomAuth(ctx.Request)
-	if err != nil {
+	user, exists := middlewares.GetUserFromContext(ctx)
+	if !exists {
 		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
 			Error:   "unauthorized",
-			Message: "room authentication required",
+			Message: "user not found in context",
 		})
 		return
 	}
@@ -384,8 +384,8 @@ func (c *roomController) LeaveRoom(ctx *gin.Context) {
 		return
 	}
 
-	user, err := security.GetRoomAuth(ctx.Request)
-	if err != nil {
+	user, exists := middlewares.GetUserFromContext(ctx)
+	if !exists {
 		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
 			Error:   "unauthorized",
 			Message: "room authentication required",

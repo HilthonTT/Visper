@@ -2,13 +2,16 @@ package tui
 
 import (
 	"context"
+	"log"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	apisdk "github.com/hilthontt/visper/api-sdk"
+	"github.com/hilthontt/visper/api-sdk/option"
 	filepreview "github.com/hilthontt/visper/cli/pkg/file_preview"
 	"github.com/hilthontt/visper/cli/pkg/generator"
 	"github.com/hilthontt/visper/cli/pkg/settings_manager"
@@ -50,6 +53,8 @@ type state struct {
 type visibleError struct {
 	message string
 }
+
+type cleanupCompleteMsg struct{}
 
 type model struct {
 	switched        bool
@@ -146,17 +151,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.Back):
 			if m.error != nil {
 				if m.page == splashPage {
-					return m, tea.Quit
+					return m, tea.Sequence(
+						m.cleanupCmd,
+						tea.Quit,
+					)
 				}
 				m.error = nil
 				return m, nil
 			}
 		case key.Matches(msg, keys.Quit):
-			return m, tea.Quit
+			return m, tea.Sequence(
+				m.cleanupCmd,
+				tea.Quit,
+			)
 		}
 	case CursorTickMsg:
 		m, cmd := m.CursorUpdate(msg)
 		return m, cmd
+	case cleanupCompleteMsg:
+		log.Println("Cleanup completed")
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -257,4 +271,38 @@ func (m model) getContent() string {
 		page = m.SettingsView()
 	}
 	return page
+}
+
+func (m model) Cleanup() {
+	if m.page == chatPage && m.client != nil {
+		roomID := m.state.chat.room.ID
+		if roomID != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			opts := []option.RequestOption{}
+			if m.userID != nil && *m.userID != "" {
+				opts = append(opts, option.WithHeader("X-User-ID", *m.userID))
+			}
+
+			var err error
+
+			if m.state.chat.isRoomOwner {
+				err = m.client.Room.Delete(ctx, roomID, opts...)
+			} else {
+				_, err = m.client.Room.Leave(ctx, roomID, opts...)
+			}
+
+			if err != nil {
+				log.Printf("Error leaving room during cleanup: %v", err)
+			} else {
+				log.Printf("Successfully notified server of room exit")
+			}
+		}
+	}
+}
+
+func (m model) cleanupCmd() tea.Msg {
+	m.Cleanup()
+	return cleanupCompleteMsg{}
 }

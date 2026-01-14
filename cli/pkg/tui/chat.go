@@ -34,6 +34,7 @@ const (
 )
 
 type chatState struct {
+	isRoomOwner      bool
 	roomCode         string
 	participants     []apisdk.UserResponse
 	filteredIndices  []int
@@ -87,9 +88,9 @@ func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 		wsCtx, wsCancel := context.WithCancel(context.Background())
 
 		m.userID = &newRoom.CurrentUser.ID
-
-		log.Printf("ChatSwitch: Setting userID to %s (CurrentUser)", *m.userID)
-		log.Printf("Room members: %d", len(participants))
+		if m.userID != nil && newRoom != nil {
+			m.state.chat.isRoomOwner = m.userID == &newRoom.Owner.ID
+		}
 
 		m.state.chat = chatState{
 			roomCode:         newRoom.JoinCode,

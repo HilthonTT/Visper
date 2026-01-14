@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -80,13 +81,15 @@ func GetConfig() *Config {
 		log.Fatalf("Error in parse config %v", err)
 	}
 
-	envPort := os.Getenv("PORT")
-	if envPort != "" {
+	if envPort := os.Getenv("PORT"); envPort != "" {
 		cfg.Server.ExternalPort = envPort
 		log.Printf("Set external port from environment -> %s", cfg.Server.ExternalPort)
 	} else {
-		cfg.Server.ExternalPort = cfg.Server.InternalPort
-		log.Printf("Environment variable PORT not set; using internal port value -> %s", cfg.Server.ExternalPort)
+		log.Printf("Using external port from config -> %s", cfg.Server.ExternalPort)
+	}
+
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
 	}
 
 	return cfg
@@ -107,7 +110,6 @@ func LoadConfig(filename string, fileType string) (*viper.Viper, error) {
 	v.SetConfigType(fileType)
 	v.SetConfigName(filename)
 
-	// Add multiple possible config paths
 	v.AddConfigPath(".")                        // Current directory
 	v.AddConfigPath("./config")                 // ./config
 	v.AddConfigPath("./infrastructure/config")  // ./infrastructure/config
@@ -115,7 +117,6 @@ func LoadConfig(filename string, fileType string) (*viper.Viper, error) {
 	v.AddConfigPath("../infrastructure/config") // ../infrastructure/config (from cmd)
 	v.AddConfigPath("../../config")             // ../../config
 
-	// Add absolute path if running from project root
 	if wd, err := os.Getwd(); err == nil {
 		v.AddConfigPath(filepath.Join(wd, "config"))
 		v.AddConfigPath(filepath.Join(wd, "infrastructure", "config"))
@@ -126,7 +127,8 @@ func LoadConfig(filename string, fileType string) (*viper.Viper, error) {
 	err := v.ReadInConfig()
 	if err != nil {
 		log.Printf("Unable to read config: %v", err)
-		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+		var configFileNotFoundError viper.ConfigFileNotFoundError
+		if errors.As(err, &configFileNotFoundError) {
 			return nil, errors.New("config file not found")
 		}
 		return nil, err
@@ -145,4 +147,64 @@ func getConfigPath(env string) string {
 	default:
 		return "config-development"
 	}
+}
+
+// Validate checks if the configuration is valid
+func (c *Config) Validate() error {
+	if c.Server.InternalPort == "" {
+		return errors.New("server.internalPort is required")
+	}
+	if c.Server.ExternalPort == "" {
+		return errors.New("server.externalPort is required")
+	}
+	if c.Server.Domain == "" {
+		return errors.New("server.domain is required")
+	}
+
+	if c.Postgres.Host == "" {
+		return errors.New("postgres.host is required")
+	}
+	if c.Postgres.Port == "" {
+		return errors.New("postgres.port is required")
+	}
+	if c.Postgres.DbName == "" {
+		return errors.New("postgres.dbName is required")
+	}
+
+	if c.Redis.Host == "" {
+		return errors.New("redis.host is required")
+	}
+	if c.Redis.Port == "" {
+		return errors.New("redis.port is required")
+	}
+
+	return nil
+}
+
+func (c *Config) IsDevelopment() bool {
+	return c.Server.RunMode == "debug" || c.Server.RunMode == "development"
+}
+
+func (c *Config) IsProduction() bool {
+	return c.Server.RunMode == "release" || c.Server.RunMode == "production"
+}
+
+func (c *Config) GetPostgresConnectionString() string {
+	return fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		c.Postgres.Host,
+		c.Postgres.Port,
+		c.Postgres.User,
+		c.Postgres.Password,
+		c.Postgres.DbName,
+		c.Postgres.SSLMode,
+	)
+}
+
+func (c *Config) GetRedisAddress() string {
+	return fmt.Sprintf("%s:%s", c.Redis.Host, c.Redis.Port)
+}
+
+func (c *Config) GetServerAddress() string {
+	return fmt.Sprintf(":%s", c.Server.InternalPort)
 }
