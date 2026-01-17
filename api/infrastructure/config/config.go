@@ -18,6 +18,7 @@ type Config struct {
 	Cors     CorsConfig
 	Logger   LoggerConfig
 	Jaeger   JaegerConfig
+	Sentry   SentryConfig
 }
 
 type ServerConfig struct {
@@ -67,6 +68,12 @@ type JaegerConfig struct {
 	ServiceName    string
 	ServiceVersion string
 	Endpoint       string
+}
+
+type SentryConfig struct {
+	Dsn            string
+	Debug          bool
+	SendDefaultPII bool
 }
 
 func GetConfig() *Config {

@@ -6,6 +6,10 @@ type SendMessageRequest struct {
 	Content string `json:"content" binding:"required,max=1000"`
 }
 
+type UpdateMessageRequest struct {
+	Content string `json:"content" binding:"required,max=1000"`
+}
+
 type MessageResponse struct {
 	ID        string    `json:"id"`
 	RoomID    string    `json:"room_id"`

@@ -14,6 +14,8 @@ import (
 )
 
 type MessageController interface {
+	UpdateMessage(ctx *gin.Context)
+	DeleteMessage(ctx *gin.Context)
 	SendMessage(ctx *gin.Context)
 	GetMessages(ctx *gin.Context)
 	GetMessagesAfter(ctx *gin.Context)
@@ -39,6 +41,172 @@ func NewMessageController(
 		wsRoomManager: wsRoomManager,
 		wsCore:        wsCore,
 	}
+}
+
+func (c *messageController) DeleteMessage(ctx *gin.Context) {
+	roomID := ctx.Param("id")
+	if roomID == "" {
+		ctx.JSON(http.StatusBadRequest, ErrorResponse{
+			Error:   "invalid_request",
+			Message: "room ID is required",
+		})
+		return
+	}
+
+	messageID := ctx.Param("messageId")
+	if messageID == "" {
+		ctx.JSON(http.StatusBadRequest, ErrorResponse{
+			Error:   "invalid_request",
+			Message: "message ID is required",
+		})
+		return
+	}
+
+	user, exists := middlewares.GetUserFromContext(ctx)
+	if !exists {
+		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "unauthorized",
+			Message: "user not found in context",
+		})
+		return
+	}
+
+	room, err := c.roomUseCase.GetByID(ctx.Request.Context(), roomID)
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, ErrorResponse{
+			Error:   "not_found",
+			Message: "room not found",
+		})
+		return
+	}
+
+	if !room.IsMember(user.ID) {
+		ctx.JSON(http.StatusForbidden, ErrorResponse{
+			Error:   "forbidden",
+			Message: "you are not a member of this room",
+		})
+		return
+	}
+
+	err = c.usecase.Delete(ctx.Request.Context(), roomID, messageID, user.ID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		errorCode := "delete_failed"
+
+		switch {
+		case err.Error() == "message not found":
+			status = http.StatusNotFound
+			errorCode = "not_found"
+		case err.Error() == "unauthorized: you can only delete your own messages":
+			status = http.StatusForbidden
+			errorCode = "forbidden"
+		}
+
+		ctx.JSON(status, ErrorResponse{
+			Error:   errorCode,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	now := time.Now()
+	wsMessage := websocket.NewMessageDeleted(roomID, messageID, now.String())
+	c.wsCore.Broadcast() <- wsMessage
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"success":    true,
+		"message_id": messageID,
+	})
+}
+
+func (c *messageController) UpdateMessage(ctx *gin.Context) {
+	roomID := ctx.Param("id")
+	if roomID == "" {
+		ctx.JSON(http.StatusBadRequest, ErrorResponse{
+			Error:   "invalid_request",
+			Message: "room ID is required",
+		})
+		return
+	}
+
+	messageID := ctx.Param("messageId")
+	if messageID == "" {
+		ctx.JSON(http.StatusBadRequest, ErrorResponse{
+			Error:   "invalid_request",
+			Message: "message ID is required",
+		})
+		return
+	}
+
+	var req UpdateMessageRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, ErrorResponse{
+			Error:   "invalid_request",
+			Message: middlewares.TranslateValidationError(err),
+		})
+		return
+	}
+
+	user, exists := middlewares.GetUserFromContext(ctx)
+	if !exists {
+		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "unauthorized",
+			Message: "user not found in context",
+		})
+		return
+	}
+
+	room, err := c.roomUseCase.GetByID(ctx.Request.Context(), roomID)
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, ErrorResponse{
+			Error:   "not_found",
+			Message: "room not found",
+		})
+		return
+	}
+
+	if !room.IsMember(user.ID) {
+		ctx.JSON(http.StatusForbidden, ErrorResponse{
+			Error:   "forbidden",
+			Message: "you are not a member of this room",
+		})
+		return
+	}
+
+	err = c.usecase.Update(ctx.Request.Context(), roomID, messageID, user.ID, req.Content)
+	if err != nil {
+		status := http.StatusInternalServerError
+		errorCode := "update_failed"
+
+		switch {
+		case err.Error() == "message not found":
+			status = http.StatusNotFound
+			errorCode = "not_found"
+		case err.Error() == "unauthorized: you can only edit your own messages":
+			status = http.StatusForbidden
+			errorCode = "forbidden"
+		case err.Error() == "message cannot be empty" ||
+			err.Error() == "message cannot contain only whitespace":
+			status = http.StatusBadRequest
+			errorCode = "invalid_content"
+		}
+
+		ctx.JSON(status, ErrorResponse{
+			Error:   errorCode,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	now := time.Now()
+	wsMessage := websocket.NewMessageUpdated(roomID, messageID, req.Content, now.String())
+	c.wsCore.Broadcast() <- wsMessage
+
+	ctx.JSON(http.StatusOK, gin.H{
+		"success":    true,
+		"message_id": messageID,
+		"content":    req.Content,
+	})
 }
 
 func (c *messageController) SendMessage(ctx *gin.Context) {

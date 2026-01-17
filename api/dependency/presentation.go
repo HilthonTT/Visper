@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/getsentry/sentry-go"
+	sentrygin "github.com/getsentry/sentry-go/gin"
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
 	"github.com/hilthontt/visper/api/infrastructure/cache"
@@ -44,6 +46,12 @@ func (c *Container) SetupRouter() *gin.Engine {
 
 	router := gin.Default()
 
+	router.Use(sentrygin.New(sentrygin.Options{
+		Repanic:         true,
+		WaitForDelivery: false,
+		Timeout:         5 * time.Second,
+	}))
+
 	if c.Config.IsProduction() {
 		router.Use(middlewares.ForceHttps(c.Config))
 	}
@@ -68,6 +76,22 @@ func (c *Container) registerAPIRoutes(router *gin.Engine) {
 		v1.Use(middlewares.RateLimiterMiddleware(cache.GetRedis(), c.Logger, middlewares.ModerateRateLimiterConfig()))
 		v1.Use(middlewares.ETagMiddleware(c.ETagStore))
 		v1.Use(middlewares.UserMiddleware(c.UserUC, c.Logger))
+
+		v1.Use(func(c *gin.Context) {
+			if hub := sentrygin.GetHubFromContext(c); hub != nil {
+				user, exists := middlewares.GetUserFromContext(c)
+				if !exists {
+					hub.Scope().SetUser(sentry.User{
+						ID:        user.ID,
+						Username:  user.Username,
+						IPAddress: c.ClientIP(),
+					})
+				}
+
+				hub.Scope().SetTag("user_type", "anonymous")
+			}
+			c.Next()
+		})
 
 		routes.MessageRoutes(v1, c.MessageController)
 		routes.RoomRoutes(v1, c.RoomController)

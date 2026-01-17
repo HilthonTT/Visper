@@ -31,6 +31,7 @@ type chatFocus int
 const (
 	focusMessage chatFocus = iota
 	focusSearch
+	focusEdit
 )
 
 type chatState struct {
@@ -41,11 +42,17 @@ type chatState struct {
 	messages         []apisdk.MessageResponse
 	messageInput     textinput.Model
 	searchInput      textinput.Model
+	editInput        textinput.Model
 	messagesViewport viewport.Model
 	focusedInput     chatFocus
 	searchActive     bool
 	searchCtx        context.Context
 	searchCancel     context.CancelFunc
+
+	// Message editing
+	editMode             bool
+	selectedMessageIndex int
+	editingMessageID     string
 
 	// Cache for the sidebar image
 	cachedImageContent string
@@ -63,6 +70,11 @@ type participantSearchResultMsg struct {
 	results []fzf.MatchResult
 }
 
+type messageEditSubmittedMsg struct {
+	messageID  string
+	newContent string
+}
+
 func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 	m = m.SwitchPage(chatPage)
 	m.state.chat.room = newRoom
@@ -76,6 +88,10 @@ func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 		searchInput := textinput.New()
 		searchInput.Placeholder = "Search participants..."
 		searchInput.Width = 20
+
+		editInput := textinput.New()
+		editInput.Placeholder = "Edit your message..."
+		editInput.Width = 50
 
 		vp := viewport.New(50, 20)
 
@@ -93,18 +109,21 @@ func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 		}
 
 		m.state.chat = chatState{
-			roomCode:         newRoom.JoinCode,
-			participants:     participants,
-			filteredIndices:  filteredIndices,
-			messages:         []apisdk.MessageResponse{},
-			messageInput:     msgInput,
-			searchInput:      searchInput,
-			messagesViewport: vp,
-			focusedInput:     focusMessage,
-			searchActive:     false,
-			wsCtx:            wsCtx,
-			wsCancel:         wsCancel,
-			room:             newRoom,
+			roomCode:             newRoom.JoinCode,
+			participants:         participants,
+			filteredIndices:      filteredIndices,
+			messages:             []apisdk.MessageResponse{},
+			messageInput:         msgInput,
+			searchInput:          searchInput,
+			editInput:            editInput,
+			messagesViewport:     vp,
+			focusedInput:         focusMessage,
+			searchActive:         false,
+			editMode:             false,
+			selectedMessageIndex: -1,
+			wsCtx:                wsCtx,
+			wsCancel:             wsCancel,
+			room:                 newRoom,
 		}
 
 		return m, m.connectWebSocket(newRoom.ID)
@@ -118,13 +137,40 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case messageEditSubmittedMsg:
+		// Handle the edit submission - call your API here
+		if m.state.chat.room != nil {
+			go func() {
+				opts := []option.RequestOption{}
+				if m.userID != nil && *m.userID != "" {
+					opts = append(opts, option.WithHeader("X-User-ID", *m.userID))
+				}
+
+				// TODO: Replace with your actual API call
+				// err := m.client.Message.Update(
+				// 	m.context,
+				// 	m.state.chat.room.ID,
+				// 	msg.messageID,
+				// 	apisdk.UpdateMessageParams{
+				// 		Content: msg.newContent,
+				// 	},
+				// 	opts...,
+				// )
+				// if err != nil {
+				// 	log.Printf("Failed to update message: %v", err)
+				// }
+
+				log.Printf("Edit message %s with content: %s", msg.messageID, msg.newContent)
+			}()
+		}
+		return m, nil
+
 	case wsConnectedMsg:
 		m.state.chat.wsConn = msg.conn
 		return m, m.listenWebSocket()
 
 	case wsChannelReadyMsg:
 		m.state.chat.wsMsgChan = msg.msgChan
-		// Start listening immediately after storing the channel
 		return m, waitForWSMessage(msg.msgChan)
 
 	case wsMessageReceivedMsg:
@@ -132,14 +178,12 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		m.state.chat.messagesViewport.SetContent(m.renderMessages())
 		m.state.chat.messagesViewport.GotoBottom()
 
-		// Continue listening for more messages
 		if m.state.chat.wsMsgChan != nil {
 			return m, waitForWSMessage(m.state.chat.wsMsgChan)
 		}
 		return m, nil
 
 	case wsMessageDeletedMsg:
-		// Remove message with matching ID
 		for i, message := range m.state.chat.messages {
 			if message.ID == msg.messageID {
 				m.state.chat.messages = append(m.state.chat.messages[:i], m.state.chat.messages[i+1:]...)
@@ -147,14 +191,12 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 			}
 		}
 		m.state.chat.messagesViewport.SetContent(m.renderMessages())
-		// Continue listening
 		if m.state.chat.wsMsgChan != nil {
 			return m, waitForWSMessage(m.state.chat.wsMsgChan)
 		}
 		return m, nil
 
 	case wsMemberJoinedMsg:
-		// Check if member already exists
 		exists := false
 		for _, p := range m.state.chat.participants {
 			if p.ID == msg.member.ID {
@@ -165,44 +207,37 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 
 		if !exists {
 			m.state.chat.participants = append(m.state.chat.participants, msg.member)
-			// Update filtered indices if not searching
 			if !m.state.chat.searchActive || m.state.chat.searchInput.Value() == "" {
 				m.state.chat.filteredIndices = append(m.state.chat.filteredIndices, len(m.state.chat.participants)-1)
 			}
 		}
-		// Continue listening
 		if m.state.chat.wsMsgChan != nil {
 			return m, waitForWSMessage(m.state.chat.wsMsgChan)
 		}
 		return m, nil
 
 	case wsMemberLeftMsg:
-		// Remove member from participants
 		for i, p := range m.state.chat.participants {
 			if p.ID == msg.userID {
 				m.state.chat.participants = append(m.state.chat.participants[:i], m.state.chat.participants[i+1:]...)
 				break
 			}
 		}
-		// Rebuild filtered indices
 		m.state.chat.filteredIndices = make([]int, 0)
 		for i := range m.state.chat.participants {
 			m.state.chat.filteredIndices = append(m.state.chat.filteredIndices, i)
 		}
-		// Continue listening
 		if m.state.chat.wsMsgChan != nil {
 			return m, waitForWSMessage(m.state.chat.wsMsgChan)
 		}
 		return m, nil
 
 	case wsMemberListMsg:
-		// Replace entire member list
 		m.state.chat.participants = msg.members
 		m.state.chat.filteredIndices = make([]int, len(msg.members))
 		for i := range m.state.chat.filteredIndices {
 			m.state.chat.filteredIndices[i] = i
 		}
-		// Continue listening
 		if m.state.chat.wsMsgChan != nil {
 			return m, waitForWSMessage(m.state.chat.wsMsgChan)
 		}
@@ -219,20 +254,17 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		return m.NewRoomSwitch()
 
 	case wsKickedMsg:
-		// Show modal that user was kicked
 		m.state.notify = notifyState{
 			open:          true,
 			title:         "Kicked from Room",
 			content:       fmt.Sprintf("You were kicked by %s\nReason: %s", msg.username, msg.reason),
 			confirmAction: NoAction,
 		}
-		// Auto-close after a delay and return to menu
 		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
 			return wsKickTimeoutMsg{}
 		})
 
 	case wsRoomDeletedMsg:
-		// Show modal that room was deleted
 		m.state.notify = notifyState{
 			open:          true,
 			title:         "Room Deleted",
@@ -244,7 +276,6 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		})
 
 	case wsErrorMsg:
-		// Handle fatal errors
 		if msg.code == "AUTH_FAILED" || msg.code == "JOIN_FAILED" {
 			m.state.notify = notifyState{
 				open:          true,
@@ -255,7 +286,6 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Handle rate limiting
 		if msg.code == "RATE_LIMITED" {
 			m.state.notify = notifyState{
 				open:          true,
@@ -263,15 +293,12 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 				content:       "You're sending messages too quickly. Please slow down.",
 				confirmAction: NoAction,
 			}
-			// Continue listening
 			return m, waitForWSMessage(m.state.chat.wsMsgChan)
 		}
 
-		// Continue listening for other errors
 		return m, waitForWSMessage(m.state.chat.wsMsgChan)
 
 	case wsDisconnectedMsg:
-		// Show disconnection message
 		m.state.notify = notifyState{
 			open:          true,
 			title:         "Disconnected",
@@ -303,6 +330,7 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		m.state.chat.messagesViewport.Width = centerWidth
 		m.state.chat.messagesViewport.Height = messagesHeight
 		m.state.chat.messageInput.Width = centerWidth - 2
+		m.state.chat.editInput.Width = ModalWidth - 8
 
 		m.state.chat.cachedImageContent = ""
 
@@ -311,14 +339,12 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		if m.state.notify.open {
 			switch m.state.notify.confirmAction {
 			case NoAction:
-				// OK button modal - any key closes it
 				switch msg.String() {
 				case "enter", "esc", " ", "o", "O":
 					m = m.closeModal()
 					return m, nil
 				}
 			case GoBackAction:
-				// Confirm/Cancel modal
 				switch msg.String() {
 				case "y", "Y", "enter":
 					m = m.closeModal()
@@ -328,14 +354,70 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 					m = m.closeModal()
 					return m, nil
 				}
+			case EditMessageAction:
+				// Update the edit input FIRST before checking for special keys
+				m.state.chat.editInput, cmd = m.state.chat.editInput.Update(msg)
+				cmds = append(cmds, cmd)
+
+				// Then check for submission/cancellation
+				switch msg.String() {
+				case "enter":
+					// Submit the edit
+					newContent := m.state.chat.editInput.Value()
+					originalContent := m.getMessageContent(m.state.chat.editingMessageID)
+
+					if newContent != "" && newContent != originalContent {
+						m = m.closeModal()
+						return m, func() tea.Msg {
+							return messageEditSubmittedMsg{
+								messageID:  m.state.chat.editingMessageID,
+								newContent: newContent,
+							}
+						}
+					}
+					m = m.closeModal()
+					return m, nil
+				case "esc":
+					m = m.closeModal()
+					m.state.chat.editMode = false
+					m.state.chat.selectedMessageIndex = -1
+					return m, nil
+				}
+				// Return early to prevent other key handling
+				return m, tea.Batch(cmds...)
 			}
 			// Don't process other keys when modal is open
 			return m, nil
 		}
 
+		// Handle edit mode navigation
+		if m.state.chat.editMode && !m.state.notify.open {
+			switch msg.String() {
+			case "up", "k":
+				m.state.chat.selectedMessageIndex = m.getPreviousOwnMessageIndex(m.state.chat.selectedMessageIndex)
+				return m, nil
+			case "down", "j":
+				m.state.chat.selectedMessageIndex = m.getNextOwnMessageIndex(m.state.chat.selectedMessageIndex)
+				return m, nil
+			case "enter":
+				if m.state.chat.selectedMessageIndex >= 0 && m.state.chat.selectedMessageIndex < len(m.state.chat.messages) {
+					selectedMsg := m.state.chat.messages[m.state.chat.selectedMessageIndex]
+					m.state.chat.editingMessageID = selectedMsg.ID
+					m.state.chat.editInput.SetValue(selectedMsg.Content)
+					m = m.openEditMessageModal(selectedMsg.Content)
+					return m, nil
+				}
+				return m, nil
+			case "esc", "ctrl+e":
+				m.state.chat.editMode = false
+				m.state.chat.selectedMessageIndex = -1
+				return m, nil
+			}
+			return m, nil
+		}
+
 		switch {
 		case key.Matches(msg, keys.BackToMenu):
-			// Open modal instead of going back directly
 			m = m.openWarnModalForLeaveRoom()
 			return m, nil
 		case key.Matches(msg, keys.ToggleSearch):
@@ -356,6 +438,17 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 				for i := range m.state.chat.filteredIndices {
 					m.state.chat.filteredIndices[i] = i
 				}
+			}
+			return m, nil
+		case msg.String() == "ctrl+e":
+			// Toggle edit mode
+			if !m.state.chat.editMode {
+				// Enter edit mode and select the most recent own message
+				m.state.chat.editMode = true
+				m.state.chat.selectedMessageIndex = m.getLastOwnMessageIndex()
+			} else {
+				m.state.chat.editMode = false
+				m.state.chat.selectedMessageIndex = -1
 			}
 			return m, nil
 		case key.Matches(msg, keys.Enter):
@@ -407,6 +500,11 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 
 	// Update the appropriate input (only if modal is not open)
 	if !m.state.notify.open {
+		if m.state.notify.confirmAction == EditMessageAction {
+			m.state.chat.editInput, cmd = m.state.chat.editInput.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+
 		switch m.state.chat.focusedInput {
 		case focusMessage:
 			m.state.chat.messageInput, cmd = m.state.chat.messageInput.Update(msg)
@@ -425,11 +523,65 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 			}
 		}
 
-		m.state.chat.messagesViewport, cmd = m.state.chat.messagesViewport.Update(msg)
+		if !m.state.chat.editMode {
+			m.state.chat.messagesViewport, cmd = m.state.chat.messagesViewport.Update(msg)
+			cmds = append(cmds, cmd)
+		}
+	} else if m.state.notify.confirmAction == EditMessageAction {
+		m.state.chat.editInput, cmd = m.state.chat.editInput.Update(msg)
 		cmds = append(cmds, cmd)
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+// Helper functions for message navigation
+func (m model) getLastOwnMessageIndex() int {
+	if m.userID == nil {
+		return -1
+	}
+	userID := *m.userID
+	for i := len(m.state.chat.messages) - 1; i >= 0; i-- {
+		if m.state.chat.messages[i].UserID == userID {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m model) getNextOwnMessageIndex(currentIndex int) int {
+	if m.userID == nil {
+		return currentIndex
+	}
+	userID := *m.userID
+	for i := currentIndex + 1; i < len(m.state.chat.messages); i++ {
+		if m.state.chat.messages[i].UserID == userID {
+			return i
+		}
+	}
+	return currentIndex
+}
+
+func (m model) getPreviousOwnMessageIndex(currentIndex int) int {
+	if m.userID == nil {
+		return currentIndex
+	}
+	userID := *m.userID
+	for i := currentIndex - 1; i >= 0; i-- {
+		if m.state.chat.messages[i].UserID == userID {
+			return i
+		}
+	}
+	return currentIndex
+}
+
+func (m model) getMessageContent(messageID string) string {
+	for _, msg := range m.state.chat.messages {
+		if msg.ID == messageID {
+			return msg.Content
+		}
+	}
+	return ""
 }
 
 func (m model) searchParticipants(query string) tea.Cmd {
@@ -438,7 +590,6 @@ func (m model) searchParticipants(query string) tea.Cmd {
 			return participantSearchResultMsg{results: nil}
 		}
 
-		// Build source list from participant usernames
 		source := make([]string, len(m.state.chat.participants))
 		for i, p := range m.state.chat.participants {
 			source[i] = p.Username
@@ -450,7 +601,6 @@ func (m model) searchParticipants(query string) tea.Cmd {
 
 		results, err := utils.FzfSearch(query, source, 500*time.Millisecond)
 		if err != nil {
-			// On timeout or error, show all participants
 			return participantSearchResultMsg{results: nil}
 		}
 
@@ -500,7 +650,12 @@ func (m model) ChatView() string {
 
 	// Show modal if open
 	if m.state.notify.open {
-		notifyModal := m.RenderWarnModal()
+		var notifyModal string
+		if m.state.notify.confirmAction == EditMessageAction {
+			notifyModal = m.RenderEditModal()
+		} else {
+			notifyModal = m.RenderWarnModal()
+		}
 		overlayX := (m.viewportWidth - ModalWidth) / 2
 		overlayY := (m.viewportHeight - ModalHeight) / 2
 		return stringfunction.PlaceOverlay(overlayX, overlayY, notifyModal, baseView)
@@ -596,7 +751,12 @@ func (m model) renderChatCenter(width, height int) string {
 
 	sb.WriteString(inputBorder)
 
-	hint := m.theme.TextBody().Faint(true).Render("Press Ctrl+S to search participants")
+	var hint string
+	if m.state.chat.editMode {
+		hint = m.theme.TextAccent().Bold(true).Render("EDIT MODE: ↑/↓ to select, Enter to edit, Esc to cancel")
+	} else {
+		hint = m.theme.TextBody().Faint(true).Render("Ctrl+S: search participants | Ctrl+E: edit messages")
+	}
 	sb.WriteString(m.theme.Base().Padding(0, 1).Render(hint))
 
 	return m.theme.Base().
@@ -615,20 +775,33 @@ func (m model) renderMessages() string {
 		userID = *m.userID
 	}
 
-	for _, msg := range m.state.chat.messages {
+	for i, msg := range m.state.chat.messages {
 		timestamp := m.theme.TextBody().Faint(true).Render(msg.CreatedAt.Format("3:04 PM"))
 
 		var username string
-		if userID == msg.UserID {
+		isOwnMessage := userID == msg.UserID
+
+		if isOwnMessage {
 			username = m.theme.TextBrand().Bold(true).Render(msg.Username)
 		} else {
 			username = m.theme.TextAccent().Bold(true).Render(msg.Username)
 		}
 
-		header := lipgloss.JoinHorizontal(lipgloss.Left, timestamp, " ", username)
+		// Add selection indicator if in edit mode
+		var selectionIndicator string
+		if m.state.chat.editMode && isOwnMessage && i == m.state.chat.selectedMessageIndex {
+			selectionIndicator = m.theme.Base().
+				Foreground(m.theme.Highlight()).
+				Bold(true).
+				Render("► ")
+		} else {
+			selectionIndicator = "  "
+		}
+
+		header := lipgloss.JoinHorizontal(lipgloss.Left, selectionIndicator, timestamp, " ", username)
 
 		var content string
-		if userID == msg.UserID {
+		if isOwnMessage {
 			content = m.theme.TextAccent().Render(msg.Content)
 		} else {
 			content = m.theme.TextBody().Render(msg.Content)
@@ -638,7 +811,7 @@ func (m model) renderMessages() string {
 			Padding(0, 1).
 			MarginBottom(1)
 
-		fullMsg := lipgloss.JoinVertical(lipgloss.Left, header, content)
+		fullMsg := lipgloss.JoinVertical(lipgloss.Left, header, "  "+content)
 		sb.WriteString(msgStyle.Render(fullMsg))
 		sb.WriteString("\n")
 	}
@@ -650,7 +823,6 @@ func (m model) renderRightSidebar(width, height int) string {
 	textHeight := 2
 	imageHeight := height - textHeight - 2
 
-	// Check if we need to re-render the image
 	var imageContent string
 	if m.state.chat.cachedImageContent != "" &&
 		m.state.chat.cachedImageWidth == width-2 &&
@@ -680,13 +852,11 @@ func (m model) renderRightSidebar(width, height int) string {
 			imageContent = m.theme.TextBody().Faint(true).Render("Image unavailable")
 		}
 
-		// Cache the image
 		m.state.chat.cachedImageContent = imageContent
 		m.state.chat.cachedImageWidth = width - 2
 		m.state.chat.cachedImageHeight = imageHeight
 	}
 
-	// Text rendering is cheap, so we can do it every time
 	waifuText := m.theme.TextAccent().
 		Italic(true).
 		Render("Your waifu approves")
@@ -721,16 +891,26 @@ func (m model) chatViewCompact() string {
 }
 
 func (m *model) clearChatState() {
-	// Cancel WebSocket context
 	if m.state.chat.wsCancel != nil {
 		m.state.chat.wsCancel()
 	}
 
-	// Close WebSocket connection
 	if m.state.chat.wsConn != nil {
 		m.state.chat.wsConn.Close()
 	}
 
 	m.state.chat.roomCode = ""
 	m.state.chat = chatState{}
+}
+
+func (m model) openEditMessageModal(currentContent string) model {
+	m.state.chat.editInput.SetValue(currentContent)
+	m.state.chat.editInput.Focus()
+	m.state.notify = notifyState{
+		open:          true,
+		title:         "Edit Message",
+		content:       "",
+		confirmAction: EditMessageAction,
+	}
+	return m
 }

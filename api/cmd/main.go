@@ -10,11 +10,24 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/getsentry/sentry-go"
 	"github.com/hilthontt/visper/api/dependency"
+	"github.com/hilthontt/visper/api/infrastructure/config"
 	"go.uber.org/zap"
 )
 
 func main() {
+	cfg := config.GetConfig()
+	err := sentry.Init(sentry.ClientOptions{
+		Dsn:            cfg.Sentry.Dsn,
+		Debug:          cfg.Sentry.Debug,
+		SendDefaultPII: cfg.Sentry.SendDefaultPII,
+	})
+	if err != nil {
+		log.Fatalf("sentry.Init: %s", err)
+	}
+	defer sentry.Flush(2 * time.Second)
+
 	container, err := dependency.NewContainer()
 	if err != nil {
 		log.Fatal(fmt.Errorf("failed to initialize dependencies: %w", err))

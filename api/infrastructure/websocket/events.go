@@ -7,6 +7,7 @@ const (
 
 	MessageReceived = "message.received"
 	MessageDeleted  = "message.deleted"
+	MessageUpdated  = "message.updated"
 
 	ErrorEvent          = "error"
 	AuthenticationError = "error.auth"

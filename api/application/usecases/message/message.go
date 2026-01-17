@@ -27,6 +27,8 @@ const (
 )
 
 type MessageUseCase interface {
+	Delete(ctx context.Context, roomID, messageID, userID string) error
+	Update(ctx context.Context, roomID, messageID, userID, content string) error
 	Send(ctx context.Context, roomID, userID, username, content string) (*model.Message, error)
 	GetRoomMessages(ctx context.Context, roomID string, limit int64) ([]*model.Message, error)
 	GetMessagesAfter(ctx context.Context, roomID string, after time.Time, limit int64) ([]*model.Message, error)
@@ -45,6 +47,83 @@ func NewMessageUseCase(repository repository.MessageRepository, logger *logger.L
 		repository: repository,
 		logger:     logger,
 	}
+}
+
+func (uc *messageUseCase) Update(ctx context.Context, roomID, messageID, userID, content string) error {
+	if roomID == "" {
+		return fmt.Errorf("room ID cannot be empty")
+	}
+	if messageID == "" {
+		return fmt.Errorf("message ID cannot be empty")
+	}
+	if userID == "" {
+		return fmt.Errorf("user ID cannot be empty")
+	}
+
+	// Validate message content
+	if err := uc.validateMessageContent(content); err != nil {
+		return err
+	}
+
+	existingMessage, err := uc.repository.GetByID(ctx, roomID, messageID)
+	if err != nil {
+		uc.logger.Error("failed to get message for update", zap.Error(err), zap.String("messageID", messageID))
+		return fmt.Errorf("message not found: %w", err)
+	}
+
+	// Verify the user owns this message
+	if existingMessage.UserID != userID {
+		return fmt.Errorf("unauthorized: you can only edit your own messages")
+	}
+
+	existingMessage.Content = strings.TrimSpace(content)
+	existingMessage.UpdatedAt = time.Now()
+
+	if err := uc.repository.Update(ctx, existingMessage); err != nil {
+		uc.logger.Error("failed to update message", zap.Error(err), zap.String("messageID", messageID))
+		return fmt.Errorf("failed to update message: %w", err)
+	}
+
+	uc.logger.Info("message updated",
+		zap.String("messageID", messageID),
+		zap.String("roomID", roomID),
+		zap.String("userID", userID))
+
+	return nil
+}
+
+func (uc *messageUseCase) Delete(ctx context.Context, roomID, messageID, userID string) error {
+	if roomID == "" {
+		return fmt.Errorf("room ID cannot be empty")
+	}
+	if messageID == "" {
+		return fmt.Errorf("message ID cannot be empty")
+	}
+	if userID == "" {
+		return fmt.Errorf("user ID cannot be empty")
+	}
+
+	existingMessage, err := uc.repository.GetByID(ctx, roomID, messageID)
+	if err != nil {
+		uc.logger.Error("failed to get message for deletion", zap.Error(err), zap.String("messageID", messageID))
+		return fmt.Errorf("message not found: %w", err)
+	}
+
+	if existingMessage.UserID != userID {
+		return fmt.Errorf("unauthorized: you can only delete your own messages")
+	}
+
+	if err := uc.repository.Delete(ctx, roomID, messageID); err != nil {
+		uc.logger.Error("failed to delete message", zap.Error(err), zap.String("messageID", messageID))
+		return fmt.Errorf("failed to delete message: %w", err)
+	}
+
+	uc.logger.Info("message deleted",
+		zap.String("messageID", messageID),
+		zap.String("roomID", roomID),
+		zap.String("userID", userID))
+
+	return nil
 }
 
 func (uc *messageUseCase) CleanupAllOldMessages(ctx context.Context, roomIDs []string) error {

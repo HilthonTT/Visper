@@ -20,6 +20,28 @@ func NewMessageRepository(client *redis.Client) repository.MessageRepository {
 		client: client,
 	}
 }
+
+func (r *messageRepository) GetByID(ctx context.Context, roomID, messageID string) (*model.Message, error) {
+	key := fmt.Sprintf("room:%s:messages", roomID)
+
+	results, err := r.client.ZRange(ctx, key, 0, -1).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	for _, data := range results {
+		var msg model.Message
+		if err := json.Unmarshal([]byte(data), &msg); err != nil {
+			continue
+		}
+		if msg.ID == messageID {
+			return &msg, nil
+		}
+	}
+
+	return nil, fmt.Errorf("message not found")
+}
+
 func (r *messageRepository) Create(ctx context.Context, message *model.Message) error {
 	message.CreatedAt = time.Now()
 	data, err := json.Marshal(message)
@@ -35,6 +57,70 @@ func (r *messageRepository) Create(ctx context.Context, message *model.Message) 
 		Score:  score,
 		Member: data,
 	}).Err()
+}
+
+func (r *messageRepository) Update(ctx context.Context, message *model.Message) error {
+	key := fmt.Sprintf("room:%s:messages", message.RoomID)
+
+	oldMessage, err := r.GetByID(ctx, message.RoomID, message.ID)
+	if err != nil {
+		return err
+	}
+
+	oldData, err := json.Marshal(oldMessage)
+	if err != nil {
+		return fmt.Errorf("failed to marshal old message: %w", err)
+	}
+
+	message.UpdatedAt = time.Now()
+	message.CreatedAt = oldMessage.CreatedAt
+
+	newData, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("failed to marshal new message: %w", err)
+	}
+
+	pipe := r.client.Pipeline()
+
+	pipe.ZRem(ctx, key, oldData)
+
+	score := float64(oldMessage.CreatedAt.Unix())
+	pipe.ZAdd(ctx, key, redis.Z{
+		Score:  score,
+		Member: newData,
+	})
+
+	_, err = pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update message: %w", err)
+	}
+
+	return nil
+}
+
+func (r *messageRepository) Delete(ctx context.Context, roomID string, messageID string) error {
+	key := fmt.Sprintf("room:%s:messages", roomID)
+
+	message, err := r.GetByID(ctx, roomID, messageID)
+	if err != nil {
+		return err
+	}
+
+	data, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("failed to marshal message: %w", err)
+	}
+
+	result := r.client.ZRem(ctx, key, data)
+	if result.Err() != nil {
+		return fmt.Errorf("failed to delete message: %w", result.Err())
+	}
+
+	if result.Val() == 0 {
+		return fmt.Errorf("message not found in sorted set")
+	}
+
+	return nil
 }
 
 func (r *messageRepository) GetByRoom(ctx context.Context, roomID string, limit int64) ([]*model.Message, error) {

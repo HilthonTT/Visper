@@ -40,3 +40,8 @@ jaeger:
   serviceName: "visper-api"
   serviceVersion: "v1.0.0"
   endpoint: "http://localhost:14268/api/traces"
+
+sentry:
+  dsn: ""
+  debug: true
+  sendDefaultPII: false

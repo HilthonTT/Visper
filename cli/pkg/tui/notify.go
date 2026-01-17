@@ -11,6 +11,7 @@ const (
 	GoBackAction
 	NoAction
 	PermanentDeleteAction
+	EditMessageAction
 
 	ModalWidth  = 60
 	ModalHeight = 9
@@ -76,6 +77,46 @@ func (m model) RenderWarnModal() string {
 		content,
 		"",
 		buttons,
+	)
+
+	modalStyle := m.theme.Modal().
+		Width(ModalWidth).
+		Padding(1, 2)
+
+	return modalStyle.Render(modalContent)
+}
+
+func (m model) RenderEditModal() string {
+	if !m.state.notify.open {
+		return ""
+	}
+
+	innerWidth := ModalWidth - 4
+
+	titleStyle := lipgloss.NewStyle().
+		Foreground(m.theme.Accent()).
+		Bold(true).
+		AlignHorizontal(lipgloss.Center).
+		Width(innerWidth)
+
+	title := titleStyle.Render(m.state.notify.title)
+
+	inputView := m.state.chat.editInput.View()
+
+	hint := lipgloss.NewStyle().
+		Foreground(m.theme.Body()).
+		Faint(true).
+		AlignHorizontal(lipgloss.Center).
+		Width(innerWidth).
+		Render("Enter to save • Esc to cancel")
+
+	modalContent := lipgloss.JoinVertical(
+		lipgloss.Center,
+		title,
+		"",
+		inputView,
+		"",
+		hint,
 	)
 
 	modalStyle := m.theme.Modal().

@@ -32,3 +32,4 @@ go.work.sum
 # .vscode/
 
 *.log
+api/infrastructure/config/config-development.yml
