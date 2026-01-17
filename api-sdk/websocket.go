@@ -22,6 +22,7 @@ const (
 
 	MessageReceived = "message.received"
 	MessageDeleted  = "message.deleted"
+	MessageUpdated  = "message.updated"
 
 	ErrorEvent          = "error"
 	AuthenticationError = "error.auth"
@@ -47,7 +48,7 @@ type MessagePayload struct {
 }
 
 type MessageDeletedPayload struct {
-	MessageID string `json:"id"`
+	ID string `json:"id"`
 }
 
 type MemberPayload struct {

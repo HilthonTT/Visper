@@ -25,6 +25,11 @@ type wsMessageDeletedMsg struct {
 	messageID string
 }
 
+type wsMessageUpdatedMsg struct {
+	messageID string
+	content   string
+}
+
 type wsMemberJoinedMsg struct {
 	member apisdk.UserResponse
 }
@@ -130,9 +135,30 @@ func (m model) listenWebSocket() tea.Cmd {
 					}
 				}
 
-			case apisdk.MessageDeleted:
+			case apisdk.MessageUpdated:
 				if data, ok := wsMsg.Data.(map[string]any); ok {
-					id, ok := getStringField(data, "id", "ID")
+					id, idOk := getStringField(data, "id", "ID")
+					content, contentOk := getStringField(data, "content", "content")
+					if idOk && contentOk {
+						select {
+						case msgChan <- wsMessageUpdatedMsg{messageID: id, content: content}:
+						case <-m.state.chat.wsCtx.Done():
+							return
+						}
+					} else {
+						log.Printf("Invalid message updated payload: %+v", data)
+					}
+				}
+
+			case apisdk.MessageDeleted:
+				if payload, ok := wsMsg.Data.(apisdk.MessageDeletedPayload); ok {
+					select {
+					case msgChan <- wsMessageDeletedMsg{messageID: payload.ID}:
+					case <-m.state.chat.wsCtx.Done():
+						return
+					}
+				} else if data, ok := wsMsg.Data.(map[string]any); ok {
+					id, ok := getStringField(data, "id", "ID", "message_id", "messageId")
 					if ok {
 						select {
 						case msgChan <- wsMessageDeletedMsg{messageID: id}:
@@ -142,6 +168,8 @@ func (m model) listenWebSocket() tea.Cmd {
 					} else {
 						log.Printf("Invalid message deleted payload: %+v", data)
 					}
+				} else {
+					log.Printf("Unknown message deleted payload type: %T - %+v", wsMsg.Data, wsMsg.Data)
 				}
 
 			case apisdk.MemberJoined:

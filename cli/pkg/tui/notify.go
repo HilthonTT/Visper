@@ -1,6 +1,10 @@
 package tui
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"fmt"
+
+	"github.com/charmbracelet/lipgloss"
+)
 
 type ConfirmActionType int
 
@@ -12,6 +16,7 @@ const (
 	NoAction
 	PermanentDeleteAction
 	EditMessageAction
+	DeleteMessageAction
 
 	ModalWidth  = 60
 	ModalHeight = 9
@@ -172,4 +177,19 @@ func (m model) renderConfirmCancelButtons() string {
 		AlignHorizontal(lipgloss.Center).
 		Width(innerWidth).
 		Render(buttons)
+}
+
+func (m model) openDeleteMessageModal(messageContent string) model {
+	displayContent := messageContent
+	if len(displayContent) > 50 {
+		displayContent = displayContent[:50] + "..."
+	}
+
+	m.state.notify = notifyState{
+		open:          true,
+		title:         "Delete Message",
+		content:       fmt.Sprintf("Are you sure you want to delete this message?\n\n\"%s\"", displayContent),
+		confirmAction: DeleteMessageAction,
+	}
+	return m
 }

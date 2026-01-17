@@ -66,7 +66,7 @@ func NewMessageUpdated(roomID, msgID, content, timestamp string) *WSMessage {
 
 func NewMessageDeleted(roomID, msgID, timestamp string) *WSMessage {
 	return &WSMessage{
-		Type:   MessageUpdated,
+		Type:   MessageDeleted,
 		RoomID: roomID,
 		Data: MessageDeletedPayload{
 			ID:        msgID,

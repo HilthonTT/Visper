@@ -113,9 +113,9 @@ func (c *messageController) DeleteMessage(ctx *gin.Context) {
 	wsMessage := websocket.NewMessageDeleted(roomID, messageID, now.String())
 	c.wsCore.Broadcast() <- wsMessage
 
-	ctx.JSON(http.StatusOK, gin.H{
-		"success":    true,
-		"message_id": messageID,
+	ctx.JSON(http.StatusOK, MessageDeletedResponse{
+		Success:   true,
+		MessageID: messageID,
 	})
 }
 
@@ -202,10 +202,10 @@ func (c *messageController) UpdateMessage(ctx *gin.Context) {
 	wsMessage := websocket.NewMessageUpdated(roomID, messageID, req.Content, now.String())
 	c.wsCore.Broadcast() <- wsMessage
 
-	ctx.JSON(http.StatusOK, gin.H{
-		"success":    true,
-		"message_id": messageID,
-		"content":    req.Content,
+	ctx.JSON(http.StatusOK, MessageUpdatedResponse{
+		Success:   true,
+		MessageID: messageID,
+		Content:   req.Content,
 	})
 }
 

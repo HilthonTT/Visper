@@ -75,6 +75,10 @@ type messageEditSubmittedMsg struct {
 	newContent string
 }
 
+type messageDeleteSubmittedMsg struct {
+	messageID string
+}
+
 func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 	m = m.SwitchPage(chatPage)
 	m.state.chat.room = newRoom
@@ -137,8 +141,7 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
-	case messageEditSubmittedMsg:
-		// Handle the edit submission - call your API here
+	case messageDeleteSubmittedMsg:
 		if m.state.chat.room != nil {
 			go func() {
 				opts := []option.RequestOption{}
@@ -146,19 +149,38 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 					opts = append(opts, option.WithHeader("X-User-ID", *m.userID))
 				}
 
-				// TODO: Replace with your actual API call
-				// err := m.client.Message.Update(
-				// 	m.context,
-				// 	m.state.chat.room.ID,
-				// 	msg.messageID,
-				// 	apisdk.UpdateMessageParams{
-				// 		Content: msg.newContent,
-				// 	},
-				// 	opts...,
-				// )
-				// if err != nil {
-				// 	log.Printf("Failed to update message: %v", err)
-				// }
+				_, err := m.client.Message.Delete(
+					m.context,
+					m.state.chat.room.ID,
+					msg.messageID,
+					opts...,
+				)
+				if err != nil {
+					log.Printf("Failed to delete message: %v", err)
+				}
+			}()
+		}
+		return m, nil
+	case messageEditSubmittedMsg:
+		if m.state.chat.room != nil {
+			go func() {
+				opts := []option.RequestOption{}
+				if m.userID != nil && *m.userID != "" {
+					opts = append(opts, option.WithHeader("X-User-ID", *m.userID))
+				}
+
+				_, err := m.client.Message.Update(
+					m.context,
+					m.state.chat.room.ID,
+					msg.messageID,
+					apisdk.UpdateMessageParams{
+						Content: msg.newContent,
+					},
+					opts...,
+				)
+				if err != nil {
+					log.Printf("Failed to update message: %v", err)
+				}
 
 				log.Printf("Edit message %s with content: %s", msg.messageID, msg.newContent)
 			}()
@@ -183,6 +205,18 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		}
 		return m, nil
 
+	case wsMessageUpdatedMsg:
+		for i, message := range m.state.chat.messages {
+			if message.ID == msg.messageID {
+				m.state.chat.messages[i].Content = msg.content
+				break
+			}
+		}
+		m.state.chat.messagesViewport.SetContent(m.renderMessages())
+		if m.state.chat.wsMsgChan != nil {
+			return m, waitForWSMessage(m.state.chat.wsMsgChan)
+		}
+		return m, nil
 	case wsMessageDeletedMsg:
 		for i, message := range m.state.chat.messages {
 			if message.ID == msg.messageID {
@@ -354,12 +388,25 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 					m = m.closeModal()
 					return m, nil
 				}
+			case DeleteMessageAction:
+				switch msg.String() {
+				case "y", "Y", "enter":
+					m = m.closeModal()
+					m.state.chat.editMode = false
+					m.state.chat.selectedMessageIndex = -1
+					return m, func() tea.Msg {
+						return messageDeleteSubmittedMsg{
+							messageID: m.state.chat.editingMessageID,
+						}
+					}
+				case "n", "N", "esc":
+					m = m.closeModal()
+					return m, nil
+				}
 			case EditMessageAction:
-				// Update the edit input FIRST before checking for special keys
 				m.state.chat.editInput, cmd = m.state.chat.editInput.Update(msg)
 				cmds = append(cmds, cmd)
 
-				// Then check for submission/cancellation
 				switch msg.String() {
 				case "enter":
 					// Submit the edit
@@ -383,7 +430,6 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 					m.state.chat.selectedMessageIndex = -1
 					return m, nil
 				}
-				// Return early to prevent other key handling
 				return m, tea.Batch(cmds...)
 			}
 			// Don't process other keys when modal is open
@@ -398,6 +444,14 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 				return m, nil
 			case "down", "j":
 				m.state.chat.selectedMessageIndex = m.getNextOwnMessageIndex(m.state.chat.selectedMessageIndex)
+				return m, nil
+			case "delete", "ctrl+d":
+				if m.state.chat.selectedMessageIndex >= 0 && m.state.chat.selectedMessageIndex < len(m.state.chat.messages) {
+					selectedMsg := m.state.chat.messages[m.state.chat.selectedMessageIndex]
+					m.state.chat.editingMessageID = selectedMsg.ID
+					m = m.openDeleteMessageModal(selectedMsg.Content)
+					return m, nil
+				}
 				return m, nil
 			case "enter":
 				if m.state.chat.selectedMessageIndex >= 0 && m.state.chat.selectedMessageIndex < len(m.state.chat.messages) {

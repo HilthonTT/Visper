@@ -34,3 +34,14 @@ type ErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message,omitempty"`
 }
+
+type MessageUpdatedResponse struct {
+	Success   bool   `json:"success"`
+	MessageID string `json:"message_id"`
+	Content   string `json:"content"`
+}
+
+type MessageDeletedResponse struct {
+	Success   bool   `json:"success"`
+	MessageID string `json:"message_id"`
+}

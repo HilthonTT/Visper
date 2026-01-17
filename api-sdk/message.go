@@ -21,6 +21,34 @@ func NewMessageService(opts ...option.RequestOption) *MessageService {
 	return m
 }
 
+// Updates a message in the room
+func (m *MessageService) Update(ctx context.Context, roomID, messageID string, body UpdateMessageParams, opts ...option.RequestOption) (*MessageUpdatedResponse, error) {
+	opts = slices.Concat(m.Options, opts)
+	if roomID == "" || messageID == "" {
+		return nil, ErrMissingIDParameter
+	}
+
+	path := fmt.Sprintf("api/v1/rooms/%s/messages/%s", roomID, messageID)
+	res := &MessageUpdatedResponse{}
+	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPut, path, body, &res, opts...)
+
+	return res, err
+}
+
+// Deletes a message in the room
+func (m *MessageService) Delete(ctx context.Context, roomID, messageID string, opts ...option.RequestOption) (*MessageDeletedResponse, error) {
+	opts = slices.Concat(m.Options, opts)
+	if roomID == "" || messageID == "" {
+		return nil, ErrMissingIDParameter
+	}
+
+	path := fmt.Sprintf("api/v1/rooms/%s/messages/%s", roomID, messageID)
+	res := &MessageDeletedResponse{}
+	err := requestconfig.ExecuteNewRequest(ctx, http.MethodDelete, path, nil, &res, opts...)
+
+	return res, err
+}
+
 // Send sends a message to a room
 func (m *MessageService) Send(ctx context.Context, roomID string, body SendMessageParams, opts ...option.RequestOption) (*MessageResponse, error) {
 	opts = slices.Concat(m.Options, opts)
@@ -85,13 +113,19 @@ func (m *MessageService) Count(ctx context.Context, roomID string, opts ...optio
 	return res, err
 }
 
-// Request/Response types
-
 type SendMessageParams struct {
 	Content string `json:"content"` // Max 1000 characters
 }
 
 func (r *SendMessageParams) MarshalJSON() ([]byte, error) {
+	return apijson.MarshalRoot(r)
+}
+
+type UpdateMessageParams struct {
+	Content string `json:"content"` // Max 1000 characters
+}
+
+func (r *UpdateMessageParams) MarshalJSON() ([]byte, error) {
 	return apijson.MarshalRoot(r)
 }
 
@@ -133,5 +167,24 @@ type MessageCountResponse struct {
 }
 
 func (r *MessageCountResponse) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+type MessageUpdatedResponse struct {
+	Success   bool   `json:"success"`
+	MessageID string `json:"message_id"`
+	Content   string `json:"content"`
+}
+
+func (r *MessageUpdatedResponse) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+type MessageDeletedResponse struct {
+	Success   bool   `json:"success"`
+	MessageID string `json:"message_id"`
+}
+
+func (r *MessageDeletedResponse) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
