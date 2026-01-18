@@ -8,11 +8,12 @@ const (
 	TypeNumber = "number"
 
 	// preview
-	TextTypes  = "text_types"
-	AudioTypes = "audio_types"
-	VideoTypes = "video_types"
-	ImageTypes = "image_types"
-	ProxyTypes = "proxy_types"
+	TextTypes          = "text_types"
+	AudioTypes         = "audio_types"
+	VideoTypes         = "video_types"
+	ImageTypes         = "image_types"
+	ProxyTypes         = "proxy_types"
+	ProxyIgnoreHeaders = "proxy_ignore_headers"
 )
 
 const (
