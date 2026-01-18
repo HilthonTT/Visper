@@ -60,13 +60,10 @@ func (m model) HeaderUpdate(msg tea.Msg) (model, tea.Cmd) {
 }
 
 func (m model) HeaderView() string {
-	// Pre-compute styles (only done once per render)
 	styles := m.getHeaderStyles()
 
-	// Build tabs based on size
 	tabs := m.buildHeaderTabs(styles)
 
-	// Create and render table
 	headerTable := table.New().
 		Border(lipgloss.NormalBorder()).
 		BorderStyle(styles.borderStyle).

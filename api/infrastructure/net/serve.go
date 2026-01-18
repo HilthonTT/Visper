@@ -256,7 +256,7 @@ func RequestHttp(ctx context.Context, httpMethod string, headerOverride http.Hea
 		all, _ := io.ReadAll(reader)
 		_ = res.Body.Close()
 		msg := string(all)
-		log.Printf(msg)
+		log.Println(msg)
 		return res, fmt.Errorf("http request [%s] failure,status: %d response:%s", URL, res.StatusCode, msg)
 	}
 	return res, nil

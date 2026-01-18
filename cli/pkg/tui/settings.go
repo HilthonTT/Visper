@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,15 +11,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hilthontt/visper/cli/pkg/settings_manager"
+	"github.com/hilthontt/visper/cli/pkg/tui/embeds"
 )
 
 const (
 	waifu1 = 1
 	waifu2 = 2
 )
-
-//go:embed waifus.json
-var waifusData embed.FS
 
 type WaifuOption struct {
 	ID          int    `json:"id"`
@@ -34,7 +31,7 @@ type settingsState struct {
 }
 
 func LoadWaifus() []WaifuOption {
-	data, err := waifusData.ReadFile("waifus.json")
+	data, err := embeds.WaifusData.ReadFile("waifus.json")
 	if err != nil {
 		log.Fatalf("Failed to read embedded file: %s", err)
 	}

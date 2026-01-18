@@ -9,12 +9,14 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.10.1
 	github.com/disintegration/imaging v1.6.2
+	github.com/foize/go.sgr v0.0.0-20140220094842-40bdfc98040c
 	github.com/hilthontt/visper/api-sdk v0.0.0-20251217195446-85f9ab80730e
 	github.com/muesli/reflow v0.3.0
 	github.com/muesli/termenv v0.16.0
 	github.com/reinhrst/fzf-lib v0.9.0
 	github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd
 	golang.org/x/image v0.34.0
+	rsc.io/qr v0.2.0
 )
 
 require (

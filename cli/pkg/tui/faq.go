@@ -1,16 +1,13 @@
 package tui
 
 import (
-	"embed"
 	"encoding/json"
 	"log"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/hilthontt/visper/cli/pkg/tui/embeds"
 )
-
-//go:embed faq.json
-var jsonData embed.FS
 
 type FAQ struct {
 	Question string `json:"question"`
@@ -18,7 +15,7 @@ type FAQ struct {
 }
 
 func LoadFaqs() []FAQ {
-	data, err := jsonData.ReadFile("faq.json")
+	data, err := embeds.JsonFaqData.ReadFile("faq.json")
 	if err != nil {
 		log.Fatalf("Failed to read embedded file: %s", err)
 	}

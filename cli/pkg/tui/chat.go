@@ -16,15 +16,11 @@ import (
 	apisdk "github.com/hilthontt/visper/api-sdk"
 	"github.com/hilthontt/visper/api-sdk/option"
 	stringfunction "github.com/hilthontt/visper/cli/pkg/string_function"
+	"github.com/hilthontt/visper/cli/pkg/tui/embeds"
+	"github.com/hilthontt/visper/cli/pkg/tui/validate"
 	"github.com/hilthontt/visper/cli/pkg/utils"
 	"github.com/reinhrst/fzf-lib"
 )
-
-//go:embed waifu.png
-var waifuImage []byte
-
-//go:embed waifu2.png
-var waifu2Image []byte
 
 type chatFocus int
 
@@ -507,7 +503,24 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 			return m, nil
 		case key.Matches(msg, keys.Enter):
 			if m.state.chat.focusedInput == focusMessage && m.state.chat.messageInput.Value() != "" {
+
 				content := m.state.chat.messageInput.Value()
+
+				validator := validate.Compose(
+					validate.NotEmpty("message"),
+					validate.WithinLen(1, 1000, "message"),
+				)
+
+				if err := validator(content); err != nil {
+					m.state.notify = notifyState{
+						open:          true,
+						title:         "Invalid Message",
+						content:       "Messages must be between 1 and 1000 characters",
+						confirmAction: NoAction,
+					}
+					return m, nil
+				}
+
 				m.state.chat.messageInput.SetValue("")
 
 				if m.state.chat.room != nil {
@@ -888,11 +901,11 @@ func (m model) renderRightSidebar(width, height int) string {
 		var img []byte
 		switch userConfig.SelectedWaifu {
 		case waifu1:
-			img = waifuImage
+			img = embeds.WaifuImage
 		case waifu2:
-			img = waifu2Image
+			img = embeds.Waifu2Image
 		default:
-			img = waifuImage
+			img = embeds.WaifuImage
 		}
 		var err error
 		imageContent, err = m.imagePreviewer.ImagePreviewFromBytes(
