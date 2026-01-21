@@ -1,14 +1,18 @@
 package model
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 type Room struct {
-	ID        string        `json:"id"`
-	JoinCode  string        `json:"joinCode"`
-	Owner     User          `json:"owner"`
-	CreatedAt time.Time     `json:"createdAt"`
-	Expiry    time.Duration `json:"expiry"`
-	Members   []User        `json:"members"`
+	ID         string        `json:"id"`
+	JoinCode   string        `json:"joinCode"`
+	SecureCode string        `json:"secureCode"`
+	Owner      User          `json:"owner"`
+	CreatedAt  time.Time     `json:"createdAt"`
+	Expiry     time.Duration `json:"expiry"`
+	Members    []User        `json:"members"`
 }
 
 func (r Room) IsMember(userID string) bool {
@@ -19,4 +23,8 @@ func (r Room) IsMember(userID string) bool {
 	}
 
 	return false
+}
+
+func (r Room) GetQRCodeURL(baseURL string) string {
+	return fmt.Sprintf("%s/join/%s?token=%s", baseURL, r.JoinCode, r.SecureCode)
 }

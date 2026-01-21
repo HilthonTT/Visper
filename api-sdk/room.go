@@ -180,6 +180,7 @@ type UserResponse struct {
 type RoomResponse struct {
 	ID          string         `json:"id"`
 	JoinCode    string         `json:"join_code"`
+	QRCodeURL   string         `json:"qr_code_url"`
 	Owner       UserResponse   `json:"owner"`
 	CreatedAt   time.Time      `json:"created_at"`
 	ExpiresAt   time.Time      `json:"expires_at"`

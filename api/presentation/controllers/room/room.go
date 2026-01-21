@@ -8,6 +8,7 @@ import (
 	"github.com/hilthontt/visper/api/application/usecases/room"
 	"github.com/hilthontt/visper/api/application/usecases/user"
 	"github.com/hilthontt/visper/api/domain/model"
+	"github.com/hilthontt/visper/api/infrastructure/config"
 	"github.com/hilthontt/visper/api/infrastructure/security"
 	"github.com/hilthontt/visper/api/infrastructure/websocket"
 	"github.com/hilthontt/visper/api/presentation/middlewares"
@@ -15,9 +16,11 @@ import (
 
 type RoomController interface {
 	GenerateNewJoinCode(ctx *gin.Context)
+	RegenerateSecureToken(ctx *gin.Context)
 	CreateRoom(ctx *gin.Context)
 	GetRoom(ctx *gin.Context)
 	JoinRoomByJoinCode(ctx *gin.Context)
+	JoinRoomByJoinCodeWithToken(ctx *gin.Context)
 	DeleteRoom(ctx *gin.Context)
 	JoinRoom(ctx *gin.Context)
 	LeaveRoom(ctx *gin.Context)
@@ -30,6 +33,7 @@ type roomController struct {
 	userUsecase   user.UserUseCase
 	wsRoomManager *websocket.RoomManager
 	wsCore        *websocket.Core
+	config        *config.Config
 }
 
 func NewRoomController(
@@ -37,12 +41,14 @@ func NewRoomController(
 	userUsecase user.UserUseCase,
 	wsRoomManager *websocket.RoomManager,
 	wsCore *websocket.Core,
+	config *config.Config,
 ) RoomController {
 	return &roomController{
 		usecase:       usecase,
 		userUsecase:   userUsecase,
 		wsRoomManager: wsRoomManager,
 		wsCore:        wsCore,
+		config:        config,
 	}
 }
 
@@ -571,6 +577,123 @@ func (c *roomController) KickMember(ctx *gin.Context) {
 	})
 }
 
+func (c *roomController) RegenerateSecureToken(ctx *gin.Context) {
+	roomID := ctx.Param("id")
+	if roomID == "" {
+		ctx.JSON(http.StatusBadRequest, ErrorResponse{
+			Error:   "invalid_request",
+			Message: "room ID is required",
+		})
+		return
+	}
+
+	user, exists := middlewares.GetUserFromContext(ctx)
+	if !exists {
+		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "unauthorized",
+			Message: "user not found in context",
+		})
+		return
+	}
+
+	room, err := c.usecase.RegenerateSecureCode(ctx.Request.Context(), user.ID, roomID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if err.Error() == "only the room owner can update the room" {
+			status = http.StatusForbidden
+		} else if err.Error() == "room not found" {
+			status = http.StatusNotFound
+		}
+		ctx.JSON(status, ErrorResponse{
+			Error:   "update_failed",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	ctx.JSON(http.StatusOK, SuccessResponse{
+		Message: "secure token regenerated successfully",
+		Data: map[string]string{
+			"secure_code": room.SecureCode,
+			"qr_code_url": room.GetQRCodeURL(c.config.GetServerAddress()),
+		},
+	})
+}
+
+func (c *roomController) JoinRoomByJoinCodeWithToken(ctx *gin.Context) {
+	var req JoinByCodeWithTokenRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, ErrorResponse{
+			Error:   "invalid_request",
+			Message: middlewares.TranslateValidationError(err),
+		})
+		return
+	}
+
+	room, err := c.usecase.GetByJoinCodeWithSecureToken(ctx.Request.Context(), req.JoinCode, req.SecureToken)
+	if err != nil {
+		status := http.StatusNotFound
+		errorCode := "not_found"
+
+		if err.Error() == "invalid secure token" {
+			status = http.StatusForbidden
+			errorCode = "invalid_token"
+		} else if err.Error() != "room not found with join code: "+req.JoinCode &&
+			err.Error() != "room has expired" {
+			status = http.StatusInternalServerError
+			errorCode = "server_error"
+		}
+
+		ctx.JSON(status, ErrorResponse{
+			Error:   errorCode,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	user, exists := middlewares.GetUserFromContext(ctx)
+	if !exists {
+		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "unauthorized",
+			Message: "user not found in context",
+		})
+		return
+	}
+
+	if req.Username != "" {
+		user.Username = req.Username
+	}
+
+	if err := c.usecase.JoinRoom(ctx.Request.Context(), room.ID, *user); err != nil {
+		status := http.StatusInternalServerError
+		if err.Error() == "room not found" || err.Error() == "room has expired" {
+			status = http.StatusNotFound
+		}
+		ctx.JSON(status, ErrorResponse{
+			Error:   "join_failed",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	if err := security.SetRoomAuth(ctx.Writer, user, room.ID); err != nil {
+		ctx.JSON(http.StatusInternalServerError, ErrorResponse{
+			Error:   "auth_failed",
+			Message: "failed to set authentication",
+		})
+		return
+	}
+
+	joinMessage := websocket.NewMemberJoined(room.ID, websocket.MemberPayload{
+		UserID:   user.ID,
+		Username: user.Username,
+		JoinedAt: time.Now().Format(time.RFC3339),
+	})
+	c.wsCore.Broadcast() <- joinMessage
+
+	ctx.JSON(http.StatusOK, c.toRoomResponse(room, user))
+}
+
 func (c *roomController) toRoomResponse(room *model.Room, currentUser *model.User) RoomResponse {
 	members := make([]UserResponse, len(room.Members))
 	for i, member := range room.Members {
@@ -586,8 +709,9 @@ func (c *roomController) toRoomResponse(room *model.Room, currentUser *model.Use
 	}
 
 	return RoomResponse{
-		ID:       room.ID,
-		JoinCode: room.JoinCode,
+		ID:        room.ID,
+		JoinCode:  room.JoinCode,
+		QRCodeURL: room.GetQRCodeURL(c.config.GetServerAddress()),
 		Owner: UserResponse{
 			ID:       room.Owner.ID,
 			Username: room.Owner.Username,

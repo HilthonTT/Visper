@@ -15,6 +15,8 @@ import (
 
 type RoomUseCase interface {
 	GenerateNewJoinCode(ctx context.Context, userID, id string) (*model.Room, error)
+	RegenerateSecureCode(ctx context.Context, userID, id string) (*model.Room, error)
+	GetByJoinCodeWithSecureToken(ctx context.Context, joinCode, secureCode string) (*model.Room, error)
 	Create(ctx context.Context, owner model.User, expiry time.Duration) (*model.Room, error)
 	GetByID(ctx context.Context, id string) (*model.Room, error)
 	GetByJoinCode(ctx context.Context, joinCode string) (*model.Room, error)
@@ -35,6 +37,72 @@ func NewRoomUseCase(repository repository.RoomRepository, logger *logger.Logger)
 		repository: repository,
 		logger:     logger,
 	}
+}
+
+func (uc *roomUseCase) GetByJoinCodeWithSecureToken(ctx context.Context, joinCode string, secureCode string) (*model.Room, error) {
+	if joinCode == "" {
+		return nil, fmt.Errorf("join code cannot be empty")
+	}
+
+	if secureCode == "" {
+		return nil, fmt.Errorf("secure token cannot be empty")
+	}
+
+	rooms, err := uc.repository.GetAll(ctx)
+	if err != nil {
+		uc.logger.Error("failed to get rooms", zap.Error(err))
+		return nil, fmt.Errorf("failed to search for room: %w", err)
+	}
+
+	for _, room := range rooms {
+		if room.JoinCode == joinCode {
+			if uc.isRoomExpired(room) {
+				uc.logger.Info("room has expired, deleting", zap.String("roomID", room.ID))
+				_ = uc.repository.Delete(ctx, room.ID)
+				return nil, fmt.Errorf("room has expired")
+			}
+
+			if room.SecureCode != secureCode {
+				uc.logger.Warn("invalid secure token provided", zap.String("joinCode", joinCode))
+				return nil, fmt.Errorf("invalid secure token")
+			}
+
+			return room, nil
+		}
+	}
+
+	return nil, fmt.Errorf("room not found with join code: %s", joinCode)
+}
+
+func (uc *roomUseCase) RegenerateSecureCode(ctx context.Context, userID, id string) (*model.Room, error) {
+	if id == "" {
+		return nil, fmt.Errorf("room ID cannot be empty")
+	}
+
+	room, err := uc.repository.GetByID(ctx, id)
+	if err != nil {
+		uc.logger.Error("failed to get room for secure code regeneration", zap.Error(err), zap.String("roomID", id))
+		return nil, fmt.Errorf("failed to get room: %w", err)
+	}
+
+	if room == nil {
+		return nil, fmt.Errorf("room not found")
+	}
+
+	if room.Owner.ID != userID {
+		uc.logger.Warn("unauthorized secure code regeneration attempt", zap.String("roomID", id), zap.String("userID", userID), zap.String("ownerID", room.Owner.ID))
+		return nil, fmt.Errorf("only the room owner can update the room")
+	}
+
+	room.SecureCode = generateSecureCode()
+
+	if err := uc.repository.Update(ctx, room); err != nil {
+		uc.logger.Error("failed to update room", zap.Error(err), zap.String("roomID", id))
+		return nil, fmt.Errorf("failed to update room: %w", err)
+	}
+
+	uc.logger.Info("secure code regenerated", zap.String("roomID", id), zap.String("ownerID", userID))
+	return room, nil
 }
 
 func (uc *roomUseCase) GenerateNewJoinCode(ctx context.Context, userID, id string) (*model.Room, error) {
@@ -298,17 +366,4 @@ func (uc *roomUseCase) isRoomExpired(room *model.Room) bool {
 
 	expiryTime := room.CreatedAt.Add(room.Expiry)
 	return time.Now().After(expiryTime)
-}
-
-func generateJoinCode() string {
-	const charset = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // Exclude similar looking chars
-	const codeLength = 6
-
-	code := make([]byte, codeLength)
-	for i := range code {
-		code[i] = charset[time.Now().UnixNano()%int64(len(charset))]
-		time.Sleep(time.Nanosecond) // Ensure different values for the time
-	}
-
-	return string(code)
 }

@@ -15,6 +15,12 @@ type JoinByCodeRequest struct {
 	Username string `json:"username" binding:"omitempty,max=50"`
 }
 
+type JoinByCodeWithTokenRequest struct {
+	JoinCode    string `json:"join_code" binding:"required"`
+	SecureToken string `json:"secure_token" binding:"required"`
+	Username    string `json:"username"`
+}
+
 type RoomResponse struct {
 	ID          string         `json:"id"`
 	JoinCode    string         `json:"join_code"`
@@ -23,6 +29,7 @@ type RoomResponse struct {
 	ExpiresAt   time.Time      `json:"expires_at"`
 	Members     []UserResponse `json:"members"`
 	CurrentUser UserResponse   `json:"current_user"`
+	QRCodeURL   string         `json:"qr_code_url"`
 }
 
 type UserResponse struct {
