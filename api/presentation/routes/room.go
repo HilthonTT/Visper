@@ -11,6 +11,7 @@ func RoomRoutes(router *gin.RouterGroup, controller room.RoomController) {
 		rooms.POST("", controller.CreateRoom)
 		rooms.GET("/:id", controller.GetRoom)
 		rooms.DELETE("/:id", controller.DeleteRoom)
+		rooms.PUT("/:id/join-code", controller.GenerateNewJoinCode)
 
 		rooms.POST("/join-code", controller.JoinRoomByJoinCode)
 

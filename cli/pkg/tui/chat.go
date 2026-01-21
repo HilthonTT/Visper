@@ -75,6 +75,8 @@ type messageDeleteSubmittedMsg struct {
 	messageID string
 }
 
+type newJoinCodeTimeoutMsg struct{}
+
 func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 	m = m.SwitchPage(chatPage)
 	m.state.chat.room = newRoom
@@ -124,6 +126,7 @@ func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 			wsCtx:                wsCtx,
 			wsCancel:             wsCancel,
 			room:                 newRoom,
+			isRoomOwner:          newRoom.CurrentUser.ID == newRoom.Owner.ID,
 		}
 
 		return m, m.connectWebSocket(newRoom.ID)
@@ -137,6 +140,9 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case newJoinCodeTimeoutMsg:
+		m = m.closeModal()
+		return m, nil
 	case messageDeleteSubmittedMsg:
 		if m.state.chat.room != nil {
 			go func() {
@@ -186,6 +192,13 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 	case wsConnectedMsg:
 		m.state.chat.wsConn = msg.conn
 		return m, m.listenWebSocket()
+
+	case wsRoomUpdatedMsg:
+		m.state.chat.roomCode = msg.joinCode
+		if m.state.chat.wsMsgChan != nil {
+			return m, waitForWSMessage(m.state.chat.wsMsgChan)
+		}
+		return m, nil
 
 	case wsChannelReadyMsg:
 		m.state.chat.wsMsgChan = msg.msgChan
@@ -374,6 +387,32 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 					m = m.closeModal()
 					return m, nil
 				}
+			case NewJoinCodeAction:
+				switch msg.String() {
+				case "y", "Y", "enter":
+					if m.state.chat.room != nil {
+						go func() {
+							opts := []option.RequestOption{}
+							if m.userID != nil && *m.userID != "" {
+								opts = append(opts, option.WithHeader("X-User-ID", *m.userID))
+							}
+
+							err := m.client.Room.GenerateNewJoinCode(
+								m.context,
+								m.state.chat.room.ID,
+								opts...,
+							)
+							if err != nil {
+								log.Printf("Failed to generate new join code: %v", err)
+								return
+							}
+						}()
+					}
+
+					return m, func() tea.Msg {
+						return newJoinCodeTimeoutMsg{}
+					}
+				}
 			case GoBackAction:
 				switch msg.String() {
 				case "y", "Y", "enter":
@@ -469,6 +508,20 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		switch {
 		case key.Matches(msg, keys.BackToMenu):
 			m = m.openWarnModalForLeaveRoom()
+			return m, nil
+		case key.Matches(msg, keys.NewJoinCode):
+			if !m.state.chat.isRoomOwner {
+				m.state.notify = notifyState{
+					open:          true,
+					title:         "Permission Denied",
+					content:       "Only the room owner can generate a new join code",
+					confirmAction: NoAction,
+				}
+				return m, nil
+			}
+
+			m = m.openNewJoinCodeModal()
+
 			return m, nil
 		case key.Matches(msg, keys.ToggleSearch):
 			m.state.chat.searchActive = !m.state.chat.searchActive

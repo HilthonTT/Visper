@@ -23,6 +23,7 @@ type keyMap struct {
 	No           key.Binding
 	ToggleSearch key.Binding
 	BackToMenu   key.Binding
+	NewJoinCode  key.Binding
 
 	// Navigation arrows
 	Left  key.Binding
@@ -90,6 +91,10 @@ var keys = keyMap{
 	ToggleSearch: key.NewBinding(
 		key.WithKeys("ctrl+s"),
 		key.WithHelp("ctrl+s", "toggle search"),
+	),
+	NewJoinCode: key.NewBinding(
+		key.WithKeys("ctrl+n"),
+		key.WithHelp("ctrl+n", "generate new join code"),
 	),
 	BackToMenu: key.NewBinding(
 		key.WithKeys("ctrl+b"),

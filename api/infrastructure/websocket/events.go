@@ -16,4 +16,5 @@ const (
 	Kicked              = "error.kicked"
 
 	RoomDeleted = "room.deleted"
+	RoomUpdated = "room.updated"
 )

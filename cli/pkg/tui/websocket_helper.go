@@ -50,6 +50,10 @@ type wsKickedMsg struct {
 
 type wsRoomDeletedMsg struct{}
 
+type wsRoomUpdatedMsg struct {
+	joinCode string
+}
+
 type wsErrorMsg struct {
 	code    string
 	message string
@@ -266,6 +270,21 @@ func (m model) listenWebSocket() tea.Cmd {
 				case msgChan <- wsRoomDeletedMsg{}:
 				case <-m.state.chat.wsCtx.Done():
 					return
+				}
+
+			case apisdk.RoomUpdated:
+				if data, ok := wsMsg.Data.(map[string]any); ok {
+					joinCode, okJoinCode := getStringField(data, "joinCode", "JoinCode")
+
+					if okJoinCode {
+						select {
+						case msgChan <- wsRoomUpdatedMsg{
+							joinCode: joinCode,
+						}:
+						case <-m.state.chat.wsCtx.Done():
+							return
+						}
+					}
 				}
 
 			case apisdk.ErrorEvent, apisdk.AuthenticationError, apisdk.JoinFailed, apisdk.RateLimited:

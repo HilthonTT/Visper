@@ -14,6 +14,7 @@ import (
 )
 
 type RoomController interface {
+	GenerateNewJoinCode(ctx *gin.Context)
 	CreateRoom(ctx *gin.Context)
 	GetRoom(ctx *gin.Context)
 	JoinRoomByJoinCode(ctx *gin.Context)
@@ -43,6 +44,48 @@ func NewRoomController(
 		wsRoomManager: wsRoomManager,
 		wsCore:        wsCore,
 	}
+}
+
+func (c *roomController) GenerateNewJoinCode(ctx *gin.Context) {
+	roomID := ctx.Param("id")
+	if roomID == "" {
+		ctx.JSON(http.StatusBadRequest, ErrorResponse{
+			Error:   "invalid_request",
+			Message: "room ID is required",
+		})
+		return
+	}
+
+	user, exists := middlewares.GetUserFromContext(ctx)
+	if !exists {
+		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "unauthorized",
+			Message: "user not found in context",
+		})
+		return
+	}
+
+	room, err := c.usecase.GenerateNewJoinCode(ctx.Request.Context(), user.ID, roomID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if err.Error() == "only the room owner can update the room" {
+			status = http.StatusForbidden
+		} else if err.Error() == "room not found" {
+			status = http.StatusNotFound
+		}
+		ctx.JSON(status, ErrorResponse{
+			Error:   "update_failed",
+			Message: err.Error(),
+		})
+		return
+	}
+
+	updatedMessage := websocket.NewRoomUpdated(room.ID, room.JoinCode)
+	c.wsCore.Broadcast() <- updatedMessage
+
+	ctx.JSON(http.StatusOK, SuccessResponse{
+		Message: "room join code regenerated successfully",
+	})
 }
 
 func (c *roomController) CreateRoom(ctx *gin.Context) {

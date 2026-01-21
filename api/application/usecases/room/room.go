@@ -14,6 +14,7 @@ import (
 )
 
 type RoomUseCase interface {
+	GenerateNewJoinCode(ctx context.Context, userID, id string) (*model.Room, error)
 	Create(ctx context.Context, owner model.User, expiry time.Duration) (*model.Room, error)
 	GetByID(ctx context.Context, id string) (*model.Room, error)
 	GetByJoinCode(ctx context.Context, joinCode string) (*model.Room, error)
@@ -34,6 +35,36 @@ func NewRoomUseCase(repository repository.RoomRepository, logger *logger.Logger)
 		repository: repository,
 		logger:     logger,
 	}
+}
+
+func (uc *roomUseCase) GenerateNewJoinCode(ctx context.Context, userID, id string) (*model.Room, error) {
+	if id == "" {
+		return nil, fmt.Errorf("room ID cannot be empty")
+	}
+
+	room, err := uc.repository.GetByID(ctx, id)
+	if err != nil {
+		uc.logger.Error("failed to get room for deletion", zap.Error(err), zap.String("roomID", id))
+		return nil, fmt.Errorf("failed to get room: %w", err)
+	}
+
+	if room == nil {
+		return nil, fmt.Errorf("room not found")
+	}
+
+	if room.Owner.ID != userID {
+		uc.logger.Warn("unauthorized room deletion attempt", zap.String("roomID", id), zap.String("userID", userID), zap.String("ownerID", room.Owner.ID))
+		return nil, fmt.Errorf("only the room owner can update the room")
+	}
+
+	room.JoinCode = generateJoinCode()
+
+	if err := uc.repository.Update(ctx, room); err != nil {
+		uc.logger.Error("failed to get update room", zap.Error(err), zap.String("roomID", id))
+		return nil, fmt.Errorf("failed to update room: %w", err)
+	}
+
+	return room, nil
 }
 
 func (uc *roomUseCase) Create(ctx context.Context, owner model.User, expiry time.Duration) (*model.Room, error) {

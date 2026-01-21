@@ -37,6 +37,11 @@ type RoomDeletedPayload struct {
 	RoomID string `json:"roomid"`
 }
 
+type RoomUpdatedPayload struct {
+	RoomID   string `json:"roomId"`
+	JoinCode string `json:"joinCode"`
+}
+
 func NewMessageReceived(roomID, msgID, content, userID, username, timestamp string) *WSMessage {
 	return &WSMessage{
 		Type:   MessageReceived,
@@ -101,6 +106,17 @@ func NewRoomDeleted(roomID string) *WSMessage {
 		RoomID: roomID,
 		Data: RoomDeletedPayload{
 			RoomID: roomID,
+		},
+	}
+}
+
+func NewRoomUpdated(roomID, joinCode string) *WSMessage {
+	return &WSMessage{
+		Type:   RoomUpdated,
+		RoomID: roomID,
+		Data: RoomUpdatedPayload{
+			RoomID:   roomID,
+			JoinCode: joinCode,
 		},
 	}
 }

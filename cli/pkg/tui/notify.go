@@ -17,6 +17,7 @@ const (
 	PermanentDeleteAction
 	EditMessageAction
 	DeleteMessageAction
+	NewJoinCodeAction
 
 	ModalWidth  = 60
 	ModalHeight = 9
@@ -191,5 +192,16 @@ func (m model) openDeleteMessageModal(messageContent string) model {
 		content:       fmt.Sprintf("Are you sure you want to delete this message?\n\n\"%s\"", displayContent),
 		confirmAction: DeleteMessageAction,
 	}
+	return m
+}
+
+func (m model) openNewJoinCodeModal() model {
+	m.state.notify = notifyState{
+		open:          true,
+		title:         "Generate New Join Code",
+		content:       "Are you sure you want to generate a new join code?\nThe old code will no longer work.",
+		confirmAction: NewJoinCodeAction,
+	}
+
 	return m
 }

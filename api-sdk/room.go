@@ -46,6 +46,19 @@ func (r *RoomService) Get(ctx context.Context, id string, opts ...option.Request
 	return res, err
 }
 
+// Generates a new join code for the room
+func (r *RoomService) GenerateNewJoinCode(ctx context.Context, id string, opts ...option.RequestOption) error {
+	opts = slices.Concat(r.Options, opts)
+	if id == "" {
+		return ErrMissingIDParameter
+	}
+
+	path := fmt.Sprintf("api/v1/rooms/%s/join-code", id)
+	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPut, path, nil, nil, opts...)
+
+	return err
+}
+
 // Delete deletes a room (only owner can delete)
 func (r *RoomService) Delete(ctx context.Context, id string, opts ...option.RequestOption) error {
 	opts = slices.Concat(r.Options, opts)

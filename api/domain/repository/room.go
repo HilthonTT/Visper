@@ -14,4 +14,5 @@ type RoomRepository interface {
 	AddUser(ctx context.Context, roomID string, user model.User) error
 	RemoveUser(ctx context.Context, roomID, userID string) error
 	GetUsers(ctx context.Context, roomID string) ([]string, error)
+	Update(ctx context.Context, room *model.Room) error
 }

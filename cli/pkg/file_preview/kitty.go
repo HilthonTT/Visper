@@ -125,12 +125,12 @@ func (p *ImagePreviewer) renderWithKittyUsingTermCap(
 	pixelsPerColumn := cellSize.PixelsPerColumn
 	pixelsPerRow := cellSize.PixelsPerRow
 
-	slog.Debug("pixelsPerColumn", pixelsPerColumn, "pixelsPerRow", pixelsPerRow)
+	slog.Debug("terminal cell dimensions", "pixelsPerColumn", pixelsPerColumn, "pixelsPerRow", pixelsPerRow)
 
 	imgRatio := float64(originalWidth) / float64(originalHeight)
 	termRatio := float64(maxWidth*pixelsPerColumn) / float64(maxHeight*pixelsPerRow)
 
-	slog.Debug("imgRatio", imgRatio, "termRatio", termRatio)
+	slog.Debug("aspect ratios", "imgRatio", imgRatio, "termRatio", termRatio)
 
 	if imgRatio > termRatio {
 		dstCols := maxWidth

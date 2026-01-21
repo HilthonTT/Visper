@@ -163,3 +163,21 @@ func (r *roomRepository) RemoveUser(ctx context.Context, roomID string, userID s
 
 	return r.client.Set(ctx, roomKey, updatedData, 0).Err()
 }
+
+func (r *roomRepository) Update(ctx context.Context, room *model.Room) error {
+	key := fmt.Sprintf("room:%s", room.ID)
+	exists, err := r.client.Exists(ctx, key).Result()
+	if err != nil {
+		return err
+	}
+	if exists == 0 {
+		return fmt.Errorf("room with id %s does not exist", room.ID)
+	}
+
+	data, err := json.Marshal(room)
+	if err != nil {
+		return err
+	}
+
+	return r.client.Set(ctx, key, data, 0).Err()
+}
