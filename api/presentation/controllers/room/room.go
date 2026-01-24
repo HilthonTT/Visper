@@ -564,7 +564,8 @@ func (c *roomController) KickMember(ctx *gin.Context) {
 		return
 	}
 
-	kickMessage := websocket.NewMemberLeft(roomID, userToKick.ID, userToKick.Username)
+	const reason = "Removed by room owner"
+	kickMessage := websocket.NewErrorKicked(roomID, userToKick.ID, userToKick.Username, reason)
 	c.wsCore.Broadcast() <- kickMessage
 
 	ctx.JSON(http.StatusOK, SuccessResponse{

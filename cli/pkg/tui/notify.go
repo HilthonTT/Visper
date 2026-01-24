@@ -18,6 +18,7 @@ const (
 	EditMessageAction
 	DeleteMessageAction
 	NewJoinCodeAction
+	KickMemberAction
 
 	ModalWidth  = 60
 	ModalHeight = 9
@@ -201,6 +202,17 @@ func (m model) openNewJoinCodeModal() model {
 		title:         "Generate New Join Code",
 		content:       "Are you sure you want to generate a new join code?\nThe old code will no longer work.",
 		confirmAction: NewJoinCodeAction,
+	}
+
+	return m
+}
+
+func (m model) openKickMemberModal(username string) model {
+	m.state.notify = notifyState{
+		open:          true,
+		title:         "Kick Member",
+		content:       fmt.Sprintf("Are you sure you want to kick %s from the room?", username),
+		confirmAction: KickMemberAction,
 	}
 
 	return m

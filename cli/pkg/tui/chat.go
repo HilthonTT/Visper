@@ -50,6 +50,9 @@ type chatState struct {
 	selectedMessageIndex int
 	editingMessageID     string
 
+	// Member kicking
+	selectedKickUserID string
+
 	// Cache for the sidebar image
 	cachedImageContent string
 	cachedImageWidth   int
@@ -76,6 +79,10 @@ type messageDeleteSubmittedMsg struct {
 }
 
 type newJoinCodeTimeoutMsg struct{}
+
+type kickMemberSubmittedMsg struct {
+	userID string
+}
 
 func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 	m = m.SwitchPage(chatPage)
@@ -140,6 +147,28 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case kickMemberSubmittedMsg:
+		if m.state.chat.room != nil {
+			go func() {
+				opts := []option.RequestOption{}
+				if m.userID != nil && *m.userID != "" {
+					opts = append(opts, option.WithHeader("X-User-ID", *m.userID))
+				}
+
+				_, err := m.client.Room.KickMember(
+					m.context,
+					m.state.chat.room.ID,
+					msg.userID,
+					opts...,
+				)
+				if err != nil {
+					log.Printf("Failed to kick member: %v", err)
+				}
+			}()
+
+			m = m.closeModal()
+			return m, nil
+		}
 	case newJoinCodeTimeoutMsg:
 		m = m.closeModal()
 		return m, nil
@@ -297,16 +326,36 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		return m.NewRoomSwitch()
 
 	case wsKickedMsg:
-		m.state.notify = notifyState{
-			open:          true,
-			title:         "Kicked from Room",
-			content:       fmt.Sprintf("You were kicked by %s\nReason: %s", msg.username, msg.reason),
-			confirmAction: NoAction,
+		// Check if I'm the one being kicked
+		if m.userID != nil && *m.userID == msg.userID {
+			m.state.notify = notifyState{
+				open:          true,
+				title:         "Kicked from Room",
+				content:       fmt.Sprintf("You were kicked by %s\nReason: %s", msg.username, msg.reason),
+				confirmAction: NoAction,
+			}
+			return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+				return wsKickTimeoutMsg{}
+			})
 		}
-		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
-			return wsKickTimeoutMsg{}
-		})
 
+		// Someone else was kicked - remove them from participant list
+		for i, p := range m.state.chat.participants {
+			if p.ID == msg.userID {
+				m.state.chat.participants = append(m.state.chat.participants[:i], m.state.chat.participants[i+1:]...)
+				break
+			}
+		}
+
+		m.state.chat.filteredIndices = make([]int, 0)
+		for i := range m.state.chat.participants {
+			m.state.chat.filteredIndices = append(m.state.chat.filteredIndices, i)
+		}
+
+		if m.state.chat.wsMsgChan != nil {
+			return m, waitForWSMessage(m.state.chat.wsMsgChan)
+		}
+		return m, nil
 	case wsRoomDeletedMsg:
 		m.state.notify = notifyState{
 			open:          true,
@@ -412,6 +461,19 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 					return m, func() tea.Msg {
 						return newJoinCodeTimeoutMsg{}
 					}
+				}
+			case KickMemberAction:
+				switch msg.String() {
+				case "y", "Y", "enter":
+					return m, func() tea.Msg {
+						return kickMemberSubmittedMsg{
+							userID: m.state.chat.selectedKickUserID,
+						}
+					}
+				case "n", "N", "esc":
+					m = m.closeModal()
+					m.state.chat.selectedKickUserID = ""
+					return m, nil
 				}
 			case GoBackAction:
 				switch msg.String() {
@@ -553,10 +615,30 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 				m.state.chat.editMode = false
 				m.state.chat.selectedMessageIndex = -1
 			}
-			return m, nil
 		case key.Matches(msg, keys.Enter):
-			if m.state.chat.focusedInput == focusMessage && m.state.chat.messageInput.Value() != "" {
+			if m.state.chat.focusedInput == focusSearch && m.state.chat.searchActive && len(m.state.chat.filteredIndices) == 1 && m.state.chat.isRoomOwner {
+				participantIdx := m.state.chat.filteredIndices[0]
+				if participantIdx >= 0 && participantIdx < len(m.state.chat.participants) {
+					selectedParticipant := m.state.chat.participants[participantIdx]
 
+					// Don't allow kicking yourself
+					if m.userID != nil && selectedParticipant.ID == *m.userID {
+						m.state.notify = notifyState{
+							open:          true,
+							title:         "Cannot Kick Yourself",
+							content:       "You cannot kick yourself from the room",
+							confirmAction: NoAction,
+						}
+						return m, nil
+					}
+
+					m.state.chat.selectedKickUserID = selectedParticipant.ID
+					m = m.openKickMemberModal(selectedParticipant.Username)
+					return m, nil
+				}
+			}
+
+			if m.state.chat.focusedInput == focusMessage && m.state.chat.messageInput.Value() != "" {
 				content := m.state.chat.messageInput.Value()
 
 				validator := validate.Compose(

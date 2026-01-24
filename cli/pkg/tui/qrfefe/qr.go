@@ -46,6 +46,10 @@ func generate(level qr.Level, text string) (string, int, error) {
 }
 
 func addWhiteRow(qrRunes *[]rune, width int) {
+	if qrRunes == nil {
+		return
+	}
+
 	*qrRunes = append(*qrRunes, []rune(sgr.FgWhite+sgr.BgBlack)...)
 	for i := 1; i < width-3; i++ {
 		*qrRunes = append(*qrRunes, '▀')

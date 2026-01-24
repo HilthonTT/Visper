@@ -44,6 +44,7 @@ type wsMemberListMsg struct {
 }
 
 type wsKickedMsg struct {
+	userID   string
 	username string
 	reason   string
 }
@@ -248,12 +249,19 @@ func (m model) listenWebSocket() tea.Cmd {
 
 			case apisdk.Kicked:
 				if data, ok := wsMsg.Data.(map[string]any); ok {
+					userID, okUserID := getStringField(data, "userId", "userID")
 					username, okUsername := getStringField(data, "username", "Username")
-					reason, okReason := getStringField(data, "reason", "Reason")
+					reason, _ := getStringField(data, "reason", "Reason")
 
-					if okUsername && okReason {
+					if reason == "" {
+						reason = "Removed by room owner"
+					}
+
+					if okUsername && okUserID {
+						log.Printf("WS KICKED received - Username: %s, Reason: %s", username, reason)
 						select {
 						case msgChan <- wsKickedMsg{
+							userID:   userID,
 							username: username,
 							reason:   reason,
 						}:
@@ -261,7 +269,7 @@ func (m model) listenWebSocket() tea.Cmd {
 							return
 						}
 					} else {
-						log.Printf("Invalid kicked payload: %+v", data)
+						log.Printf("Invalid kicked payload: %+v (missing username)", data)
 					}
 				}
 
