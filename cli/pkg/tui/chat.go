@@ -462,6 +462,9 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 						return newJoinCodeTimeoutMsg{}
 					}
 				}
+			case ShowQRCodeAction:
+				m = m.closeModal()
+				return m, nil
 			case KickMemberAction:
 				switch msg.String() {
 				case "y", "Y", "enter":
@@ -568,6 +571,9 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		}
 
 		switch {
+		case msg.String() == "ctrl+p":
+			m = m.openQrCodeModal()
+			return m, nil
 		case key.Matches(msg, keys.BackToMenu):
 			m = m.openWarnModalForLeaveRoom()
 			return m, nil

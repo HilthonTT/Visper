@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/hilthontt/visper/cli/pkg/tui/qrfefe"
 )
 
 type ConfirmActionType int
@@ -19,6 +20,7 @@ const (
 	DeleteMessageAction
 	NewJoinCodeAction
 	KickMemberAction
+	ShowQRCodeAction
 
 	ModalWidth  = 60
 	ModalHeight = 9
@@ -29,6 +31,8 @@ type notifyState struct {
 	title         string
 	content       string
 	confirmAction ConfirmActionType
+	qrCode        string
+	qrSize        int
 }
 
 func (m model) openWarnModalForLeaveRoom() model {
@@ -51,6 +55,10 @@ func (m model) closeModal() model {
 func (m model) RenderWarnModal() string {
 	if !m.state.notify.open {
 		return ""
+	}
+
+	if m.state.notify.confirmAction == ShowQRCodeAction {
+		return m.renderQRCodeModal()
 	}
 
 	var buttons string
@@ -128,6 +136,62 @@ func (m model) RenderEditModal() string {
 
 	modalStyle := m.theme.Modal().
 		Width(ModalWidth).
+		Padding(1, 2)
+
+	return modalStyle.Render(modalContent)
+}
+
+func (m model) renderQRCodeModal() string {
+
+	qrModalWidth := m.state.notify.qrSize + 10
+	if qrModalWidth < 40 {
+		qrModalWidth = 40
+	}
+
+	innerWidth := qrModalWidth - 4
+
+	titleStyle := lipgloss.NewStyle().
+		Foreground(m.theme.Accent()).
+		Bold(true).
+		AlignHorizontal(lipgloss.Center).
+		Width(innerWidth)
+
+	title := titleStyle.Render(m.state.notify.title)
+
+	qrCodeStyle := lipgloss.NewStyle().
+		AlignHorizontal(lipgloss.Center).
+		Width(innerWidth)
+
+	qrCode := qrCodeStyle.Render(m.state.notify.qrCode)
+
+	roomCodeStyle := lipgloss.NewStyle().
+		Foreground(m.theme.Accent()).
+		Bold(true).
+		AlignHorizontal(lipgloss.Center).
+		Width(innerWidth)
+
+	roomCodeText := roomCodeStyle.Render(fmt.Sprintf("Room Code: %s", m.state.notify.content))
+
+	hint := lipgloss.NewStyle().
+		Foreground(m.theme.Body()).
+		Faint(true).
+		AlignHorizontal(lipgloss.Center).
+		Width(innerWidth).
+		Render("Press any key to close")
+
+	modalContent := lipgloss.JoinVertical(
+		lipgloss.Center,
+		title,
+		"",
+		qrCode,
+		"",
+		roomCodeText,
+		"",
+		hint,
+	)
+
+	modalStyle := m.theme.Modal().
+		Width(qrModalWidth).
 		Padding(1, 2)
 
 	return modalStyle.Render(modalContent)
@@ -213,6 +277,30 @@ func (m model) openKickMemberModal(username string) model {
 		title:         "Kick Member",
 		content:       fmt.Sprintf("Are you sure you want to kick %s from the room?", username),
 		confirmAction: KickMemberAction,
+	}
+
+	return m
+}
+
+func (m model) openQrCodeModal() model {
+	qrString, qrSize, err := qrfefe.Generate(10, m.state.chat.roomCode)
+	if err != nil {
+		m.state.notify = notifyState{
+			open:          true,
+			title:         "Error",
+			content:       fmt.Sprintf("Failed to generate QR code: %v", err),
+			confirmAction: NoAction,
+		}
+		return m
+	}
+
+	m.state.notify = notifyState{
+		open:          true,
+		title:         "Room QR Code",
+		content:       m.state.chat.roomCode, // Store room code for display
+		confirmAction: ShowQRCodeAction,
+		qrCode:        qrString,
+		qrSize:        qrSize,
 	}
 
 	return m
