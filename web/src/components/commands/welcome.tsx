@@ -7,7 +7,7 @@ import {
   PreNameMobile,
   PreWrapper,
   Seperator,
-} from "../styles/weclome-styled";
+} from "../styles/welcome-styled";
 
 export const Welcome: React.FC = () => {
   return (
@@ -55,10 +55,10 @@ export const Welcome: React.FC = () => {
           =====     ====            
          ====         ===           
          ===           ===          
-         ===           ===  -       
-         ===           === -- --    
-         ===           ===    -     
-      +++++++++++++++++++++++ ---   
+         ===           ===        
+         ===           === 
+         ===           ===    
+      +++++++++++++++++++++++ 
       +++++++++++++++++++++++       
       ++++++++-:..::-++++++++       
       ++++++-...:-:...-++++++       
