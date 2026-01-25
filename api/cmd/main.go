@@ -17,6 +17,9 @@ import (
 )
 
 func main() {
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer shutdownCancel()
+
 	cfg := config.GetConfig()
 	err := sentry.Init(sentry.ClientOptions{
 		Dsn:            cfg.Sentry.Dsn,
@@ -28,7 +31,7 @@ func main() {
 	}
 	defer sentry.Flush(2 * time.Second)
 
-	container, err := dependency.NewContainer()
+	container, err := dependency.NewContainer(shutdownCtx)
 	if err != nil {
 		log.Fatal(fmt.Errorf("failed to initialize dependencies: %w", err))
 	}
@@ -67,9 +70,6 @@ func main() {
 	<-quit
 
 	container.Logger.Info("Shutting down server...")
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shutdownCancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		container.Logger.Fatal("Server forced to shutdown", zap.Error(err))

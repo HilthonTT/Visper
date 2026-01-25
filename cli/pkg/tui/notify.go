@@ -142,11 +142,7 @@ func (m model) RenderEditModal() string {
 }
 
 func (m model) renderQRCodeModal() string {
-
-	qrModalWidth := m.state.notify.qrSize + 10
-	if qrModalWidth < 40 {
-		qrModalWidth = 40
-	}
+	qrModalWidth := max(m.state.notify.qrSize+10, 40)
 
 	innerWidth := qrModalWidth - 4
 
@@ -283,7 +279,7 @@ func (m model) openKickMemberModal(username string) model {
 }
 
 func (m model) openQrCodeModal() model {
-	qrString, qrSize, err := qrfefe.Generate(10, m.state.chat.roomCode)
+	qrString, qrSize, err := qrfefe.Generate(10, m.state.chat.room.QRCodeURL)
 	if err != nil {
 		m.state.notify = notifyState{
 			open:          true,

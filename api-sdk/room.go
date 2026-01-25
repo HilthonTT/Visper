@@ -146,7 +146,6 @@ func (r *RoomService) KickMember(ctx context.Context, roomID, userID string, opt
 }
 
 // Request/Response types
-
 type RoomCreateParams struct {
 	ExpiryHours int `json:"expiry_hours"` // 1 to 168 hours (1 hour to 7 days)
 }

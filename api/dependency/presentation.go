@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin/binding"
 	"github.com/hilthontt/visper/api/infrastructure/cache"
 	"github.com/hilthontt/visper/api/infrastructure/metrics"
+	"github.com/hilthontt/visper/api/presentation/controllers/file"
 	"github.com/hilthontt/visper/api/presentation/controllers/message"
 	"github.com/hilthontt/visper/api/presentation/controllers/room"
 	wsCtrl "github.com/hilthontt/visper/api/presentation/controllers/websocket"
@@ -28,6 +29,7 @@ func (c *Container) initControllers() {
 	c.MessageController = message.NewMessageController(c.MessageUC, c.RoomUC, c.WSRoomManager, c.WSCore)
 	c.RoomController = room.NewRoomController(c.RoomUC, c.UserUC, c.WSRoomManager, c.WSCore, c.Config)
 	c.WebsocketController = wsCtrl.NewWebSocketController(c.RoomUC, c.UserUC, c.WSRoomManager, c.WSCore)
+	c.FilesController = file.NewFilesController(c.FileUC, c.Storage)
 
 	c.Logger.Info("Controllers initialized successfully")
 }
@@ -73,6 +75,7 @@ func (c *Container) SetupRouter() *gin.Engine {
 func (c *Container) registerAPIRoutes(router *gin.Engine) {
 	v1 := router.Group("/api/v1")
 	{
+
 		v1.Use(middlewares.RateLimiterMiddleware(cache.GetRedis(), c.Logger, middlewares.ModerateRateLimiterConfig()))
 		v1.Use(middlewares.ETagMiddleware(c.ETagStore))
 		v1.Use(middlewares.UserMiddleware(c.UserUC, c.Logger))
@@ -93,6 +96,7 @@ func (c *Container) registerAPIRoutes(router *gin.Engine) {
 			c.Next()
 		})
 
+		routes.FilesRoute(v1, c.FilesController, c.Logger)
 		routes.MessageRoutes(v1, c.MessageController)
 		routes.RoomRoutes(v1, c.RoomController)
 		routes.WebsocketRoutes(v1, c.WebsocketController)
@@ -115,6 +119,10 @@ func (c *Container) registerObservabilityRoutes(router *gin.Engine) {
 
 func (c *Container) Shutdown() error {
 	c.Logger.Info("Shutting down dependencies...")
+
+	if c.FileCleanupJob != nil {
+		c.FileCleanupJob.Stop()
+	}
 
 	// Cancel WebSocket context
 	if c.cancel != nil {

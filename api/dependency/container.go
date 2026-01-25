@@ -4,15 +4,19 @@ import (
 	"context"
 	"fmt"
 
+	fileUseCase "github.com/hilthontt/visper/api/application/usecases/file"
 	messageUseCase "github.com/hilthontt/visper/api/application/usecases/message"
 	roomUseCase "github.com/hilthontt/visper/api/application/usecases/room"
 	userUseCase "github.com/hilthontt/visper/api/application/usecases/user"
 	"github.com/hilthontt/visper/api/domain/repository"
 	"github.com/hilthontt/visper/api/infrastructure/cache"
 	"github.com/hilthontt/visper/api/infrastructure/config"
+	"github.com/hilthontt/visper/api/infrastructure/jobs"
 	"github.com/hilthontt/visper/api/infrastructure/logger"
 	"github.com/hilthontt/visper/api/infrastructure/metrics"
+	"github.com/hilthontt/visper/api/infrastructure/storage"
 	"github.com/hilthontt/visper/api/infrastructure/websocket"
+	"github.com/hilthontt/visper/api/presentation/controllers/file"
 	"github.com/hilthontt/visper/api/presentation/controllers/message"
 	"github.com/hilthontt/visper/api/presentation/controllers/room"
 	wsCtrl "github.com/hilthontt/visper/api/presentation/controllers/websocket"
@@ -30,6 +34,7 @@ type Container struct {
 	MessageRepo repository.MessageRepository
 	UserRepo    repository.UserRepository
 	RoomRepo    repository.RoomRepository
+	FileRepo    repository.FileRepository
 
 	WSRoomManager *websocket.RoomManager
 	WSCore        *websocket.Core
@@ -37,18 +42,23 @@ type Container struct {
 	MessageUC messageUseCase.MessageUseCase
 	RoomUC    roomUseCase.RoomUseCase
 	UserUC    userUseCase.UserUseCase
+	FileUC    fileUseCase.FileUseCase
 
 	MessageController   message.MessageController
 	RoomController      room.RoomController
 	WebsocketController wsCtrl.WebSocketController
+	FilesController     file.FilesController
 
 	ETagStore middlewares.ETagStore
+	Storage   *storage.LocalStorage
+
+	FileCleanupJob *jobs.FileCleanupJob
 
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-func NewContainer() (*Container, error) {
+func NewContainer(ctx context.Context) (*Container, error) {
 	c := &Container{}
 
 	c.Config = config.GetConfig()
@@ -77,6 +87,10 @@ func NewContainer() (*Container, error) {
 	c.initMiddleware()
 
 	c.initControllers()
+
+	wsCtx, cancel := context.WithCancel(ctx)
+	c.cancel = cancel
+	c.initBackgroundJobs(wsCtx)
 
 	c.Logger.Info("All dependencies initialized successfully")
 

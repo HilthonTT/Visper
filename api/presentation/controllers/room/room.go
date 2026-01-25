@@ -712,7 +712,7 @@ func (c *roomController) toRoomResponse(room *model.Room, currentUser *model.Use
 	return RoomResponse{
 		ID:        room.ID,
 		JoinCode:  room.JoinCode,
-		QRCodeURL: room.GetQRCodeURL(c.config.GetServerAddress()),
+		QRCodeURL: room.GetQRCodeURL(c.config.GetFrontEndURL()),
 		Owner: UserResponse{
 			ID:       room.Owner.ID,
 			Username: room.Owner.Username,

@@ -28,3 +28,11 @@ func (r Room) IsMember(userID string) bool {
 func (r Room) GetQRCodeURL(baseURL string) string {
 	return fmt.Sprintf("%s/join/%s?token=%s", baseURL, r.JoinCode, r.SecureCode)
 }
+
+func (r Room) HasExpired() bool {
+	if r.Expiry <= 0 {
+		return false
+	}
+
+	return time.Since(r.CreatedAt) > r.Expiry
+}

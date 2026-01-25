@@ -26,6 +26,7 @@ type ServerConfig struct {
 	ExternalPort string
 	RunMode      string
 	Domain       string
+	FrontEndURL  string
 }
 
 type LoggerConfig struct {
@@ -214,4 +215,8 @@ func (c *Config) GetRedisAddress() string {
 
 func (c *Config) GetServerAddress() string {
 	return fmt.Sprintf(":%s", c.Server.InternalPort)
+}
+
+func (c *Config) GetFrontEndURL() string {
+	return c.Server.FrontEndURL
 }

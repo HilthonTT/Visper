@@ -1,10 +1,14 @@
 package dependency
 
 import (
+	"context"
 	"fmt"
+	"time"
 
+	"github.com/hilthontt/visper/api/infrastructure/jobs"
 	"github.com/hilthontt/visper/api/infrastructure/metrics"
 	"github.com/hilthontt/visper/api/infrastructure/metrics/exporters"
+	"github.com/hilthontt/visper/api/infrastructure/storage"
 	"go.uber.org/zap"
 )
 
@@ -45,5 +49,23 @@ func (c *Container) initInfrastructure() error {
 
 	c.Logger.Info("Metrics initialized successfully")
 
+	storage, err := storage.NewLocalStorage()
+	if err != nil {
+		return err
+	}
+	c.Storage = storage
+
 	return nil
+}
+
+func (c *Container) initBackgroundJobs(ctx context.Context) {
+	c.FileCleanupJob = jobs.NewFileCleanupJob(c.FileUC, c.Logger, 6*time.Hour)
+
+	go func() {
+		time.Sleep(2 * time.Second) // Wait for all dependencies to initialize
+		c.Logger.Info("Starting background jobs...")
+		c.FileCleanupJob.Start(ctx)
+	}()
+
+	c.Logger.Info("Background jobs initialized and started successfully")
 }

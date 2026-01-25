@@ -11,6 +11,7 @@ func (c *Container) initRepositories() {
 	c.MessageRepo = repository.NewMessageRepository(redisClient)
 	c.UserRepo = repository.NewUserRepository(redisClient)
 	c.RoomRepo = repository.NewRoomRepository(redisClient, c.UserRepo)
+	c.FileRepo = repository.NewFileRepository(redisClient, c.RoomRepo)
 
 	c.Logger.Info("Repositories initialized successfully")
 }
