@@ -1,7 +1,7 @@
 package model
 
 import (
-	"fmt"
+	"net/url"
 	"time"
 )
 
@@ -16,6 +16,14 @@ type Room struct {
 }
 
 func (r Room) IsMember(userID string) bool {
+	if userID == "" {
+		return false
+	}
+
+	if r.Owner.ID == userID {
+		return true
+	}
+
 	for _, user := range r.Members {
 		if user.ID == userID {
 			return true
@@ -26,7 +34,17 @@ func (r Room) IsMember(userID string) bool {
 }
 
 func (r Room) GetQRCodeURL(baseURL string) string {
-	return fmt.Sprintf("%s/join/%s?token=%s", baseURL, r.JoinCode, r.SecureCode)
+	u, err := url.Parse(baseURL)
+	if err != nil {
+		return ""
+	}
+
+	q := u.Query()
+	q.Set("joinCode", r.JoinCode)
+	q.Set("secureCode", r.SecureCode)
+	u.RawQuery = q.Encode()
+
+	return u.String()
 }
 
 func (r Room) HasExpired() bool {
@@ -34,5 +52,10 @@ func (r Room) HasExpired() bool {
 		return false
 	}
 
-	return time.Since(r.CreatedAt) > r.Expiry
+	expiryTime := r.CreatedAt.Add(r.Expiry)
+	return time.Now().After(expiryTime)
+}
+
+func (r Room) MemberCount() int {
+	return len(r.Members)
 }

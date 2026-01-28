@@ -1,4 +1,4 @@
-import { createContext, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import lodash from "lodash";
 import { argTab } from "@/lib/funcs";
 import {
@@ -13,6 +13,9 @@ import {
 } from "./styles/terminal-styled";
 import { TerminalInfo } from "./terminal-info";
 import { Output } from "./output";
+import type { RootSearchValues } from "@/schemas/root-schema";
+import { useUser } from "@/contexts/user-context";
+import { TerminalProvider } from "@/contexts/terminal-context";
 
 type Command = {
   cmd: string;
@@ -24,6 +27,10 @@ export const commands: Command[] = [
   { cmd: "about", desc: "about Sat Naing", tab: 8 },
   { cmd: "clear", desc: "clear the terminal", tab: 8 },
   { cmd: "echo", desc: "print out anything", tab: 9 },
+  { cmd: "env", desc: "print environment variables", tab: 10 },
+  { cmd: "setuserid", desc: "sets the user id", tab: 4 },
+  { cmd: "setjoincode", desc: "sets the room join code", tab: 2 },
+  { cmd: "setsecurecode", desc: "sets the room secure code", tab: 0 },
   { cmd: "whoami", desc: "about current user", tab: 7 },
   { cmd: "help", desc: "check available commands", tab: 9 },
   { cmd: "history", desc: "view command history", tab: 6 },
@@ -32,24 +39,15 @@ export const commands: Command[] = [
   { cmd: "themes", desc: "check available themes", tab: 7 },
 ];
 
-type Term = {
-  arg: string[];
-  history: string[];
-  rerender: boolean;
-  index: number;
-  clearHistory?: () => void;
-};
+interface TerminalProps {
+  searchParams: RootSearchValues;
+}
 
-export const terminalContext = createContext<Term>({
-  arg: [],
-  history: [],
-  rerender: false,
-  index: 0,
-});
-
-export const Terminal = () => {
+export const Terminal = ({ searchParams }: TerminalProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  const { setJoinCode, setSecureCode } = useUser();
 
   const [inputVal, setInputVal] = useState("");
   const [cmdHistory, setCmdHistory] = useState<string[]>(["welcome"]);
@@ -108,11 +106,9 @@ export const Terminal = () => {
       const returnedHints = argTab(inputVal, setInputVal, setHints, hintsCmds);
       hintsCmds = returnedHints ? [...hintsCmds, ...returnedHints] : hintsCmds;
 
-      // if there are many command to autocomplete
       if (hintsCmds.length > 1) {
         setHints(hintsCmds);
-      } // if only one command to autocomplete
-      else if (hintsCmds.length === 1) {
+      } else if (hintsCmds.length === 1) {
         const currentCmd = lodash.split(inputVal, " ");
         setInputVal(
           currentCmd.length !== 1
@@ -128,7 +124,6 @@ export const Terminal = () => {
       clearHistory();
     }
 
-    // Go previous cmd
     if (e.key === "ArrowUp") {
       if (pointer >= cmdHistory.length) {
         return;
@@ -143,7 +138,6 @@ export const Terminal = () => {
       inputRef?.current?.blur();
     }
 
-    // Go next cmd
     if (e.key === "ArrowDown") {
       if (pointer < 0) {
         return;
@@ -167,6 +161,20 @@ export const Terminal = () => {
       document.removeEventListener("click", handleDivClick);
     };
   }, [containerRef]);
+
+  useEffect(() => {
+    if (searchParams.joinCode) {
+      setJoinCode(searchParams.joinCode);
+    }
+    if (searchParams.secureCode) {
+      setSecureCode(searchParams.secureCode);
+    }
+  }, [
+    searchParams.joinCode,
+    searchParams.secureCode,
+    setJoinCode,
+    setSecureCode,
+  ]);
 
   return (
     <Wrapper data-test-id="terminal-wrapper" ref={containerRef}>
@@ -216,9 +224,9 @@ export const Terminal = () => {
               <span data-testid="input-command">{cmdH}</span>
             </div>
             {validCommand ? (
-              <terminalContext.Provider value={contextValue}>
+              <TerminalProvider value={contextValue}>
                 <Output index={index} cmd={commandArray[0]} />
-              </terminalContext.Provider>
+              </TerminalProvider>
             ) : cmdH === "" ? (
               <Empty />
             ) : (

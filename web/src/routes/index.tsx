@@ -1,13 +1,19 @@
 import GlobalStyle from "@/components/styles/global-style";
 import { Terminal } from "@/components/terminal";
+import { UserProvider } from "@/contexts/user-context";
 import { themeContext, useTheme } from "@/hooks/use-theme";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { DefaultTheme, ThemeProvider } from "styled-components";
+import { useRoomParams } from "@/hooks/use-room-params";
 
-export const Route = createFileRoute("/")({ component: App });
+export const Route = createFileRoute("/")({
+  component: App,
+});
 
 function App() {
+  const [roomParams] = useRoomParams();
+
   const { theme, themeLoaded, setMode } = useTheme();
   const [selectedTheme, setSelectedTheme] = useState(theme);
 
@@ -46,7 +52,7 @@ function App() {
   };
 
   return (
-    <>
+    <UserProvider>
       <h1 className="sr-only" aria-label="Visper Web">
         Visper Web
       </h1>
@@ -55,10 +61,10 @@ function App() {
         <ThemeProvider theme={selectedTheme}>
           <GlobalStyle theme={theme} />
           <themeContext.Provider value={themeSwitcher}>
-            <Terminal />
+            <Terminal searchParams={roomParams} />
           </themeContext.Provider>
         </ThemeProvider>
       )}
-    </>
+    </UserProvider>
   );
 }

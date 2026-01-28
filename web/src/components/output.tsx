@@ -1,5 +1,3 @@
-import { useContext } from "react";
-import { terminalContext } from "./terminal";
 import { OutputContainer, UsageDiv } from "./styles/output-styled";
 import { About } from "./commands/about";
 import { Clear } from "./commands/clear";
@@ -9,6 +7,19 @@ import { History } from "./commands/history";
 import { Welcome } from "./commands/welcome";
 import { GeneralOutput } from "./commands/general-output";
 import { Themes } from "./commands/themes";
+import { SetUserId } from "./commands/set-user-id";
+import { SetSecureCode } from "./commands/set-secure-code";
+import { SetJoinCode } from "./commands/set-join-code";
+import { Env } from "./commands/env";
+import { useTerminal } from "@/contexts/terminal-context";
+
+const specialCmds: readonly string[] = [
+  "themes",
+  "echo",
+  "setuserid",
+  "setsecurecode",
+  "setjoincode",
+];
 
 interface OutputProps {
   index: number;
@@ -16,9 +27,7 @@ interface OutputProps {
 }
 
 export const Output = ({ index, cmd }: OutputProps) => {
-  const { arg } = useContext(terminalContext);
-
-  const specialCmds = ["themes", "echo"];
+  const { arg } = useTerminal();
 
   if (!specialCmds.includes(cmd) && arg.length > 0) {
     return <UsageDiv data-testid="usage-output">Usage: {cmd}</UsageDiv>;
@@ -37,6 +46,10 @@ export const Output = ({ index, cmd }: OutputProps) => {
           themes: <Themes />,
           welcome: <Welcome />,
           whoami: <GeneralOutput>anonymous</GeneralOutput>,
+          setuserid: <SetUserId />,
+          setsecurecode: <SetSecureCode />,
+          setjoincode: <SetJoinCode />,
+          env: <Env />,
         }[cmd]
       }
     </OutputContainer>

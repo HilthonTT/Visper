@@ -2,7 +2,6 @@ import { HeadContent, Scripts, createRootRoute } from "@tanstack/react-router";
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools";
 import { TanStackDevtools } from "@tanstack/react-devtools";
 import { NuqsAdapter } from "nuqs/adapters/tanstack-router";
-
 import appCss from "../styles.css?url";
 
 export const Route = createRootRoute({
@@ -16,13 +15,18 @@ export const Route = createRootRoute({
         content: "width=device-width, initial-scale=1",
       },
       {
-        title: "TanStack Start Starter",
+        title: "Visper",
       },
     ],
     links: [
       {
         rel: "stylesheet",
         href: appCss,
+      },
+      {
+        rel: "icon",
+        type: "image/svg+xml",
+        href: "/logo.svg",
       },
     ],
   }),
@@ -46,6 +50,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
             plugins={[
               {
                 name: "Tanstack Router",
+
                 render: <TanStackRouterDevtoolsPanel />,
               },
             ]}

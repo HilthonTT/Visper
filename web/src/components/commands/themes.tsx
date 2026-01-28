@@ -1,7 +1,6 @@
 import lodash from "lodash";
 import themes from "../styles/themes";
 import { useContext, useEffect } from "react";
-import { terminalContext } from "../terminal";
 import { themeContext } from "@/hooks/use-theme";
 import {
   checkThemeSwitch,
@@ -11,11 +10,12 @@ import {
 import { Usage } from "../usage";
 import { Wrapper } from "../styles/output-styled";
 import { ThemeSpan, ThemesWrapper } from "../styles/themes-styled";
+import { useTerminal } from "@/contexts/terminal-context";
 
 const myThemes = lodash.keys(themes);
 
 export const Themes = () => {
-  const { arg, history, rerender } = useContext(terminalContext);
+  const { arg, history, rerender } = useTerminal();
 
   const themeSwitcher = useContext(themeContext);
   const currentCommand = getCurrentCmdArray(history);

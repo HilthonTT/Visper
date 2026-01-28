@@ -1,9 +1,9 @@
-import { useContext, useEffect } from "react";
-import { terminalContext } from "../terminal";
+import { useEffect } from "react";
 import { UsageDiv } from "../styles/output-styled";
+import { useTerminal } from "@/contexts/terminal-context";
 
 export const Clear = () => {
-  const { arg, clearHistory } = useContext(terminalContext);
+  const { arg, clearHistory } = useTerminal();
 
   useEffect(() => {
     if (arg.length < 1) {
