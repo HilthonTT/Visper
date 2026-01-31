@@ -30,6 +30,7 @@ func (c *Container) initControllers() {
 	c.RoomController = room.NewRoomController(c.RoomUC, c.UserUC, c.WSRoomManager, c.WSCore, c.Config)
 	c.WebsocketController = wsCtrl.NewWebSocketController(c.RoomUC, c.UserUC, c.WSRoomManager, c.WSCore)
 	c.FilesController = file.NewFilesController(c.FileUC, c.Storage)
+	c.UserNotificationController = wsCtrl.NewUserNotificationController(c.UserUC, c.RoomUC, c.NotificationCore)
 
 	c.Logger.Info("Controllers initialized successfully")
 }
@@ -99,7 +100,7 @@ func (c *Container) registerAPIRoutes(router *gin.Engine) {
 		routes.FilesRoute(v1, c.FilesController, c.Logger)
 		routes.MessageRoutes(v1, c.MessageController)
 		routes.RoomRoutes(v1, c.RoomController)
-		routes.WebsocketRoutes(v1, c.WebsocketController)
+		routes.WebsocketRoutes(v1, c.WebsocketController, c.UserNotificationController)
 	}
 }
 

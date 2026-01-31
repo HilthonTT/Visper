@@ -7,13 +7,14 @@ import {
   KeyContainer,
 } from "../styles/help-styled";
 import { commands } from "../terminal";
+import { cn } from "@/lib/utils";
 
 export const Help = () => {
   return (
     <HelpWrapper data-testid="help">
-      {commands.map(({ cmd, desc, tab }) => (
+      {commands.map(({ cmd, desc, tab, special }) => (
         <CmdList key={cmd}>
-          <Cmd>{cmd}</Cmd>
+          <Cmd className={cn(special && "text-amber-500!")}>{cmd}</Cmd>
           {generateTabs(tab)}
           <CmdDesc>- {desc}</CmdDesc>
         </CmdList>

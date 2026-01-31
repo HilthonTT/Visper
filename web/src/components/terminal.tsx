@@ -2,8 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import lodash from "lodash";
 import { argTab } from "@/lib/funcs";
 import {
-  CmdNotFound,
-  Empty,
   Form,
   Hints,
   Input,
@@ -12,31 +10,92 @@ import {
   Wrapper,
 } from "./styles/terminal-styled";
 import { TerminalInfo } from "./terminal-info";
-import { Output } from "./output";
 import type { RootSearchValues } from "@/schemas/root-schema";
 import { useUser } from "@/contexts/user-context";
-import { TerminalProvider } from "@/contexts/terminal-context";
+import { HistoryItem } from "./history-item";
 
 type Command = {
   cmd: string;
   desc: string;
   tab: number;
+  special?: boolean;
 };
 
 export const commands: Command[] = [
-  { cmd: "about", desc: "about Sat Naing", tab: 8 },
-  { cmd: "clear", desc: "clear the terminal", tab: 8 },
-  { cmd: "echo", desc: "print out anything", tab: 9 },
-  { cmd: "env", desc: "print environment variables", tab: 10 },
-  { cmd: "setuserid", desc: "sets the user id", tab: 4 },
-  { cmd: "setjoincode", desc: "sets the room join code", tab: 2 },
-  { cmd: "setsecurecode", desc: "sets the room secure code", tab: 0 },
-  { cmd: "whoami", desc: "about current user", tab: 7 },
-  { cmd: "help", desc: "check available commands", tab: 9 },
-  { cmd: "history", desc: "view command history", tab: 6 },
-  { cmd: "pwd", desc: "print current working directory", tab: 10 },
-  { cmd: "welcome", desc: "display hero section", tab: 6 },
-  { cmd: "themes", desc: "check available themes", tab: 7 },
+  {
+    cmd: "about",
+    desc: "about Sat Naing",
+    tab: 8,
+  },
+  {
+    cmd: "clear",
+    desc: "clear the terminal",
+    tab: 8,
+  },
+  {
+    cmd: "echo",
+    desc: "print out anything",
+    tab: 9,
+  },
+  {
+    cmd: "env",
+    desc: "print environment variables",
+    tab: 10,
+  },
+  {
+    cmd: "setuserid",
+    desc: "sets the user id",
+    tab: 4,
+    special: true,
+  },
+  {
+    cmd: "setjoincode",
+    desc: "sets the room join code",
+    tab: 2,
+    special: true,
+  },
+  {
+    cmd: "setsecurecode",
+    desc: "sets the room secure code",
+    tab: 0,
+    special: true,
+  },
+  {
+    cmd: "joinroom",
+    desc: "joins room with the specified information",
+    tab: 5,
+    special: true,
+  },
+  {
+    cmd: "whoami",
+    desc: "about current user",
+    tab: 7,
+  },
+  {
+    cmd: "help",
+    desc: "check available commands",
+    tab: 9,
+  },
+  {
+    cmd: "history",
+    desc: "view command history",
+    tab: 6,
+  },
+  {
+    cmd: "pwd",
+    desc: "print current working directory",
+    tab: 10,
+  },
+  {
+    cmd: "welcome",
+    desc: "display hero section",
+    tab: 6,
+  },
+  {
+    cmd: "themes",
+    desc: "check available themes",
+    tab: 7,
+  },
 ];
 
 interface TerminalProps {
@@ -60,7 +119,7 @@ export const Terminal = ({ searchParams }: TerminalProps) => {
       setRerender(false);
       setInputVal(e.target.value);
     },
-    [inputVal],
+    [], // Remove inputVal dependency
   );
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
@@ -72,10 +131,10 @@ export const Terminal = ({ searchParams }: TerminalProps) => {
     setPointer(-1);
   };
 
-  const clearHistory = () => {
+  const clearHistory = useCallback(() => {
     setCmdHistory([]);
     setHints([]);
-  };
+  }, []);
 
   const handleDivClick = () => {
     if (inputRef.current) {
@@ -208,33 +267,18 @@ export const Terminal = ({ searchParams }: TerminalProps) => {
       {cmdHistory.map((cmdH, index) => {
         const commandArray = lodash.split(lodash.trim(cmdH), " ");
         const validCommand = lodash.find(commands, { cmd: commandArray[0] });
-        const contextValue = {
-          arg: lodash.drop(commandArray),
-          history: cmdHistory,
-          rerender,
-          index,
-          clearHistory,
-        };
+
         return (
-          <div key={lodash.uniqueId(`${cmdH}_`)}>
-            <div>
-              <TerminalInfo />
-              <MobileBr />
-              <MobileSpan>&#62;</MobileSpan>
-              <span data-testid="input-command">{cmdH}</span>
-            </div>
-            {validCommand ? (
-              <TerminalProvider value={contextValue}>
-                <Output index={index} cmd={commandArray[0]} />
-              </TerminalProvider>
-            ) : cmdH === "" ? (
-              <Empty />
-            ) : (
-              <CmdNotFound data-testid={`not-found-${index}`}>
-                command not found: {cmdH}
-              </CmdNotFound>
-            )}
-          </div>
+          <HistoryItem
+            key={`${cmdH}_${index}`}
+            cmdH={cmdH}
+            index={index}
+            validCommand={validCommand}
+            commandArray={commandArray}
+            cmdHistory={cmdHistory}
+            rerender={rerender}
+            clearHistory={clearHistory}
+          />
         );
       })}
     </Wrapper>

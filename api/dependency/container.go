@@ -36,18 +36,20 @@ type Container struct {
 	RoomRepo    repository.RoomRepository
 	FileRepo    repository.FileRepository
 
-	WSRoomManager *websocket.RoomManager
-	WSCore        *websocket.Core
+	WSRoomManager    *websocket.RoomManager
+	WSCore           *websocket.Core
+	NotificationCore *websocket.NotificationCore
 
 	MessageUC messageUseCase.MessageUseCase
 	RoomUC    roomUseCase.RoomUseCase
 	UserUC    userUseCase.UserUseCase
 	FileUC    fileUseCase.FileUseCase
 
-	MessageController   message.MessageController
-	RoomController      room.RoomController
-	WebsocketController wsCtrl.WebSocketController
-	FilesController     file.FilesController
+	MessageController          message.MessageController
+	RoomController             room.RoomController
+	WebsocketController        wsCtrl.WebSocketController
+	FilesController            file.FilesController
+	UserNotificationController wsCtrl.UserNotificationController
 
 	ETagStore middlewares.ETagStore
 	Storage   *storage.LocalStorage

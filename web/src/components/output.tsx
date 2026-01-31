@@ -12,6 +12,7 @@ import { SetSecureCode } from "./commands/set-secure-code";
 import { SetJoinCode } from "./commands/set-join-code";
 import { Env } from "./commands/env";
 import { useTerminal } from "@/contexts/terminal-context";
+import { JoinRoom } from "./commands/join-room";
 
 const specialCmds: readonly string[] = [
   "themes",
@@ -19,6 +20,7 @@ const specialCmds: readonly string[] = [
   "setuserid",
   "setsecurecode",
   "setjoincode",
+  "joinroom",
 ];
 
 interface OutputProps {
@@ -49,6 +51,7 @@ export const Output = ({ index, cmd }: OutputProps) => {
           setuserid: <SetUserId />,
           setsecurecode: <SetSecureCode />,
           setjoincode: <SetJoinCode />,
+          joinroom: <JoinRoom />,
           env: <Env />,
         }[cmd]
       }
