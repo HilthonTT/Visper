@@ -21,6 +21,7 @@ const (
 	NewJoinCodeAction
 	KickMemberAction
 	ShowQRCodeAction
+	RoomInviteAction
 
 	ModalWidth  = 60
 	ModalHeight = 9
@@ -299,5 +300,15 @@ func (m model) openQrCodeModal() model {
 		qrSize:        qrSize,
 	}
 
+	return m
+}
+
+func (m model) openRoomInviteModal(roomID string) model {
+	m.state.notify = notifyState{
+		open:          true,
+		title:         "Room Invitation",
+		content:       fmt.Sprintf("You've been invited to join room %s\n\nAccept invitation?", roomID),
+		confirmAction: RoomInviteAction,
+	}
 	return m
 }

@@ -85,6 +85,17 @@ type kickMemberSubmittedMsg struct {
 }
 
 func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
+	if m.state.notification.wsCancel != nil {
+		m.state.notification.wsCancel()
+		m.state.notification.wsCancel = nil
+	}
+	if m.state.notification.wsConn != nil {
+		m.state.notification.wsConn.Close()
+		m.state.notification.wsConn = nil
+	}
+	m.state.notification.wsMsgChan = nil
+	m.state.notification.pendingInvite = nil
+
 	m = m.SwitchPage(chatPage)
 	m.state.chat.room = newRoom
 

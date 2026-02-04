@@ -130,7 +130,7 @@ func (c *userNotificationController) NotifySelfRoomInvite(ctx *gin.Context) {
 			"join_code":   joinCode,
 			"secure_code": secureCode,
 			"timestamp":   time.Now().Unix(),
-			"expires_at":  room.Expiry,
+			"expires_at":  room.Expiry.String(),
 		},
 	)
 

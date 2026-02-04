@@ -31,6 +31,8 @@ func DefaultClientOptions() []option.RequestOption {
 	}
 	if o, ok := os.LookupEnv("VISPER_BASE_URL"); ok {
 		defaults = append(defaults, option.WithBaseURL(o))
+	} else {
+		defaults = append(defaults, option.WithBaseURL("http://localhost:5005"))
 	}
 	return defaults
 }

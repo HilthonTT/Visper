@@ -1,6 +1,6 @@
 module github.com/hilthontt/visper/api-sdk
 
-go 1.25.5
+go 1.25.7
 
 require (
 	github.com/tidwall/gjson v1.18.0

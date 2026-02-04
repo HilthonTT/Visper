@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"context"
+
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -14,6 +16,16 @@ type menuState struct {
 func (m model) MenuSwitch() (model, tea.Cmd) {
 	m.state.menu.lastPage = m.page
 	m = m.SwitchPage(menuPage)
+
+	// Reconnect notification WebSocket if we came from chat
+	// (where it was disconnected)
+	if m.state.notification.wsConn == nil && m.userID != nil && *m.userID != "" {
+		ctx, cancel := context.WithCancel(context.Background())
+		m.state.notification.wsCtx = ctx
+		m.state.notification.wsCancel = cancel
+		return m, m.connectNotificationWebSocket()
+	}
+
 	return m, nil
 }
 

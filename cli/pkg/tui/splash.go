@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -72,7 +73,23 @@ func (m model) SplashUpdate(msg tea.Msg) (model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case UserSignedInMsg:
 		m.client = msg.client
-		return m, tea.Batch(m.LoadCmds()...)
+
+		// Connect to notification WebSocket after client is ready
+		var cmds []tea.Cmd
+		cmds = append(cmds, m.LoadCmds()...)
+
+		// Initialize notification context and connect
+		if m.userID != nil && *m.userID != "" {
+			ctx, cancel := context.WithCancel(context.Background())
+			m.state.notification = notificationListenerState{
+				wsCtx:    ctx,
+				wsCancel: cancel,
+			}
+			cmds = append(cmds, m.connectNotificationWebSocket())
+		}
+
+		return m, tea.Batch(cmds...)
+
 	case DelayCompleteMsg:
 		m.state.splash.delay = true
 	case *apisdk.HealthResponse:

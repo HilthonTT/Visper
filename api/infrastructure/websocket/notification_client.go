@@ -22,9 +22,9 @@ type NotificationClient struct {
 }
 
 type NotificationMessage struct {
-	Type    string         `json:"type"`
-	UserID  string         `json:"user_id"`
-	Payload map[string]any `json:"payload"`
+	Type   string         `json:"type"`
+	UserID string         `json:"userId"`
+	Data   map[string]any `json:"data"`
 }
 
 func NewNotificationClient(conn *websocket.Conn, userID, username string) *NotificationClient {
@@ -36,11 +36,11 @@ func NewNotificationClient(conn *websocket.Conn, userID, username string) *Notif
 	}
 }
 
-func NewNotificationMessage(msgType, userID string, payload map[string]any) *NotificationMessage {
+func NewNotificationMessage(msgType, userID string, data map[string]any) *NotificationMessage {
 	return &NotificationMessage{
-		Type:    msgType,
-		UserID:  userID,
-		Payload: payload,
+		Type:   msgType,
+		UserID: userID,
+		Data:   data, // Changed from Payload
 	}
 }
 

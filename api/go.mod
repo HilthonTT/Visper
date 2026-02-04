@@ -1,6 +1,6 @@
 module github.com/hilthontt/visper/api
 
-go 1.25.5
+go 1.25.7
 
 require (
 	github.com/getsentry/sentry-go v0.41.0

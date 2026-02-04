@@ -32,7 +32,7 @@ export const HistoryItem = memo(
   }: HistoryItemProps) => {
     const contextValue = useMemo(
       () => ({
-        arg: lodash.drop(commandArray),
+        arg: [...lodash.drop(commandArray)],
         history: cmdHistory,
         rerender,
         index,
