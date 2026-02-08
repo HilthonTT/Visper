@@ -35,3 +35,7 @@ go.work.sum
 api/infrastructure/config/config-development.yml
 
 web/node_modules
+
+*.pyc
+
+python/models/

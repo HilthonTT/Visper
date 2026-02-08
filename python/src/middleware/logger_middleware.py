@@ -1,4 +1,4 @@
-from datetime import time
+import time
 from typing import Awaitable, Callable, Optional
 import uuid
 import structlog

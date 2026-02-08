@@ -70,7 +70,6 @@ func (uc *userUseCase) GetOrCreateUser(ctx context.Context, id string) (*model.U
 	// Other error occurred
 	uc.logger.Error("failed to get user by ID", zap.Error(err), zap.String("userID", id))
 	return nil, fmt.Errorf("failed to get user: %w", err)
-
 }
 
 func (uc *userUseCase) Create(ctx context.Context, username string) (*model.User, error) {

@@ -1,6 +1,6 @@
 import os
 from enum import Enum
-from pydantic import SecretStr, computed_field
+from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class AppSettings(BaseSettings):
@@ -37,10 +37,13 @@ class ConsoleLoggerSettings(BaseSettings):
 class RedisCacheSettings(BaseSettings):
     REDIS_CACHE_HOST: str = "localhost"
     REDIS_CACHE_PORT: int = 6379
+    REDIS_CACHE_PASSWORD: str | None = None 
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def REDIS_CACHE_URL(self) -> str:
+        if self.REDIS_CACHE_PASSWORD:
+            return f"redis://:{self.REDIS_CACHE_PASSWORD}@{self.REDIS_CACHE_HOST}:{self.REDIS_CACHE_PORT}"
         return f"redis://{self.REDIS_CACHE_HOST}:{self.REDIS_CACHE_PORT}"
 
 class ClientSideCacheSettings(BaseSettings):
@@ -49,14 +52,18 @@ class ClientSideCacheSettings(BaseSettings):
 class RedisQueueSettings(BaseSettings):
     REDIS_QUEUE_HOST: str = "localhost"
     REDIS_QUEUE_PORT: int = 6379
+    REDIS_QUEUE_PASSWORD: str | None = None 
 
 class RedisRateLimiterSettings(BaseSettings):
     REDIS_RATE_LIMIT_HOST: str = "localhost"
     REDIS_RATE_LIMIT_PORT: int = 6379
+    REDIS_RATE_LIMIT_PASSWORD: str | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def REDIS_RATE_LIMIT_URL(self) -> str:
+        if self.REDIS_RATE_LIMIT_PASSWORD:
+            return f"redis://:{self.REDIS_RATE_LIMIT_PASSWORD}@{self.REDIS_RATE_LIMIT_HOST}:{self.REDIS_RATE_LIMIT_PORT}"
         return f"redis://{self.REDIS_RATE_LIMIT_HOST}:{self.REDIS_RATE_LIMIT_PORT}"
     
 class DefaultRateLimitSettings(BaseSettings):
@@ -76,7 +83,11 @@ class CORSSettings(BaseSettings):
     CORS_ORIGINS: list[str] = ["*"]
     CORS_METHODS: list[str] = ["*"]
     CORS_HEADERS: list[str] = ["*"]
-
+    
+class AISettings(BaseSettings):
+    MODEL_CACHE_DIR: str = "./models"
+    ENHANCEMENT_MODEL: str = "google/flan-t5-small"
+    
 class Settings(
     AppSettings,
     RedisCacheSettings,
@@ -88,6 +99,7 @@ class Settings(
     CORSSettings,
     FileLoggerSettings,
     ConsoleLoggerSettings,
+    AISettings,
 ):
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", ".env"),
