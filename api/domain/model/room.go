@@ -6,13 +6,14 @@ import (
 )
 
 type Room struct {
-	ID         string        `json:"id"`
-	JoinCode   string        `json:"joinCode"`
-	SecureCode string        `json:"secureCode"`
-	Owner      User          `json:"owner"`
-	CreatedAt  time.Time     `json:"createdAt"`
-	Expiry     time.Duration `json:"expiry"`
-	Members    []User        `json:"members"`
+	ID            string        `json:"id"`
+	JoinCode      string        `json:"joinCode"`
+	SecureCode    string        `json:"secureCode"`
+	Owner         User          `json:"owner"`
+	CreatedAt     time.Time     `json:"createdAt"`
+	Expiry        time.Duration `json:"expiry"`
+	Members       []User        `json:"members"`
+	EncryptionKey string        `json:"encryption"`
 }
 
 func (r Room) IsMember(userID string) bool {

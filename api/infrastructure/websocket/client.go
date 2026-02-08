@@ -95,11 +95,13 @@ func (c *Client) ReadMessage(core *Core) {
 			Username  string `json:"username"`
 			Timestamp string `json:"timestamp"`
 			UserID    string `json:"userId"`
+			Encrypted bool   `json:"encrypted"`
 		}{
 			Content:   string(raw),
 			Username:  c.Username,
 			Timestamp: now,
 			UserID:    c.ID,
+			Encrypted: false,
 		}
 
 		msg := &WSMessage{

@@ -22,14 +22,15 @@ type JoinByCodeWithTokenRequest struct {
 }
 
 type RoomResponse struct {
-	ID          string         `json:"id"`
-	JoinCode    string         `json:"join_code"`
-	Owner       UserResponse   `json:"owner"`
-	CreatedAt   time.Time      `json:"created_at"`
-	ExpiresAt   time.Time      `json:"expires_at"`
-	Members     []UserResponse `json:"members"`
-	CurrentUser UserResponse   `json:"current_user"`
-	QRCodeURL   string         `json:"qr_code_url"`
+	ID            string         `json:"id"`
+	JoinCode      string         `json:"join_code"`
+	Owner         UserResponse   `json:"owner"`
+	CreatedAt     time.Time      `json:"created_at"`
+	ExpiresAt     time.Time      `json:"expires_at"`
+	Members       []UserResponse `json:"members"`
+	CurrentUser   UserResponse   `json:"current_user"`
+	QRCodeURL     string         `json:"qr_code_url"`
+	EncryptionKey string         `json:"encryption_key"`
 }
 
 type UserResponse struct {

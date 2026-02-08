@@ -3,11 +3,13 @@ package message
 import "time"
 
 type SendMessageRequest struct {
-	Content string `json:"content" binding:"required,max=1000"`
+	Content   string `json:"content" binding:"required,max=1000"`
+	Encrypted bool   `json:"encrypted"`
 }
 
 type UpdateMessageRequest struct {
-	Content string `json:"content" binding:"required,max=1000"`
+	Content   string `json:"content" binding:"required,max=1000"`
+	Encrypted bool   `json:"encrypted"`
 }
 
 type MessageResponse struct {
@@ -16,6 +18,7 @@ type MessageResponse struct {
 	UserID    string    `json:"user_id"`
 	Username  string    `json:"username"`
 	Content   string    `json:"content"`
+	Encrypted bool      `json:"encrypted"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -39,6 +42,7 @@ type MessageUpdatedResponse struct {
 	Success   bool   `json:"success"`
 	MessageID string `json:"message_id"`
 	Content   string `json:"content"`
+	Encrypted bool   `json:"encrypted"`
 }
 
 type MessageDeletedResponse struct {

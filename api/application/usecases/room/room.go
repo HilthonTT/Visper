@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hilthontt/visper/api/domain/model"
 	"github.com/hilthontt/visper/api/domain/repository"
+	"github.com/hilthontt/visper/api/infrastructure/crypto"
 	"github.com/hilthontt/visper/api/infrastructure/logger"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -136,14 +137,20 @@ func (uc *roomUseCase) GenerateNewJoinCode(ctx context.Context, userID, id strin
 }
 
 func (uc *roomUseCase) Create(ctx context.Context, owner model.User, expiry time.Duration) (*model.Room, error) {
+	encryptionKey, err := crypto.GenerateKeyBase64()
+	if err != nil {
+		return nil, err
+	}
+
 	room := &model.Room{
-		ID:         uuid.NewString(),
-		JoinCode:   generateJoinCode(),
-		Owner:      owner,
-		CreatedAt:  time.Now(),
-		Expiry:     expiry,
-		Members:    []model.User{owner}, // Add the owner as a member for the room (as he technically is)
-		SecureCode: generateSecureCode(),
+		ID:            uuid.NewString(),
+		JoinCode:      generateJoinCode(),
+		Owner:         owner,
+		CreatedAt:     time.Now(),
+		Expiry:        expiry,
+		Members:       []model.User{owner}, // Add the owner as a member for the room (as he technically is)
+		SecureCode:    generateSecureCode(),
+		EncryptionKey: encryptionKey,
 	}
 
 	if err := uc.repository.Create(ctx, room); err != nil {

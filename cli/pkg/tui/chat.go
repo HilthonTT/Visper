@@ -99,6 +99,10 @@ func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 	m = m.SwitchPage(chatPage)
 	m.state.chat.room = newRoom
 
+	if newRoom.EncryptionKey != "" {
+		m.client.Message.SetEncryptionKey(newRoom.EncryptionKey)
+	}
+
 	if m.state.chat.roomCode == "" {
 		msgInput := textinput.New()
 		msgInput.Placeholder = "Type a message..."
@@ -686,7 +690,8 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 							m.context,
 							m.state.chat.room.ID,
 							apisdk.SendMessageParams{
-								Content: content,
+								Content:   content,
+								Encrypted: true,
 							},
 							opts...,
 						)

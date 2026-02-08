@@ -121,13 +121,26 @@ func (m model) listenWebSocket() tea.Cmd {
 					username, okUsername := getStringField(data, "username", "Username")
 					content, okContent := getStringField(data, "content", "Content")
 
+					encrypted := false
+					if encVal, ok := data["encrypted"].(bool); ok {
+						encrypted = encVal
+					}
+
+					log.Printf("🔍 WS Message Received:")
+					log.Printf("   Content (first 50 chars): %s", content[:min(50, len(content))])
+					log.Printf("   Encrypted flag: %v", encrypted)
+					log.Printf("   Has encryption key: %v", m.state.chat.room != nil && m.state.chat.room.EncryptionKey != "")
+
+					content = m.decryptContent(content, encrypted)
+
 					if okID && okUserID && okUsername && okContent {
 						msg := apisdk.MessageResponse{
-							ID:       id,
-							RoomID:   wsMsg.RoomID,
-							UserID:   userID,
-							Username: username,
-							Content:  content,
+							ID:        id,
+							RoomID:    wsMsg.RoomID,
+							UserID:    userID,
+							Username:  username,
+							Content:   content,
+							Encrypted: encrypted,
 						}
 
 						select {
@@ -144,6 +157,14 @@ func (m model) listenWebSocket() tea.Cmd {
 				if data, ok := wsMsg.Data.(map[string]any); ok {
 					id, idOk := getStringField(data, "id", "ID")
 					content, contentOk := getStringField(data, "content", "content")
+
+					encrypted := false
+					if encVal, ok := data["encrypted"].(bool); ok {
+						encrypted = encVal
+					}
+
+					content = m.decryptContent(content, encrypted)
+
 					if idOk && contentOk {
 						select {
 						case msgChan <- wsMessageUpdatedMsg{messageID: id, content: content}:

@@ -93,11 +93,13 @@ func (c *Core) loadHistory(cl *Client) {
 			Username  string `json:"username"`
 			Timestamp string `json:"timestamp"`
 			UserID    string `json:"userId"`
+			Encrypted bool   `json:"encrypted"`
 		}{
 			Content:   m.Content,
 			Username:  m.Username,
 			Timestamp: m.CreatedAt.Format(time.RFC3339),
 			UserID:    m.UserID,
+			Encrypted: m.Encrypted,
 		}
 
 		hist := &WSMessage{

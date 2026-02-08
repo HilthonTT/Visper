@@ -724,5 +724,6 @@ func (c *roomController) toRoomResponse(room *model.Room, currentUser *model.Use
 			ID:       currentUser.ID,
 			Username: currentUser.Username,
 		},
+		EncryptionKey: room.EncryptionKey,
 	}
 }

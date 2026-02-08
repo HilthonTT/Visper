@@ -12,6 +12,7 @@ type MessagePayload struct {
 	UserID    string `json:"userId"`
 	Username  string `json:"username"`
 	Timestamp string `json:"timestamp"`
+	Encrypted bool   `json:"encrypted"`
 }
 
 type MessageUpdatedPayload struct {
@@ -19,6 +20,7 @@ type MessageUpdatedPayload struct {
 	Content   string `json:"content"`
 	RoomID    string `json:"roomId"`
 	Timestamp string `json:"timestamp"`
+	Encrypted bool   `json:"encrypted"`
 }
 
 type MessageDeletedPayload struct {
@@ -48,7 +50,7 @@ type ErrorKickedPayload struct {
 	Reason   string `json:"reason"`
 }
 
-func NewMessageReceived(roomID, msgID, content, userID, username, timestamp string) *WSMessage {
+func NewMessageReceived(roomID, msgID, content, userID, username, timestamp string, encrypted bool) *WSMessage {
 	return &WSMessage{
 		Type:   MessageReceived,
 		RoomID: roomID,
@@ -58,11 +60,12 @@ func NewMessageReceived(roomID, msgID, content, userID, username, timestamp stri
 			UserID:    userID,
 			Username:  username,
 			Timestamp: timestamp,
+			Encrypted: encrypted,
 		},
 	}
 }
 
-func NewMessageUpdated(roomID, msgID, content, timestamp string) *WSMessage {
+func NewMessageUpdated(roomID, msgID, content, timestamp string, encrypted bool) *WSMessage {
 	return &WSMessage{
 		Type:   MessageUpdated,
 		RoomID: roomID,
@@ -71,6 +74,7 @@ func NewMessageUpdated(roomID, msgID, content, timestamp string) *WSMessage {
 			RoomID:    roomID,
 			Content:   content,
 			Timestamp: timestamp,
+			Encrypted: encrypted,
 		},
 	}
 }

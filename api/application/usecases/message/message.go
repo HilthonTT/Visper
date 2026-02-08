@@ -28,8 +28,8 @@ const (
 
 type MessageUseCase interface {
 	Delete(ctx context.Context, roomID, messageID, userID string) error
-	Update(ctx context.Context, roomID, messageID, userID, content string) error
-	Send(ctx context.Context, roomID, userID, username, content string) (*model.Message, error)
+	Update(ctx context.Context, roomID, messageID, userID, content string, encrypted bool) error
+	Send(ctx context.Context, roomID, userID, username, content string, encrypted bool) (*model.Message, error)
 	GetRoomMessages(ctx context.Context, roomID string, limit int64) ([]*model.Message, error)
 	GetMessagesAfter(ctx context.Context, roomID string, after time.Time, limit int64) ([]*model.Message, error)
 	GetMessageCount(ctx context.Context, roomID string) (int64, error)
@@ -49,7 +49,7 @@ func NewMessageUseCase(repository repository.MessageRepository, logger *logger.L
 	}
 }
 
-func (uc *messageUseCase) Update(ctx context.Context, roomID, messageID, userID, content string) error {
+func (uc *messageUseCase) Update(ctx context.Context, roomID, messageID, userID, content string, encrypted bool) error {
 	if roomID == "" {
 		return fmt.Errorf("room ID cannot be empty")
 	}
@@ -77,6 +77,7 @@ func (uc *messageUseCase) Update(ctx context.Context, roomID, messageID, userID,
 	}
 
 	existingMessage.Content = strings.TrimSpace(content)
+	existingMessage.Encrypted = encrypted
 	existingMessage.UpdatedAt = time.Now()
 
 	if err := uc.repository.Update(ctx, existingMessage); err != nil {
@@ -221,7 +222,14 @@ func (uc *messageUseCase) GetRoomMessages(ctx context.Context, roomID string, li
 	return messages, nil
 }
 
-func (uc *messageUseCase) Send(ctx context.Context, roomID string, userID string, username string, content string) (*model.Message, error) {
+func (uc *messageUseCase) Send(
+	ctx context.Context,
+	roomID string,
+	userID string,
+	username string,
+	content string,
+	encrypted bool,
+) (*model.Message, error) {
 	if roomID == "" {
 		return nil, fmt.Errorf("room ID cannot be empty")
 	}
@@ -243,6 +251,7 @@ func (uc *messageUseCase) Send(ctx context.Context, roomID string, userID string
 		UserID:    userID,
 		Username:  username,
 		Content:   strings.TrimSpace(content),
+		Encrypted: encrypted,
 		CreatedAt: time.Now(),
 	}
 

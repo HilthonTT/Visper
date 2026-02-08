@@ -173,7 +173,7 @@ func (c *messageController) UpdateMessage(ctx *gin.Context) {
 		return
 	}
 
-	err = c.usecase.Update(ctx.Request.Context(), roomID, messageID, user.ID, req.Content)
+	err = c.usecase.Update(ctx.Request.Context(), roomID, messageID, user.ID, req.Content, req.Encrypted)
 	if err != nil {
 		status := http.StatusInternalServerError
 		errorCode := "update_failed"
@@ -199,7 +199,13 @@ func (c *messageController) UpdateMessage(ctx *gin.Context) {
 	}
 
 	now := time.Now()
-	wsMessage := websocket.NewMessageUpdated(roomID, messageID, req.Content, now.String())
+	wsMessage := websocket.NewMessageUpdated(
+		roomID,
+		messageID,
+		req.Content,
+		now.String(),
+		req.Encrypted,
+	)
 	c.wsCore.Broadcast() <- wsMessage
 
 	ctx.JSON(http.StatusOK, MessageUpdatedResponse{
@@ -237,10 +243,9 @@ func (c *messageController) SendMessage(ctx *gin.Context) {
 		return
 	}
 
-	msg, err := c.usecase.Send(ctx.Request.Context(), roomID, user.ID, user.Username, req.Content)
+	msg, err := c.usecase.Send(ctx.Request.Context(), roomID, user.ID, user.Username, req.Content, req.Encrypted)
 	if err != nil {
 		status := http.StatusInternalServerError
-		// Check for validation errors
 		if err.Error() == "message cannot be empty" ||
 			err.Error() == "message cannot contain only whitespace" {
 			status = http.StatusBadRequest
@@ -252,7 +257,15 @@ func (c *messageController) SendMessage(ctx *gin.Context) {
 		return
 	}
 
-	wsMessage := websocket.NewMessageReceived(roomID, msg.ID, msg.Content, msg.UserID, msg.Username, msg.CreatedAt.String())
+	wsMessage := websocket.NewMessageReceived(
+		roomID,
+		msg.ID,
+		msg.Content,
+		msg.UserID,
+		msg.Username,
+		msg.CreatedAt.String(),
+		msg.Encrypted,
+	)
 	c.wsCore.Broadcast() <- wsMessage
 
 	ctx.JSON(http.StatusCreated, c.toMessageResponse(msg))
@@ -401,6 +414,7 @@ func (c *messageController) toMessageResponse(msg *model.Message) MessageRespons
 		Username:  msg.Username,
 		Content:   msg.Content,
 		CreatedAt: msg.CreatedAt,
+		Encrypted: msg.Encrypted,
 	}
 }
 
