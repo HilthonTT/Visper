@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"hash/fnv"
 	"log"
 	"math/rand"
@@ -10,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -73,10 +75,12 @@ func (b *Backend) IncreaseFailCount() int {
 type LoadBalancer struct {
 	backends            []*Backend
 	current             int
+	atomicCurrent       uint32
 	mux                 sync.Mutex
 	healthCheckInterval time.Duration
 	maxFailCount        int
 	strategy            Strategy
+	metrics             *Metrics
 }
 
 // NewLoadBalancer creates a new load balancer
@@ -105,7 +109,7 @@ func NewLoadBalancer(
 		backends[i] = &Backend{
 			URL:          url,
 			Alive:        true,
-			ReverseProxy: httputil.NewSingleHostReverseProxy(url),
+			ReverseProxy: createOptimizedReverseProxy(url),
 			weight:       weights[i],
 		}
 
@@ -144,7 +148,7 @@ func (lb *LoadBalancer) chooseBackendByStrategy(r *http.Request) *Backend {
 
 	switch lb.strategy {
 	case RoundRobin:
-		return lb.roundRobinSelect()
+		return lb.fastRoundRobinSelect()
 	case LeastConnections:
 		return lb.leastConnectionsSelect()
 	case IPHash:
@@ -293,6 +297,21 @@ func getClientIP(r *http.Request) string {
 	return ip
 }
 
+func (lb *LoadBalancer) fastRoundRobinSelect() *Backend {
+	numBackends := len(lb.backends)
+	initialIndex := int(atomic.LoadUint32(&lb.atomicCurrent)) % numBackends
+
+	for i := 0; i < numBackends; i++ {
+		idx := (initialIndex + i) % numBackends
+		if lb.backends[idx].IsAlive() {
+			atomic.StoreUint32(&lb.atomicCurrent, uint32(idx+1))
+			return lb.backends[idx]
+		}
+	}
+
+	return nil
+}
+
 // NextBackend returns the next available backend using round-robin selection
 func (lb *LoadBalancer) NextBackend() *Backend {
 	lb.mux.Lock()
@@ -314,35 +333,137 @@ func (lb *LoadBalancer) NextBackend() *Backend {
 	return nil
 }
 
-// isBackendAlive checks if a backend is alive by establishing a TCP connection
-func isBackendAlive(u *url.URL) bool {
-	timeout := 2 * time.Second
-	conn, err := net.DialTimeout("tcp", u.Host, timeout)
-	if err != nil {
-		log.Printf("Health check failed for %s: %v", u.Host, err)
-		return false
-	}
-	defer conn.Close()
-	return true
-}
-
 // healthCheck performs health checks on all backends
 func (lb *LoadBalancer) healthCheck() {
+	// Create a transport with connection pooling
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   2 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   2 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   3 * time.Second,
+	}
+
 	ticker := time.NewTicker(lb.healthCheckInterval)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		log.Println("Starting health check...")
-		for _, backend := range lb.backends {
-			alive := isBackendAlive(backend.URL)
-			backend.SetAlive(alive)
-			status := "up"
-			if !alive {
-				status = "down"
-			}
-			log.Printf("Backend %s status: %s", backend.URL.Host, status)
+		// Use a worker pool to check health in parallel
+		results := make(chan struct {
+			index int
+			alive bool
+		}, len(lb.backends))
+
+		// Launch goroutines for each backend
+		for i, backend := range lb.backends {
+			go func(i int, backend *Backend) {
+				alive := isBackendAliveHTTP(backend.URL, client)
+				results <- struct {
+					index int
+					alive bool
+				}{i, alive}
+			}(i, backend)
 		}
-		log.Println("Health check completed")
+
+		// Collect results
+		for i := 0; i < len(lb.backends); i++ {
+			result := <-results
+			backend := lb.backends[result.index]
+			backend.SetAlive(result.alive)
+
+			// Update metrics
+			backendLabel := backend.URL.Host
+			if result.alive {
+				lb.metrics.backendUpGauge.WithLabelValues(backendLabel).Set(1)
+			} else {
+				lb.metrics.backendUpGauge.WithLabelValues(backendLabel).Set(0)
+				lb.metrics.backendErrors.WithLabelValues(backendLabel, "health_check").Inc()
+			}
+		}
+	}
+}
+
+// isBackendAliveHTTP checks if a backend is alive by making an HTTP request
+func isBackendAliveHTTP(u *url.URL, client *http.Client) bool {
+	resp, err := client.Get(u.String() + "/health") // Assuming backends have a /health endpoint
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode < 500 // Consider any non-5xx response as alive
+}
+
+// Use a pre-copy buffer pool for proxy operations
+var bufferPool = &bufferPoolAdapter{
+	pool: &sync.Pool{
+		New: func() any {
+			return make([]byte, 32*1024) // 32KB buffers
+		},
+	},
+}
+
+type bufferPoolAdapter struct {
+	pool *sync.Pool
+}
+
+func (b *bufferPoolAdapter) Get() []byte {
+	return b.pool.Get().([]byte)
+}
+
+func (b *bufferPoolAdapter) Put(buf []byte) {
+	b.pool.Put(buf)
+}
+
+// Use an optimized reverse proxy that reuses buffers
+func createOptimizedReverseProxy(target *url.URL) *httputil.ReverseProxy {
+	director := func(req *http.Request) {
+		req.URL.Scheme = target.Scheme
+		req.URL.Host = target.Host
+		req.URL.Path = singleJoiningSlash(target.Path, req.URL.Path)
+
+		// Preserve the Host header if specified
+		if req.Header.Get("Host") == "" {
+			req.Host = target.Host
+		}
+
+		// If the target has query parameters, add them
+		targetQuery := target.RawQuery
+		if targetQuery == "" || req.URL.RawQuery == "" {
+			req.URL.RawQuery = targetQuery + req.URL.RawQuery
+		} else {
+			req.URL.RawQuery = targetQuery + "&" + req.URL.RawQuery
+		}
+	}
+
+	// Create a transport with optimized connection pooling
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   100, // Important for load balancers
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		// Enable HTTP/2 if needed
+		ForceAttemptHTTP2: true,
+	}
+
+	return &httputil.ReverseProxy{
+		Director:   director,
+		Transport:  transport,
+		BufferPool: bufferPool,
 	}
 }
 
@@ -351,43 +472,53 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	backend := lb.chooseBackendByStrategy(r)
 	if backend == nil {
 		http.Error(w, "No available backends", http.StatusServiceUnavailable)
+		lb.metrics.requestCount.WithLabelValues("none", "503", r.Method).Inc()
 		return
 	}
 
-	// Increment connection counter (for least connections strategy)
+	// Track request start time
+	start := time.Now()
+
+	// Increment connection counter
 	backend.mux.Lock()
 	backend.connections++
 	backend.mux.Unlock()
 
-	log.Printf("Forwarding request to: %s", backend.URL.Host)
+	// Update metrics for active connections
+	backendLabel := backend.URL.Host
+	lb.metrics.activeConnections.WithLabelValues(backendLabel).Inc()
 
-	// Wrap the response writer to intercept the response status
-	wrappedWriter := &responseWriterInterceptor{
+	// Create a wrapped response writer to capture the status code
+	wrappedWriter := &metricsResponseWriter{
 		ResponseWriter: w,
 		statusCode:     http.StatusOK,
 	}
 
+	// Forward the request to the backend
+	log.Printf("Forwarding request to: %s", backend.URL.Host)
 	backend.ReverseProxy.ServeHTTP(wrappedWriter, r)
 
-	// Decrement connection counter when request is done
+	// Calculate request duration
+	duration := time.Since(start).Seconds()
+
+	// Decrement connection counter
 	backend.mux.Lock()
 	backend.connections--
 	backend.mux.Unlock()
 
+	// Update metrics for active connections
+	lb.metrics.activeConnections.WithLabelValues(backendLabel).Dec()
+
+	// Update request metrics
+	statusCode := fmt.Sprintf("%d", wrappedWriter.statusCode)
+	lb.metrics.requestCount.WithLabelValues(backendLabel, statusCode, r.Method).Inc()
+	lb.metrics.requestDuration.WithLabelValues(backendLabel).Observe(duration)
+	lb.metrics.backendResponseTime.WithLabelValues(backendLabel).Observe(duration)
+
 	// Reset fail count on successful request
 	if wrappedWriter.statusCode < 500 {
 		backend.ResetFailCount()
+	} else {
+		lb.metrics.backendErrors.WithLabelValues(backendLabel, "response_error").Inc()
 	}
-}
-
-// responseWriterInterceptor wraps http.ResponseWriter to capture the status code
-type responseWriterInterceptor struct {
-	http.ResponseWriter
-	statusCode int
-}
-
-// WriteHeader intercepts the status code
-func (w *responseWriterInterceptor) WriteHeader(statusCode int) {
-	w.statusCode = statusCode
-	w.ResponseWriter.WriteHeader(statusCode)
 }
