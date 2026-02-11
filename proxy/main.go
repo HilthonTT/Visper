@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"os"
 	"time"
@@ -161,7 +160,7 @@ func reloadConfiguration(lb *LoadBalancer, configPath string) error {
 			lb.backends[i] = &Backend{
 				URL:          parsedURL,
 				Alive:        true, // Assume alive until health check
-				ReverseProxy: httputil.NewSingleHostReverseProxy(parsedURL),
+				ReverseProxy: createOptimizedReverseProxy(parsedURL),
 				weight:       weights[i],
 			}
 		}
