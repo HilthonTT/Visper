@@ -58,6 +58,13 @@ type chatState struct {
 	cachedImageWidth   int
 	cachedImageHeight  int
 
+	// Room expiration
+	expiresAt        time.Time
+	timeRemaining    string
+	expirationWarned bool // Track if we've shown the warning
+	expirationCtx    context.Context
+	expirationCancel context.CancelFunc
+
 	room      *apisdk.RoomResponse
 	wsConn    *apisdk.RoomWebSocket
 	wsCtx     context.Context
@@ -83,6 +90,16 @@ type newJoinCodeTimeoutMsg struct{}
 type kickMemberSubmittedMsg struct {
 	userID string
 }
+
+type roomExpirationTickMsg struct {
+	remaining time.Duration
+}
+
+type roomExpiredMsg struct{}
+
+type roomExpirationDismissedMsg struct{}
+
+type roomExpirationRedirectMsg struct{}
 
 func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 	if m.state.notification.wsCancel != nil {
@@ -126,6 +143,7 @@ func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 		}
 
 		wsCtx, wsCancel := context.WithCancel(context.Background())
+		expirationCtx, expirationCancel := context.WithCancel(context.Background())
 
 		m.userID = &newRoom.CurrentUser.ID
 		if m.userID != nil && newRoom != nil {
@@ -147,14 +165,40 @@ func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 			selectedMessageIndex: -1,
 			wsCtx:                wsCtx,
 			wsCancel:             wsCancel,
+			expirationCtx:        expirationCtx,
+			expirationCancel:     expirationCancel,
+			expiresAt:            newRoom.ExpiresAt,
 			room:                 newRoom,
 			isRoomOwner:          newRoom.CurrentUser.ID == newRoom.Owner.ID,
 		}
 
-		return m, m.connectWebSocket(newRoom.ID)
+		return m, tea.Batch(
+			m.connectWebSocket(newRoom.ID),
+			m.startExpirationCountdown(),
+		)
 	}
 
 	return m, nil
+}
+
+func (m model) startExpirationCountdown() tea.Cmd {
+	return func() tea.Msg {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-m.state.chat.expirationCtx.Done():
+				return nil
+			case <-ticker.C:
+				remaining := time.Until(m.state.chat.expiresAt)
+				if remaining <= 0 {
+					return roomExpiredMsg{}
+				}
+				return roomExpirationTickMsg{remaining: remaining}
+			}
+		}
+	}
 }
 
 func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
@@ -162,6 +206,37 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case roomExpirationTickMsg:
+		m.state.chat.timeRemaining = formatDuration(msg.remaining)
+
+		// Show warning at 5 minutes
+		if msg.remaining <= 5*time.Minute && msg.remaining > 4*time.Minute+50*time.Second && !m.state.chat.expirationWarned && !m.state.notify.open {
+			m.state.chat.expirationWarned = true
+			m.state.notify = notifyState{
+				open:          true,
+				title:         "⚠️  Room Expiring Soon",
+				content:       "This room will expire in 5 minutes. All messages will be lost.",
+				confirmAction: NoAction,
+			}
+		}
+
+		return m, m.startExpirationCountdown()
+
+	case roomExpiredMsg:
+		if m.state.chat.expirationCancel != nil {
+			m.state.chat.expirationCancel()
+		}
+
+		m.state.notify = notifyState{
+			open:          true,
+			title:         "Room Expired",
+			content:       "This room has expired. You can continue chatting, but the room will be deleted when all users leave.",
+			confirmAction: RoomExpiredAction,
+		}
+		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
+			return roomExpirationRedirectMsg{}
+		})
+
 	case kickMemberSubmittedMsg:
 		if m.state.chat.room != nil {
 			go func() {
@@ -330,6 +405,15 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		}
 		return m, nil
 
+	case roomExpirationRedirectMsg:
+		m = m.closeModal()
+		m.clearChatState()
+		return m.NewRoomSwitch()
+
+	case roomExpirationDismissedMsg:
+		m = m.closeModal()
+		m.clearChatState()
+		return m.NewRoomSwitch()
 	case wsKickTimeoutMsg:
 		m = m.closeModal()
 		m.clearChatState()
@@ -450,6 +534,13 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 				case "enter", "esc", " ", "o", "O":
 					m = m.closeModal()
 					return m, nil
+				}
+			case RoomExpiredAction:
+				switch msg.String() {
+				case "enter", "esc", " ", "o", "O", "y", "Y":
+					return m, func() tea.Msg {
+						return roomExpirationDismissedMsg{}
+					}
 				}
 			case NewJoinCodeAction:
 				switch msg.String() {
@@ -889,7 +980,26 @@ func (m model) ChatView() string {
 }
 
 func (m model) renderChatHeader() string {
-	roomInfo := fmt.Sprintf("Room: %s", m.state.chat.roomCode)
+	// Room info with expiration timer
+	var roomInfo string
+	if m.state.chat.timeRemaining != "" {
+		timeColor := lipgloss.Color("#10B981") // Green by default
+		remaining := time.Until(m.state.chat.expiresAt)
+
+		if remaining <= 5*time.Minute {
+			timeColor = lipgloss.Color("#EF4444") // Red for < 5 minutes
+		} else if remaining <= 15*time.Minute {
+			timeColor = lipgloss.Color("#F59E0B") // Orange for < 15 minutes
+		}
+
+		timerStyle := m.theme.Base().Foreground(timeColor).Bold(true)
+		roomInfo = fmt.Sprintf("Room: %s | %s",
+			m.state.chat.roomCode,
+			timerStyle.Render(m.state.chat.timeRemaining))
+	} else {
+		roomInfo = fmt.Sprintf("Room: %s", m.state.chat.roomCode)
+	}
+
 	participantCount := fmt.Sprintf("🍣 %d", len(m.state.chat.participants))
 
 	leftPart := m.theme.TextBrand().Bold(true).Render(roomInfo)
@@ -1121,6 +1231,10 @@ func (m *model) clearChatState() {
 
 	if m.state.chat.wsConn != nil {
 		m.state.chat.wsConn.Close()
+	}
+
+	if m.state.chat.expirationCancel != nil {
+		m.state.chat.expirationCancel()
 	}
 
 	m.state.chat.roomCode = ""

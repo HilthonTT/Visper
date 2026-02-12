@@ -22,6 +22,7 @@ const (
 	KickMemberAction
 	ShowQRCodeAction
 	RoomInviteAction
+	RoomExpiredAction
 
 	ModalWidth  = 60
 	ModalHeight = 9
