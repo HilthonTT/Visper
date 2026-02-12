@@ -18,11 +18,7 @@ type DistributedCache struct {
 }
 
 // NewDistributedCache creates a new distributed cache
-func NewDistributedCache(redisAddr, keyPrefix string, localOptions Options) *DistributedCache {
-	redisClient := redis.NewClient(&redis.Options{
-		Addr: redisAddr,
-	})
-
+func NewDistributedCache(redisClient *redis.Client, keyPrefix string, localOptions Options) *DistributedCache {
 	return &DistributedCache{
 		local:       NewCache(localOptions),
 		redis:       redisClient,
@@ -114,6 +110,82 @@ func (dc *DistributedCache) Flush() error {
 	}
 
 	return iter.Err()
+}
+
+// ZAdd adds a member to a sorted set
+func (dc *DistributedCache) ZAdd(ctx context.Context, key string, members ...redis.Z) error {
+	redisKey := dc.keyPrefix + key
+	return dc.redis.ZAdd(ctx, redisKey, members...).Err()
+}
+
+// ZRange returns members from a sorted set by index range
+func (dc *DistributedCache) ZRange(ctx context.Context, key string, start, stop int64) ([]string, error) {
+	redisKey := dc.keyPrefix + key
+	return dc.redis.ZRange(ctx, redisKey, start, stop).Result()
+}
+
+// ZRevRange returns members from a sorted set in reverse order
+func (dc *DistributedCache) ZRevRange(ctx context.Context, key string, start, stop int64) ([]string, error) {
+	redisKey := dc.keyPrefix + key
+	return dc.redis.ZRevRange(ctx, redisKey, start, stop).Result()
+}
+
+// ZRangeByScore returns members from a sorted set by score range
+func (dc *DistributedCache) ZRangeByScore(ctx context.Context, key string, opt *redis.ZRangeBy) ([]string, error) {
+	redisKey := dc.keyPrefix + key
+	return dc.redis.ZRangeByScore(ctx, redisKey, opt).Result()
+}
+
+// ZRem removes members from a sorted set
+func (dc *DistributedCache) ZRem(ctx context.Context, key string, members ...interface{}) error {
+	redisKey := dc.keyPrefix + key
+	return dc.redis.ZRem(ctx, redisKey, members...).Err()
+}
+
+// ZRemRangeByScore removes members from a sorted set by score range
+func (dc *DistributedCache) ZRemRangeByScore(ctx context.Context, key, min, max string) error {
+	redisKey := dc.keyPrefix + key
+	return dc.redis.ZRemRangeByScore(ctx, redisKey, min, max).Err()
+}
+
+// ZCard returns the number of members in a sorted set
+func (dc *DistributedCache) ZCard(ctx context.Context, key string) (int64, error) {
+	redisKey := dc.keyPrefix + key
+	return dc.redis.ZCard(ctx, redisKey).Result()
+}
+
+// SAdd adds members to a set
+func (dc *DistributedCache) SAdd(ctx context.Context, key string, members ...interface{}) error {
+	redisKey := dc.keyPrefix + key
+	return dc.redis.SAdd(ctx, redisKey, members...).Err()
+}
+
+// SRem removes members from a set
+func (dc *DistributedCache) SRem(ctx context.Context, key string, members ...interface{}) error {
+	redisKey := dc.keyPrefix + key
+	return dc.redis.SRem(ctx, redisKey, members...).Err()
+}
+
+// SMembers returns all members of a set
+func (dc *DistributedCache) SMembers(ctx context.Context, key string) ([]string, error) {
+	redisKey := dc.keyPrefix + key
+	return dc.redis.SMembers(ctx, redisKey).Result()
+}
+
+// Pipeline returns a Redis pipeline for batch operations
+func (dc *DistributedCache) Pipeline() redis.Pipeliner {
+	return dc.redis.Pipeline()
+}
+
+// ExecPipeline executes a pipeline with key prefix handling
+func (dc *DistributedCache) ExecPipeline(ctx context.Context, pipe redis.Pipeliner) error {
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// GetRedisKey returns the prefixed Redis key
+func (dc *DistributedCache) GetRedisKey(key string) string {
+	return dc.keyPrefix + key
 }
 
 // Close closes both caches

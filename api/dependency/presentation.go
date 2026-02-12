@@ -139,6 +139,7 @@ func (c *Container) Shutdown() error {
 	}
 
 	cache.CloseRedis()
+	c.DistributedCache.Close()
 
 	if err := c.Logger.Log.Sync(); err != nil {
 		c.Logger.Error("failed to sync logger", zap.Error(err))

@@ -14,6 +14,7 @@ import (
 	"github.com/hilthontt/visper/api/infrastructure/jobs"
 	"github.com/hilthontt/visper/api/infrastructure/logger"
 	"github.com/hilthontt/visper/api/infrastructure/metrics"
+	"github.com/hilthontt/visper/api/infrastructure/profiler"
 	"github.com/hilthontt/visper/api/infrastructure/storage"
 	"github.com/hilthontt/visper/api/infrastructure/websocket"
 	"github.com/hilthontt/visper/api/presentation/controllers/file"
@@ -54,7 +55,9 @@ type Container struct {
 	ETagStore middlewares.ETagStore
 	Storage   *storage.LocalStorage
 
-	FileCleanupJob *jobs.FileCleanupJob
+	FileCleanupJob   *jobs.FileCleanupJob
+	Profiler         *profiler.AdaptiveProfiler
+	DistributedCache *cache.DistributedCache
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -93,6 +96,8 @@ func NewContainer(ctx context.Context) (*Container, error) {
 	wsCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	c.initBackgroundJobs(wsCtx)
+
+	c.initProfile()
 
 	c.Logger.Info("All dependencies initialized successfully")
 

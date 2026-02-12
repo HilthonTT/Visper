@@ -3,11 +3,17 @@ package dependency
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/hilthontt/visper/api/infrastructure/jobs"
 	"github.com/hilthontt/visper/api/infrastructure/metrics"
 	"github.com/hilthontt/visper/api/infrastructure/metrics/exporters"
+	"github.com/hilthontt/visper/api/infrastructure/profiler"
 	"github.com/hilthontt/visper/api/infrastructure/storage"
 	"go.uber.org/zap"
 )
@@ -16,6 +22,8 @@ func (c *Container) initInfrastructure() error {
 	tracerProvider, err := exporters.InitJaegerExporter(c.Config)
 	if err != nil {
 		c.Logger.Error("failed to initialize Jaeger exporter", zap.Error(err))
+		// Use noop tracer provider as fallback
+		c.Logger.Warn("Using noop tracer provider as fallback")
 	} else {
 		c.TracerProvider = tracerProvider
 		c.Logger.Info("Jaeger exporter initialized successfully",
@@ -68,4 +76,103 @@ func (c *Container) initBackgroundJobs(ctx context.Context) {
 	}()
 
 	c.Logger.Info("Background jobs initialized and started successfully")
+}
+
+func (c *Container) initProfile() {
+	profileDir := "/var/log/myapp/profiles"
+	reportDir := "/var/log/myapp/reports"
+
+	// Create report directory
+	if err := os.MkdirAll(reportDir, 0755); err != nil {
+		c.Logger.Error("Failed to create report directory",
+			zap.String("dir", reportDir),
+			zap.Error(err))
+		return
+	}
+
+	// Find all CPU profiles from the last 24 hours
+	yesterday := time.Now().Add(-24 * time.Hour)
+
+	err := filepath.Walk(profileDir, func(path string, info fs.FileInfo, err error) error {
+		if err != nil {
+			c.Logger.Warn("Error accessing path during walk",
+				zap.String("path", path),
+				zap.Error(err))
+			return err
+		}
+
+		// Only process CPU profiles
+		if !strings.HasPrefix(filepath.Base(path), "cpu-") {
+			return nil
+		}
+
+		// Check if the file is recent enough
+		if info.ModTime().Before(yesterday) {
+			c.Logger.Debug("Skipping old profile",
+				zap.String("path", path),
+				zap.Time("modTime", info.ModTime()))
+			return nil
+		}
+
+		c.Logger.Info("Processing CPU profile",
+			zap.String("path", path),
+			zap.Time("modTime", info.ModTime()))
+
+		// Generate SVG for this profile
+		svgPath := filepath.Join(reportDir, strings.TrimSuffix(filepath.Base(path), ".pprof")+".svg")
+		cmd := exec.Command("go", "tool", "pprof", "-svg", path)
+		svg, err := cmd.Output()
+		if err != nil {
+			c.Logger.Error("Failed to generate SVG",
+				zap.String("path", path),
+				zap.String("svgPath", svgPath),
+				zap.Error(err))
+			return nil
+		}
+
+		// Write SVG to file
+		if err = os.WriteFile(svgPath, svg, 0644); err != nil {
+			c.Logger.Error("Failed to write SVG file",
+				zap.String("svgPath", svgPath),
+				zap.Error(err))
+		} else {
+			c.Logger.Info("Generated SVG report", zap.String("path", svgPath))
+		}
+
+		// Also generate a text report
+		txtPath := filepath.Join(reportDir, strings.TrimSuffix(filepath.Base(path), ".pprof")+".txt")
+		cmd = exec.Command("go", "tool", "pprof", "-top", path)
+		txt, err := cmd.Output()
+		if err != nil {
+			c.Logger.Error("Failed to generate text report",
+				zap.String("path", path),
+				zap.String("txtPath", txtPath),
+				zap.Error(err))
+			return nil
+		}
+
+		// Write text report to file
+		if err = os.WriteFile(txtPath, txt, 0644); err != nil {
+			c.Logger.Error("Failed to write text report",
+				zap.String("txtPath", txtPath),
+				zap.Error(err))
+		} else {
+			c.Logger.Info("Generated text report", zap.String("path", txtPath))
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		c.Logger.Error("Error walking profile directory",
+			zap.String("dir", profileDir),
+			zap.Error(err))
+	} else {
+		c.Logger.Info("Profile processing complete",
+			zap.String("profileDir", profileDir),
+			zap.String("reportDir", reportDir))
+	}
+
+	c.Profiler = profiler.NewAdaptiveProfiler(profileDir)
+	c.Profiler.Start(c.ctx)
 }
