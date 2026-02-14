@@ -1,10 +1,10 @@
-
 import json
 import logging
 import time
+import re
 from fastapi import APIRouter, Depends, HTTPException, Request
 from redis import Redis
-from transformers import pipeline
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from ...api.dependencies import get_current_user, rate_limiter_dependency
 from ...core.config import settings
 from ...core.utils.cache import async_get_redis
@@ -15,6 +15,8 @@ router = APIRouter(tags=["ai"])
 
 _model_cache = {}
 _model_load_lock = False
+
+DEFAULT_MODEL_NAME = "Vamsi/T5_Paraphrase_Paws"  
 
 def get_enhancement_model():
     """Get or create text enhancement model instance"""
@@ -27,72 +29,183 @@ def get_enhancement_model():
     try:
         _model_load_lock = True
         
-        model_name = getattr(settings, 'ENHANCEMENT_MODEL', 'google/flan-t5-small')
+        model_name = getattr(settings, 'ENHANCEMENT_MODEL', DEFAULT_MODEL_NAME)
         
-        enhancer = pipeline(
-            'text-generation',
-            model=model_name,
-            device='cpu',  # Use 'cuda' if GPU available
-            model_kwargs={'cache_dir': settings.MODEL_CACHE_DIR}
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name,
+            cache_dir=settings.MODEL_CACHE_DIR
         )
-         
-        enhancer('test message', max_length=50, do_sample=False)
+        model = AutoModelForSeq2SeqLM.from_pretrained(
+            model_name,
+            cache_dir=settings.MODEL_CACHE_DIR
+        )
         
-        _model_cache['enhancer'] = enhancer
+        _model_cache['enhancer'] = {
+            'model': model,
+            'tokenizer': tokenizer,
+            'name': model_name
+        }
+        
+        # Warmup
+        test_input = tokenizer("paraphrase: test message", return_tensors="pt")
+        model.generate(**test_input, max_length=50)
+        
         logger.info(f"Enhancement model loaded: {model_name}")
-        return enhancer
+        return _model_cache['enhancer']
+        
     except Exception as e:
         logger.error(f"Failed to load enhancement model: {e}")
         raise HTTPException(status_code=503, detail="Enhancement model is unavailable")
     finally:
         _model_load_lock = False
+
+def _rule_based_enhancement(message: str, style: str, tone: str) -> str:
+    """
+    Fallback rule-based enhancement when model fails.
+    This is now the PRIMARY method since local models are unreliable.
+    """
+    enhanced = message.strip()
+    
+    if style == "professional":
+        # Comprehensive replacements using regex for word boundaries
+        replacements = {
+            r'\bu\b': 'you',
+            r'\bur\b': 'your',
+            r'\burs\b': 'yours',
+            r'\bplz\b': 'please',
+            r'\bpls\b': 'please',
+            r'\bthx\b': 'thank you',
+            r'\bthanx\b': 'thank you',
+            r'\bty\b': 'thank you',
+            r'\bnp\b': 'no problem',
+            r'\bbro\b': '',
+            r'\bdude\b': '',
+            r'\bman\b': '',
+            r'\bgonna\b': 'going to',
+            r'\bwanna\b': 'want to',
+            r'\bgotta\b': 'have to',
+            r'\bkinda\b': 'kind of',
+            r'\bsorta\b': 'sort of',
+            r'\byeah\b': 'yes',
+            r'\byep\b': 'yes',
+            r'\bnah\b': 'no',
+            r'\bnope\b': 'no',
+            r'\bok\b': 'okay',
+            r'\bk\b': 'okay',
+            r'\bcuz\b': 'because',
+            r'\bcause\b': 'because',
+            r'\btho\b': 'though',
+            r'\bthru\b': 'through',
+            r'\bbtw\b': 'by the way',
+            r'\bidk\b': "I don't know",
+            r'\bimo\b': 'in my opinion',
+            r'\bfyi\b': 'for your information',
+            r'\basap\b': 'as soon as possible',
+            r'\byo\b': 'hello',
+            r'\bhey+\b': 'hello',  # Multiple y's
+        }
         
+        for pattern, replacement in replacements.items():
+            enhanced = re.sub(pattern, replacement, enhanced, flags=re.IGNORECASE)
+        
+        # Remove multiple exclamation/question marks
+        enhanced = re.sub(r'!+', '!', enhanced)
+        enhanced = re.sub(r'\?+', '?', enhanced)
+        
+        # Clean up double spaces from removed words
+        enhanced = re.sub(r'\s+', ' ', enhanced).strip()
+        
+        # Remove comma before empty space (from removed words like "bro, ")
+        enhanced = re.sub(r',\s*,', ',', enhanced)
+        enhanced = re.sub(r',\s*\.', '.', enhanced)
+        enhanced = re.sub(r',\s*\?', '?', enhanced)
+        enhanced = re.sub(r',\s*!', '!', enhanced)
+        
+        # Capitalize first letter
+        if enhanced and enhanced[0].islower():
+            enhanced = enhanced[0].upper() + enhanced[1:]
+        
+        # Add period if missing and doesn't end with punctuation
+        if enhanced and not enhanced[-1] in '.!?':
+            enhanced += '.'
+    
+    elif style == "casual":
+        # Make it more casual (opposite of professional)
+        if not enhanced.endswith(('.', '!', '?')):
+            enhanced += '!'
+    
+    elif style == "concise":
+        # Remove filler words
+        fillers = [
+            r'\blike\b', r'\bjust\b', r'\breally\b', r'\bvery\b', 
+            r'\bactually\b', r'\bbasically\b', r'\bliterally\b',
+            r'\bkind of\b', r'\bsort of\b'
+        ]
+        for filler in fillers:
+            enhanced = re.sub(filler, '', enhanced, flags=re.IGNORECASE)
+        enhanced = re.sub(r'\s+', ' ', enhanced).strip()
+    
+    elif style == "friendly":
+        # Add friendly touch
+        if not enhanced.endswith('!'):
+            enhanced = enhanced.rstrip('.') + '!'
+    
+    # Apply tone modifications
+    if tone == "confident" and style == "professional":
+        # Remove hedging language
+        hedge_words = [r'\bmaybe\b', r'\bperhaps\b', r'\bpossibly\b', r'\bI think\b']
+        for hedge in hedge_words:
+            enhanced = re.sub(hedge, '', enhanced, flags=re.IGNORECASE)
+        enhanced = re.sub(r'\s+', ' ', enhanced).strip()
+    
+    return enhanced
+
 def _build_enhancement_prompt(message: str, style: str, tone: str) -> str:
-    """Build prompt for the enhancement model"""
-    style_instructions = {
-        "professional": "Make this message more professional and formal",
-        "casual": "Make this message more casual and friendly",
-        "concise": "Make this message shorter and more concise",
-        "detailed": "Make this message more detailed and thorough",
-        "friendly": "Make this message warmer and more friendly"
-    }
-    
-    tone_instructions = {
-        "neutral": "with a neutral tone",
-        "confident": "with a confident tone",
-        "empathetic": "with an empathetic tone",
-        "persuasive": "with a persuasive tone"
-    }
-    
-    instruction = f"{style_instructions.get(style, 'Improve this message')} {tone_instructions.get(tone, '')}"
-    
-    prompt = f"{instruction}: {message}"
-    return prompt
+    """Build prompt for paraphrasing model"""
+    # The Vamsi/T5_Paraphrase_Paws model expects "paraphrase: " prefix
+    # We'll preprocess the message first with rules, then paraphrase
+    preprocessed = _rule_based_enhancement(message, style, tone)
+    return f"paraphrase: {preprocessed}"
 
 def _analyze_improvements(original: str, enhanced: str, style: str, tone: str) -> list[str]:
     """Analyze what improvements were made"""
     improvements = []
     
-    if len(enhanced) > len(original):
+    if enhanced.lower() == original.lower():
+        improvements.append(f"Applied {style} style")
+        improvements.append(f"Used {tone} tone")
+        return improvements
+    
+    if len(enhanced) > len(original) * 1.2:
         improvements.append("Expanded message with more detail")
-    elif len(enhanced) < len(original):
+    elif len(enhanced) < len(original) * 0.8:
         improvements.append("Made message more concise")
-        
+    
     if enhanced[0].isupper() and not original[0].isupper():
         improvements.append("Capitalized first letter")
     
     if enhanced.endswith(('.', '!', '?')) and not original.endswith(('.', '!', '?')):
         improvements.append("Added proper punctuation")
+    
+    # Check for formal words
+    informal_words = ['u', 'ur', 'plz', 'bro', 'dude', 'gonna', 'wanna', 'gotta', 'yo']
+    removed_informal = any(re.search(rf'\b{word}\b', original.lower()) for word in informal_words) and \
+                      not any(re.search(rf'\b{word}\b', enhanced.lower()) for word in informal_words)
+    
+    if removed_informal:
+        improvements.append("Replaced informal language")
         
     original_words = set(original.lower().split())
     enhanced_words = set(enhanced.lower().split())
     new_words = len(enhanced_words - original_words)
     
-    if new_words > 0:
-        improvements.append(f"Enhanced vocabulary with {new_words} new words")
-        
-    improvements.append(f"Applied {style} style")
-    improvements.append(f"Used {tone} tone")
+    if new_words > 2:
+        improvements.append("Enhanced vocabulary")
+    
+    if style not in [imp.lower() for imp in improvements]:
+        improvements.append(f"Applied {style} style")
+    if tone not in [imp.lower() for imp in improvements]:
+        improvements.append(f"Used {tone} tone")
     
     return improvements
 
@@ -103,33 +216,57 @@ async def _generate_enhancement(
     preserve_intent: bool
 ) -> tuple[str, list[str]]:
     """
-    Generate enhanced message using local model.
+    Generate enhanced message.
+    Strategy: Use rule-based as PRIMARY, optionally enhance with model.
     """
-    model = get_enhancement_model()
     
-    prompt = _build_enhancement_prompt(message, style, tone)
+    # ALWAYS apply rule-based enhancement first
+    enhanced = _rule_based_enhancement(message, style, tone)
     
-    # Generate enhancement
-    result = model(
-        prompt,
-        max_length=150,  # Adjust based on your needs
-        min_length=10,
-        do_sample=True,
-        temperature=0.7,
-        top_p=0.9,
-        num_return_sequences=1
-    )
+    # Only try model enhancement if the message is long enough and complex
+    # (Models work better on longer text)
+    if len(message.split()) >= 5:
+        try:
+            model_data = get_enhancement_model()
+            model = model_data['model']
+            tokenizer = model_data['tokenizer']
+            
+            # Use the rule-enhanced version as input to model
+            prompt = f"paraphrase: {enhanced}"
+            
+            inputs = tokenizer(prompt, return_tensors="pt", max_length=512, truncation=True)
+            
+            outputs = model.generate(
+                **inputs,
+                max_length=150,
+                num_beams=3,
+                early_stopping=True,
+                temperature=0.7,
+                do_sample=False,  # Use greedy for consistency
+            )
+            
+            model_output = tokenizer.decode(outputs[0], skip_special_tokens=True).strip()
+            
+            # Clean model output
+            model_output = model_output.replace("paraphrase:", "").strip()
+            
+            # Only use model output if it's actually better (longer, different, valid)
+            if (model_output and 
+                len(model_output) >= len(message) * 0.7 and
+                model_output.lower() != enhanced.lower() and
+                len(model_output.split()) >= 3):
+                enhanced = model_output
+                
+                # Re-apply style rules to model output (models can be inconsistent)
+                enhanced = _rule_based_enhancement(enhanced, style, tone)
+        
+        except Exception as e:
+            logger.warning(f"Model enhancement failed, using rule-based: {e}")
+            # enhanced is already set to rule-based version
     
-    enhanced = result[0]['generated_text'].strip()
-    
-    # Fallback to original if generation failed
-    if not enhanced or len(enhanced) < 3:
-        enhanced = message
-    
-    # Analyze improvements
     improvements = _analyze_improvements(message, enhanced, style, tone)
-    
     return enhanced, improvements
+
 
 async def _get_cached_enhancement(
     redis: Redis,
@@ -141,7 +278,6 @@ async def _get_cached_enhancement(
     """Get cached enhancement from Redis"""
     import hashlib
     
-    # Create cache key from message + parameters
     cache_content = f"{message}:{style}:{tone}".encode('utf-8')
     message_hash = hashlib.sha256(cache_content).hexdigest()
     cache_key = f"enhance:{user_id}:{message_hash}"
@@ -150,7 +286,6 @@ async def _get_cached_enhancement(
     if cached:
         return json.loads(cached)
     return None
-
 
 async def _cache_enhancement(
     redis: Redis,
@@ -181,20 +316,13 @@ async def enhance_message(
     request: Request,
     req: EnhanceMessageRequest,
     user: dict = Depends(get_current_user),
-    redis: Redis = Depends(rate_limiter_dependency),
+    redis: Redis = Depends(async_get_redis),
     _: None = Depends(rate_limiter_dependency)):
     """
     Enhance message with AI assistance using local model.
-    
-    - **message**: Original message to enhance (5-500 characters)
-    - **style**: Enhancement style (professional, casual, concise, detailed, friendly)
-    - **tone**: Desired tone (neutral, confident, empathetic, persuasive)
-    - **preserve_intent**: Keep original message intent
-    
-    Returns enhanced version with list of improvements made.
     """
     start_time = time.time()
-    user_id = user["id"]
+    user_id = user['id']
     
     try:
         cached = await _get_cached_enhancement(
@@ -273,7 +401,6 @@ async def enhance_message(
             status_code=500,
             detail="Message enhancement failed"
         )
-        
 
 @router.post("/enhance/batch", response_model=dict)
 async def enhance_messages_batch(
@@ -363,8 +490,7 @@ async def enhance_messages_batch(
 async def get_model_info():
     """Get information about the loaded enhancement model"""
     try:
-        model = get_enhancement_model()
-        model_name = getattr(settings, 'ENHANCEMENT_MODEL', 'google/flan-t5-small')
+        model_name = getattr(settings, 'ENHANCEMENT_MODEL', DEFAULT_MODEL_NAME)
         
         return {
             "model": model_name,
@@ -377,4 +503,3 @@ async def get_model_info():
             "status": "error",
             "error": str(e)
         }
-        

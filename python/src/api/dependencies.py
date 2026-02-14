@@ -179,6 +179,7 @@ async def rate_limiter_dependency(
             user_id=user_id,
             limit=limit,
             period=period,
+            path=path,
         )
         if is_limited:
             logger.warning(

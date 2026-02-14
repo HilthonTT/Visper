@@ -86,7 +86,7 @@ class CORSSettings(BaseSettings):
     
 class AISettings(BaseSettings):
     MODEL_CACHE_DIR: str = "./models"
-    ENHANCEMENT_MODEL: str = "google/flan-t5-small"
+    ENHANCEMENT_MODEL: str = "Vamsi/T5_Paraphrase_Paws"
     
 class Settings(
     AppSettings,

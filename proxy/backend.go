@@ -301,7 +301,7 @@ func (lb *LoadBalancer) fastRoundRobinSelect() *Backend {
 	numBackends := len(lb.backends)
 	initialIndex := int(atomic.LoadUint32(&lb.atomicCurrent)) % numBackends
 
-	for i := 0; i < numBackends; i++ {
+	for i := range numBackends {
 		idx := (initialIndex + i) % numBackends
 		if lb.backends[idx].IsAlive() {
 			atomic.StoreUint32(&lb.atomicCurrent, uint32(idx+1))
@@ -402,15 +402,6 @@ func isBackendAliveHTTP(u *url.URL, client *http.Client) bool {
 	return resp.StatusCode < 500 // Consider any non-5xx response as alive
 }
 
-// Use a pre-copy buffer pool for proxy operations
-var bufferPool = &bufferPoolAdapter{
-	pool: &sync.Pool{
-		New: func() any {
-			return make([]byte, 32*1024) // 32KB buffers
-		},
-	},
-}
-
 type bufferPoolAdapter struct {
 	pool *sync.Pool
 }
@@ -442,6 +433,10 @@ func createOptimizedReverseProxy(target *url.URL) *httputil.ReverseProxy {
 		} else {
 			req.URL.RawQuery = targetQuery + "&" + req.URL.RawQuery
 		}
+
+		if _, ok := req.Header["User-Agent"]; !ok {
+			req.Header.Set("User-Agent", "")
+		}
 	}
 
 	// Create a transport with optimized connection pooling
@@ -456,15 +451,28 @@ func createOptimizedReverseProxy(target *url.URL) *httputil.ReverseProxy {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		// Enable HTTP/2 if needed
-		ForceAttemptHTTP2: true,
+		// Disable HTTP/2 for WebSocket support
+		ForceAttemptHTTP2: false,
 	}
 
-	return &httputil.ReverseProxy{
-		Director:   director,
-		Transport:  transport,
-		BufferPool: bufferPool,
+	proxy := &httputil.ReverseProxy{
+		Director:  director,
+		Transport: transport,
+		// BufferPool: bufferPool,
 	}
+
+	//  Add WebSocket upgrade handling
+	proxy.ModifyResponse = func(r *http.Response) error {
+		// Allow WebSocket upgrade responses to pass through
+		return nil
+	}
+
+	return proxy
+}
+
+func isWebSocketRequest(r *http.Request) bool {
+	return strings.ToLower(r.Header.Get("Upgrade")) == "websocket" &&
+		strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade")
 }
 
 // ServeHTTP implements the http.Handler interface
@@ -487,6 +495,18 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Update metrics for active connections
 	backendLabel := backend.URL.Host
 	lb.metrics.activeConnections.WithLabelValues(backendLabel).Inc()
+
+	if isWebSocketRequest(r) {
+		log.Printf("WebSocket upgrade request to: %s", backend.URL.Host)
+
+		// For WebSocket, we need to proxy the raw connection
+		// Just use the reverse proxy - it will handle the upgrade
+		backend.ReverseProxy.ServeHTTP(w, r)
+
+		// Don't track metrics the same way for long-lived connections
+		// The connection counter will be decremented when the WS closes
+		return
+	}
 
 	// Create a wrapped response writer to capture the status code
 	wrappedWriter := &metricsResponseWriter{
@@ -516,7 +536,7 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	lb.metrics.backendResponseTime.WithLabelValues(backendLabel).Observe(duration)
 
 	// Reset fail count on successful request
-	if wrappedWriter.statusCode < 500 {
+	if wrappedWriter.statusCode < http.StatusInternalServerError {
 		backend.ResetFailCount()
 	} else {
 		lb.metrics.backendErrors.WithLabelValues(backendLabel, "response_error").Inc()
