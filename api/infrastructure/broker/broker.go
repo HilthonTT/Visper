@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -104,4 +105,43 @@ func (b *Broker) ListTopics() []string {
 	}
 
 	return topics
+}
+
+func serializeMessage(msg *Message) ([]byte, error) {
+	// Format matches your existing writeMessage:
+	// [size(8)][keySize(4)][timestamp(8)][key][value]
+
+	keyLen := len(msg.Key)
+	valueLen := len(msg.Value)
+
+	// Header size: keySize(4) + timestamp(8) = 12 bytes
+	headerSize := 12
+	totalSize := uint64(headerSize + keyLen + valueLen)
+
+	// Allocate buffer: size prefix + header + key + value
+	buf := make([]byte, 8+totalSize)
+	offset := 0
+
+	// Write total size (8 bytes)
+	binary.BigEndian.PutUint64(buf[offset:], totalSize)
+	offset += 8
+
+	// Write key size (4 bytes)
+	binary.BigEndian.PutUint32(buf[offset:], uint32(keyLen))
+	offset += 4
+
+	// Write timestamp (8 bytes)
+	binary.BigEndian.PutUint64(buf[offset:], uint64(msg.Timestamp.UnixNano()))
+	offset += 8
+
+	// Write key
+	if keyLen > 0 {
+		copy(buf[offset:], msg.Key)
+		offset += keyLen
+	}
+
+	// Write value
+	copy(buf[offset:], msg.Value)
+
+	return buf, nil
 }
