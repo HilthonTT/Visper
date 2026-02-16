@@ -11,6 +11,7 @@ import (
 	"github.com/hilthontt/visper/api/domain/repository"
 	"github.com/hilthontt/visper/api/infrastructure/cache"
 	"github.com/hilthontt/visper/api/infrastructure/config"
+	"github.com/hilthontt/visper/api/infrastructure/events"
 	"github.com/hilthontt/visper/api/infrastructure/jobs"
 	"github.com/hilthontt/visper/api/infrastructure/logger"
 	"github.com/hilthontt/visper/api/infrastructure/metrics"
@@ -59,12 +60,19 @@ type Container struct {
 	Profiler         *profiler.AdaptiveProfiler
 	DistributedCache *cache.DistributedCache
 
+	EventConsumer  *events.EventConsumer
+	EventPublisher *events.EventPublisher
+
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
 func NewContainer(ctx context.Context) (*Container, error) {
 	c := &Container{}
+
+	if err := c.initBroker(); err != nil {
+		return nil, err
+	}
 
 	c.Config = config.GetConfig()
 

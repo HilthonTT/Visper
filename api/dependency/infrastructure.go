@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hilthontt/visper/api/infrastructure/broker"
+	"github.com/hilthontt/visper/api/infrastructure/events"
 	"github.com/hilthontt/visper/api/infrastructure/jobs"
 	"github.com/hilthontt/visper/api/infrastructure/metrics"
 	"github.com/hilthontt/visper/api/infrastructure/metrics/exporters"
@@ -175,4 +177,26 @@ func (c *Container) initProfile() {
 
 	c.Profiler = profiler.NewAdaptiveProfiler(profileDir)
 	c.Profiler.Start(c.ctx)
+}
+
+func (c *Container) initBroker() error {
+	brokerInstance, err := broker.NewBroker("./data/broker")
+	if err != nil {
+		return err
+	}
+
+	eventPublisher, err := events.NewEventPublisher(brokerInstance, "visper-events")
+	if err != nil {
+		return err
+	}
+
+	eventConsumer, err := events.NewEventConsumer(brokerInstance, "visper-consumer-group", "visper-events")
+	if err != nil {
+		return nil
+	}
+
+	c.EventConsumer = eventConsumer
+	c.EventPublisher = eventPublisher
+
+	return nil
 }

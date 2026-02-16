@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -37,6 +38,13 @@ func main() {
 	}
 	defer container.Shutdown()
 
+	var wg sync.WaitGroup
+
+	// Start event consumer in background
+	wg.Go(func() {
+		container.EventConsumer.Start()
+	})
+
 	router := container.SetupRouter()
 
 	srv := &http.Server{
@@ -48,7 +56,7 @@ func main() {
 		MaxHeaderBytes: 1 << 20, // 1 MB
 	}
 
-	go func() {
+	wg.Go(func() {
 		container.Logger.Info("Server starting",
 			zap.String("port", container.Config.Server.ExternalPort),
 			zap.String("mode", container.Config.Server.RunMode),
@@ -56,7 +64,7 @@ func main() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			container.Logger.Fatal("Server failed to start", zap.Error(err))
 		}
-	}()
+	})
 
 	container.Logger.Info("Server started successfully",
 		zap.String("port", container.Config.Server.ExternalPort),
@@ -74,6 +82,10 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		container.Logger.Fatal("Server forced to shutdown", zap.Error(err))
 	}
+
+	container.EventConsumer.Stop()
+
+	wg.Wait()
 
 	container.Logger.Info("Server exited successfully")
 }

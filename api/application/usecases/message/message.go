@@ -3,12 +3,14 @@ package message
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/hilthontt/visper/api/domain/model"
 	"github.com/hilthontt/visper/api/domain/repository"
+	"github.com/hilthontt/visper/api/infrastructure/events"
 	"github.com/hilthontt/visper/api/infrastructure/logger"
 	"go.uber.org/zap"
 )
@@ -38,14 +40,20 @@ type MessageUseCase interface {
 }
 
 type messageUseCase struct {
-	repository repository.MessageRepository
-	logger     *logger.Logger
+	repository     repository.MessageRepository
+	eventPublisher *events.EventPublisher
+	logger         *logger.Logger
 }
 
-func NewMessageUseCase(repository repository.MessageRepository, logger *logger.Logger) MessageUseCase {
+func NewMessageUseCase(
+	repository repository.MessageRepository,
+	eventPublisher *events.EventPublisher,
+	logger *logger.Logger,
+) MessageUseCase {
 	return &messageUseCase{
-		repository: repository,
-		logger:     logger,
+		repository:     repository,
+		eventPublisher: eventPublisher,
+		logger:         logger,
 	}
 }
 
@@ -259,6 +267,13 @@ func (uc *messageUseCase) Send(
 		uc.logger.Error("failed to create message", zap.Error(err), zap.String("roomID", roomID), zap.String("userID", userID))
 		return nil, fmt.Errorf("failed to send message: %w", err)
 	}
+
+	go func() {
+		messageSize := len(message.Content)
+		if err := uc.eventPublisher.PublishMessageSent(roomID, userID, message.ID, messageSize); err != nil {
+			log.Printf("Failed to publish message sent event: %v", err)
+		}
+	}()
 
 	uc.logger.Info("message sent", zap.String("userID", userID), zap.String("roomID", roomID), zap.String("userID", userID), zap.String("username", username))
 	return message, nil

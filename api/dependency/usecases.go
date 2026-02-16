@@ -8,8 +8,8 @@ import (
 )
 
 func (c *Container) initUseCases() {
-	c.MessageUC = messageUseCase.NewMessageUseCase(c.MessageRepo, c.Logger)
-	c.RoomUC = roomUseCase.NewRoomUseCase(c.RoomRepo, c.Logger)
+	c.MessageUC = messageUseCase.NewMessageUseCase(c.MessageRepo, c.EventPublisher, c.Logger)
+	c.RoomUC = roomUseCase.NewRoomUseCase(c.RoomRepo, c.EventPublisher, c.Logger)
 	c.UserUC = userUseCase.NewUserUseCase(c.UserRepo, c.Logger)
 	c.FileUC = fileUseCase.NewFileUseCase(c.FileRepo, c.RoomRepo, c.Storage, c.Config.GetServerAddress())
 

@@ -3,12 +3,14 @@ package room
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/hilthontt/visper/api/domain/model"
 	"github.com/hilthontt/visper/api/domain/repository"
 	"github.com/hilthontt/visper/api/infrastructure/crypto"
+	"github.com/hilthontt/visper/api/infrastructure/events"
 	"github.com/hilthontt/visper/api/infrastructure/logger"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -29,14 +31,20 @@ type RoomUseCase interface {
 }
 
 type roomUseCase struct {
-	repository repository.RoomRepository
-	logger     *logger.Logger
+	repository     repository.RoomRepository
+	eventPublisher *events.EventPublisher
+	logger         *logger.Logger
 }
 
-func NewRoomUseCase(repository repository.RoomRepository, logger *logger.Logger) RoomUseCase {
+func NewRoomUseCase(
+	repository repository.RoomRepository,
+	eventPublisher *events.EventPublisher,
+	logger *logger.Logger,
+) RoomUseCase {
 	return &roomUseCase{
-		repository: repository,
-		logger:     logger,
+		repository:     repository,
+		eventPublisher: eventPublisher,
+		logger:         logger,
 	}
 }
 
@@ -164,6 +172,12 @@ func (uc *roomUseCase) Create(ctx context.Context, owner model.User, expiry time
 		_ = uc.repository.Delete(ctx, room.ID)
 		return nil, fmt.Errorf("failed to add owner to room: %w", err)
 	}
+
+	go func() {
+		if err := uc.eventPublisher.PublishRoomCreated(room.ID, owner.ID, room.Expiry); err != nil {
+			log.Printf("Failed to publish room created event: %v", err)
+		}
+	}()
 
 	uc.logger.Info("room created successfully", zap.String("roomID", room.ID))
 	return room, nil
@@ -335,6 +349,12 @@ func (uc *roomUseCase) JoinRoom(ctx context.Context, roomID string, user model.U
 		uc.logger.Error("failed to add user to room", zap.Error(err), zap.String("roomID", roomID), zap.String("userID", user.ID))
 		return fmt.Errorf("failed to join room: %w", err)
 	}
+
+	go func() {
+		if err := uc.eventPublisher.PublishRoomJoined(room.ID, room.Owner.ID); err != nil {
+			log.Printf("Failed to publish room joined event: %v", err)
+		}
+	}()
 
 	uc.logger.Info("user joined room", zap.String("roomID", roomID), zap.String("userID", user.ID), zap.String("username", user.Username))
 	return nil
