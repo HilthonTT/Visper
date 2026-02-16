@@ -65,10 +65,55 @@ services:
     networks:
       - visper-network
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: visper-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - visper-network
+    # Optional: Uncomment if you have NVIDIA GPU
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    # Init container to pull the model on first run
+  ollama-init:
+    image: ollama/ollama:latest
+    container_name: visper-ollama-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    command: >
+      -c "
+      echo 'Pulling qwen2.5:3b model...';
+      ollama pull qwen2.5:3b;
+      echo 'Model pulled successfully';
+      "
+    environment:
+      - OLLAMA_HOST=ollama:11434
+    networks:
+      - visper-network
+
 volumes:
   postgres_data:
     driver: local
   redis_data:
+    driver: local
+  ollama_data:
     driver: local
 
 networks:

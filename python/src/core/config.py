@@ -84,9 +84,32 @@ class CORSSettings(BaseSettings):
     CORS_METHODS: list[str] = ["*"]
     CORS_HEADERS: list[str] = ["*"]
     
-class AISettings(BaseSettings):
-    MODEL_CACHE_DIR: str = "./models"
-    ENHANCEMENT_MODEL: str = "Vamsi/T5_Paraphrase_Paws"
+class OllamaSettings(BaseSettings):
+    """Ollama LLM settings"""
+    OLLAMA_HOST: str = "localhost"
+    OLLAMA_PORT: int = 11434
+    OLLAMA_MODEL: str = "qwen2.5:3b"  # Lightweight 3B model, great for text enhancement
+    OLLAMA_TIMEOUT: int = 30
+    OLLAMA_MAX_TOKENS: int = 500
+    OLLAMA_TEMPERATURE: float = 0.7
+    
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def OLLAMA_BASE_URL(self) -> str:
+        return f"http://{self.OLLAMA_HOST}:{self.OLLAMA_PORT}"
+
+class AIEnhancementSettings(BaseSettings):
+    """AI text enhancement settings"""
+    # Cache settings
+    ENHANCEMENT_CACHE_TTL: int = 3600  # 1 hour
+    
+    # Processing settings
+    MAX_MESSAGE_LENGTH: int = 2000
+    MIN_MESSAGE_LENGTH: int = 3
+    BATCH_SIZE_LIMIT: int = 5
+    
+    # Fallback settings
+    ENABLE_RULE_BASED_FALLBACK: bool = True
     
 class Settings(
     AppSettings,
@@ -99,7 +122,8 @@ class Settings(
     CORSSettings,
     FileLoggerSettings,
     ConsoleLoggerSettings,
-    AISettings,
+    OllamaSettings,
+    AIEnhancementSettings,
 ):
     model_config = SettingsConfigDict(
         env_file=os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", ".env"),

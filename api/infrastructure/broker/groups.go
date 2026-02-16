@@ -45,7 +45,7 @@ func RangeAssignmentStrategy(members map[string]*GroupMember, topics map[string]
 
 	// Create a mapping of topics to interested members
 	topicMembers := make(map[string][]string)
-	for topic, _ := range topics {
+	for topic := range topics {
 		topicMembers[topic] = []string{}
 	}
 
