@@ -1,9 +1,8 @@
 import re
 import logging
-from typing import Optional
 from enum import Enum
 
-from .ollama_client import OllamaClient, OllamaResponse
+from .ollama_client import OllamaClient
 
 logger = logging.getLogger(__name__)
 
