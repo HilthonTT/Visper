@@ -4,12 +4,14 @@ go 1.25.7
 
 require (
 	github.com/BourgeoisBear/rasterm v1.1.2
+	github.com/barasher/go-exiftool v1.10.0
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.10.1
 	github.com/disintegration/imaging v1.6.2
 	github.com/foize/go.sgr v0.0.0-20140220094842-40bdfc98040c
+	github.com/google/uuid v1.6.0
 	github.com/hilthontt/visper/api-sdk v0.0.0-20251217195446-85f9ab80730e
 	github.com/muesli/reflow v0.3.0
 	github.com/muesli/termenv v0.16.0

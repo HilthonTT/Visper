@@ -70,6 +70,8 @@ type chatState struct {
 	wsCtx     context.Context
 	wsCancel  context.CancelFunc
 	wsMsgChan chan tea.Msg
+
+	fileExplorer fileExplorerState
 }
 
 type participantSearchResultMsg struct {
@@ -170,6 +172,7 @@ func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 			expiresAt:            newRoom.ExpiresAt,
 			room:                 newRoom,
 			isRoomOwner:          newRoom.CurrentUser.ID == newRoom.Owner.ID,
+			fileExplorer:         fileExplorerState{},
 		}
 
 		return m, tea.Batch(
@@ -206,6 +209,9 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case imageFileSelectedMsg:
+		log.Printf("Image selected for upload: %s", msg.path)
+		return m, nil
 	case roomExpirationTickMsg:
 		m.state.chat.timeRemaining = formatDuration(msg.remaining)
 
@@ -529,6 +535,10 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		// Handle modal input first if modal is open
 		if m.state.notify.open {
 			switch m.state.notify.confirmAction {
+			case FileExplorerAction:
+				m, cmd = m.fileExplorerUpdate(msg)
+				cmds = append(cmds, cmd)
+				return m, tea.Batch(cmds...)
 			case NoAction:
 				switch msg.String() {
 				case "enter", "esc", " ", "o", "O":
@@ -677,6 +687,9 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		}
 
 		switch {
+		case msg.String() == "ctrl+u":
+			m = m.openFileExplorer()
+			return m, nil
 		case msg.String() == "ctrl+p":
 			m = m.openQrCodeModal()
 			return m, nil
@@ -966,16 +979,18 @@ func (m model) ChatView() string {
 	// Show modal if open
 	if m.state.notify.open {
 		var notifyModal string
-		if m.state.notify.confirmAction == EditMessageAction {
+		switch m.state.notify.confirmAction {
+		case EditMessageAction:
 			notifyModal = m.RenderEditModal()
-		} else {
+		case FileExplorerAction:
+			notifyModal = m.RenderFileExplorerModal()
+		default:
 			notifyModal = m.RenderWarnModal()
 		}
 		overlayX := (m.viewportWidth - ModalWidth) / 2
 		overlayY := (m.viewportHeight - ModalHeight) / 2
 		return stringfunction.PlaceOverlay(overlayX, overlayY, notifyModal, baseView)
 	}
-
 	return baseView
 }
 
@@ -1089,7 +1104,7 @@ func (m model) renderChatCenter(width, height int) string {
 	if m.state.chat.editMode {
 		hint = m.theme.TextAccent().Bold(true).Render("EDIT MODE: ↑/↓ to select, Enter to edit, Esc to cancel")
 	} else {
-		hint = m.theme.TextBody().Faint(true).Render("Ctrl+S: search participants | Ctrl+E: edit messages")
+		hint = m.theme.TextBody().Faint(true).Render("Ctrl+S: search participants | Ctrl+E: edit messages | Ctrol+U: upload image")
 	}
 	sb.WriteString(m.theme.Base().Padding(0, 1).Render(hint))
 

@@ -23,6 +23,7 @@ const (
 	ShowQRCodeAction
 	RoomInviteAction
 	RoomExpiredAction
+	FileExplorerAction
 
 	ModalWidth  = 60
 	ModalHeight = 9

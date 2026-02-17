@@ -66,7 +66,7 @@ func (ep *EventPublisher) PublishRoomCreated(roomID, userID string, expiresIn ti
 		Type:   EventRoomCreated,
 		UserID: userID,
 		RoomID: roomID,
-		Data: map[string]interface{}{
+		Data: map[string]any{
 			"expires_in_seconds": expiresIn.Seconds(),
 		},
 	}

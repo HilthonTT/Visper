@@ -48,13 +48,16 @@ type PartitionStrategy func(key []byte, numPartitions int) int
 
 // DefaultPartitioner implements a simple hash-based partitioning strategy
 func DefaultPartitioner(key []byte, numPartitions int) int {
+	if numPartitions <= 0 {
+		return 0
+	}
 	if len(key) == 0 {
 		return rand.IntN(numPartitions)
 	}
 
 	h := fnv.New32a()
 	h.Write(key)
-	return int(h.Sum32()) % numPartitions
+	return int(h.Sum32() % uint32(numPartitions))
 }
 
 // NewProducer creates a new producer
