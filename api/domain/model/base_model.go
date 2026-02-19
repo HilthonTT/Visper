@@ -14,13 +14,13 @@ type BaseModel struct {
 	ModifiedAt sql.NullTime `gorm:"type:TIMESTAMP with time zone;null"`
 	DeletedAt  sql.NullTime `gorm:"type:TIMESTAMP with time zone;null"`
 
-	CreatedBy  int            `gorm:"not null"`
-	ModifiedBy *sql.NullInt64 `gorm:"null"`
-	DeletedBy  *sql.NullInt64 `gorm:"null"`
+	CreatedBy  int             `gorm:"not null"`
+	ModifiedBy *sql.NullString `gorm:"null"`
+	DeletedBy  *sql.NullString `gorm:"null"`
 }
 
 func (m *BaseModel) BeforeCreate(tx *gorm.DB) {
-	value := tx.Statement.Context.Value("UserId")
+	value := tx.Statement.Context.Value("user")
 	userId := -1
 
 	if value != nil {
@@ -31,10 +31,10 @@ func (m *BaseModel) BeforeCreate(tx *gorm.DB) {
 }
 
 func (m *BaseModel) BeforeUpdate(tx *gorm.DB) (err error) {
-	value := tx.Statement.Context.Value("UserId")
-	var userId = &sql.NullInt64{Valid: false}
+	value := tx.Statement.Context.Value("user")
+	var userId = &sql.NullString{Valid: false}
 	if value != nil {
-		userId = &sql.NullInt64{Valid: true, Int64: int64(value.(float64))}
+		userId = &sql.NullString{Valid: true, String: string(value.(string))}
 	}
 	m.ModifiedAt = sql.NullTime{Time: time.Now().UTC(), Valid: true}
 	m.ModifiedBy = userId
@@ -42,10 +42,10 @@ func (m *BaseModel) BeforeUpdate(tx *gorm.DB) (err error) {
 }
 
 func (m *BaseModel) BeforeDelete(tx *gorm.DB) (err error) {
-	value := tx.Statement.Context.Value("UserId")
-	var userId = &sql.NullInt64{Valid: false}
+	value := tx.Statement.Context.Value("user")
+	var userId = &sql.NullString{Valid: false}
 	if value != nil {
-		userId = &sql.NullInt64{Valid: true, Int64: int64(value.(float64))}
+		userId = &sql.NullString{Valid: true, String: string(value.(string))}
 	}
 	m.DeletedAt = sql.NullTime{Time: time.Now().UTC(), Valid: true}
 	m.DeletedBy = userId

@@ -39,6 +39,7 @@ func (c *Container) initRepositories() {
 	c.UserRepo = repository.NewUserRepository(distributedCache, tracer)
 	c.RoomRepo = repository.NewRoomRepository(distributedCache, c.UserRepo, tracer)
 	c.FileRepo = repository.NewFileRepository(redisClient, c.RoomRepo)
+	c.AuditLogRepo = repository.NewAuditLogRepository(c.Config, c.Logger.Log)
 
 	c.Logger.Info("Repositories initialized successfully")
 }

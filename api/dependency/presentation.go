@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin/binding"
 	"github.com/hilthontt/visper/api/infrastructure/cache"
 	"github.com/hilthontt/visper/api/infrastructure/metrics"
+	"github.com/hilthontt/visper/api/infrastructure/persistence/database"
 	"github.com/hilthontt/visper/api/presentation/controllers/file"
 	"github.com/hilthontt/visper/api/presentation/controllers/message"
 	"github.com/hilthontt/visper/api/presentation/controllers/room"
@@ -146,6 +147,8 @@ func (c *Container) Shutdown() error {
 	}
 
 	c.Logger.Info("Dependencies shut down successfully")
+
+	database.CloseDb()
 
 	return nil
 }

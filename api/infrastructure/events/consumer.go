@@ -1,26 +1,31 @@
 package events
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
 	"time"
 
+	"github.com/hilthontt/visper/api/domain/model"
+	"github.com/hilthontt/visper/api/domain/repository"
 	"github.com/hilthontt/visper/api/infrastructure/broker"
 )
 
 // EventConsumer consumes and processes events
 type EventConsumer struct {
-	consumer *broker.Consumer
-	handlers map[EventType]EventHandler
-	stopCh   chan struct{}
+	consumer           *broker.Consumer
+	handlers           map[EventType]EventHandler
+	stopCh             chan struct{}
+	auditLogRepository repository.AuditLogRepository
 }
 
 // EventHandler is a function that handles a specific event type
 type EventHandler func(event *Event) error
 
 // NewEventConsumer creates a new event consumer
-func NewEventConsumer(brokerInstance *broker.Broker, groupID, topic string) (*EventConsumer, error) {
+func NewEventConsumer(brokerInstance *broker.Broker, groupID, topic string, auditLogRepository repository.AuditLogRepository) (*EventConsumer, error) {
 	consumer := broker.NewConsumer(brokerInstance, groupID)
 
 	// Subscribe to topic
@@ -29,9 +34,10 @@ func NewEventConsumer(brokerInstance *broker.Broker, groupID, topic string) (*Ev
 	}
 
 	ec := &EventConsumer{
-		consumer: consumer,
-		handlers: make(map[EventType]EventHandler),
-		stopCh:   make(chan struct{}),
+		consumer:           consumer,
+		handlers:           make(map[EventType]EventHandler),
+		stopCh:             make(chan struct{}),
+		auditLogRepository: auditLogRepository,
 	}
 
 	// Register default handlers
@@ -89,25 +95,23 @@ func (ec *EventConsumer) Stop() {
 
 // processRecord processes a single consumer record
 func (ec *EventConsumer) processRecord(record *broker.ConsumerRecord) error {
-	// Parse event from JSON
 	var event Event
 	if err := json.Unmarshal(record.Value, &event); err != nil {
 		return fmt.Errorf("failed to unmarshal event: %w", err)
 	}
 
-	// Get handler for event type
 	handler, exists := ec.handlers[event.Type]
 	if !exists {
 		log.Printf("No handler registered for event type: %s", event.Type)
 		return nil
 	}
 
-	// Handle event
-	if err := handler(&event); err != nil {
-		return fmt.Errorf("handler failed for event %s: %w", event.Type, err)
+	handlerErr := handler(&event)
+	if err := ec.writeAuditLog(&event, handlerErr); err != nil {
+		log.Printf("Failed to write audit log for event %s: %v", event.ID, err)
 	}
 
-	return nil
+	return handlerErr
 }
 
 func (ec *EventConsumer) handleRoomCreated(event *Event) error {
@@ -115,15 +119,11 @@ func (ec *EventConsumer) handleRoomCreated(event *Event) error {
 	log.Printf("Room created: %s by user %s (expires in %.0f seconds)",
 		event.RoomID, event.UserID, expiresIn)
 
-	// TODO: Do something with the event
-
 	return nil
 }
 
 func (ec *EventConsumer) handleRoomJoined(event *Event) error {
 	log.Printf("User %s joined room %s", event.UserID, event.RoomID)
-
-	// TODO: Do something with the event
 
 	return nil
 }
@@ -135,8 +135,6 @@ func (ec *EventConsumer) handleMessageSent(event *Event) error {
 	log.Printf("Message sent in room %s by user %s (id: %s, size: %v bytes)",
 		event.RoomID, event.UserID, messageID, messageSize)
 
-	// TODO: Do something with the event
-
 	return nil
 }
 
@@ -144,15 +142,41 @@ func (ec *EventConsumer) handleRoomExpired(event *Event) error {
 	messageCount := event.Data["message_count"]
 	log.Printf("Room expired: %s (total messages: %v)", event.RoomID, messageCount)
 
-	// TODO: Do something with the event
-
 	return nil
 }
 
 func (ec *EventConsumer) handleUserLeft(event *Event) error {
 	log.Printf("User %s left room %s", event.UserID, event.RoomID)
 
-	// TODO: Do something with the event
+	return nil
+}
 
+func (ec *EventConsumer) writeAuditLog(event *Event, handlerErr error) error {
+	payload, err := json.Marshal(event.Data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal event data: %w", err)
+	}
+
+	entry := model.AuditLog{
+		EventID:   event.ID,
+		EventType: string(event.Type),
+		CreatedAt: event.Timestamp,
+		UserID:    event.UserID,
+		Payload:   payload,
+		Success:   handlerErr == nil,
+	}
+
+	if event.RoomID != "" {
+		entry.RoomID = sql.NullString{Valid: true, String: event.RoomID}
+	}
+
+	if handlerErr != nil {
+		entry.ErrorMessage = sql.NullString{Valid: true, String: handlerErr.Error()}
+	}
+
+	_, err = ec.auditLogRepository.CreateAuditLog(context.Background(), entry)
+	if err != nil {
+		return err
+	}
 	return nil
 }

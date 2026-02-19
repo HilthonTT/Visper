@@ -33,10 +33,11 @@ type Container struct {
 	TracerProvider *trace.TracerProvider
 	MetricsManager metrics.Manager
 
-	MessageRepo repository.MessageRepository
-	UserRepo    repository.UserRepository
-	RoomRepo    repository.RoomRepository
-	FileRepo    repository.FileRepository
+	MessageRepo  repository.MessageRepository
+	UserRepo     repository.UserRepository
+	RoomRepo     repository.RoomRepository
+	FileRepo     repository.FileRepository
+	AuditLogRepo repository.AuditLogRepository
 
 	WSRoomManager    *websocket.RoomManager
 	WSCore           *websocket.Core
@@ -70,10 +71,6 @@ type Container struct {
 func NewContainer(ctx context.Context) (*Container, error) {
 	c := &Container{}
 
-	if err := c.initBroker(); err != nil {
-		return nil, err
-	}
-
 	c.Config = config.GetConfig()
 
 	loggerInstance, err := logger.NewDevelopmentLogger()
@@ -83,6 +80,7 @@ func NewContainer(ctx context.Context) (*Container, error) {
 	c.Logger = loggerInstance
 
 	c.Logger.Info("Initializing Visper API dependencies")
+
 	if err := cache.InitRedis(c.Config); err != nil {
 		return nil, fmt.Errorf("error initializing cache: %w", err)
 	}
@@ -93,12 +91,13 @@ func NewContainer(ctx context.Context) (*Container, error) {
 
 	c.initRepositories()
 
+	if err := c.initBroker(); err != nil {
+		return nil, err
+	}
+
 	c.initWebSocket()
-
 	c.initUseCases()
-
 	c.initMiddleware()
-
 	c.initControllers()
 
 	wsCtx, cancel := context.WithCancel(ctx)

@@ -15,12 +15,16 @@ import (
 	"github.com/hilthontt/visper/api/infrastructure/jobs"
 	"github.com/hilthontt/visper/api/infrastructure/metrics"
 	"github.com/hilthontt/visper/api/infrastructure/metrics/exporters"
+	"github.com/hilthontt/visper/api/infrastructure/persistence/database"
+	"github.com/hilthontt/visper/api/infrastructure/persistence/migration"
 	"github.com/hilthontt/visper/api/infrastructure/profiler"
 	"github.com/hilthontt/visper/api/infrastructure/storage"
 	"go.uber.org/zap"
 )
 
 func (c *Container) initInfrastructure() error {
+	c.initDatabase()
+
 	tracerProvider, err := exporters.InitJaegerExporter(c.Config)
 	if err != nil {
 		c.Logger.Error("failed to initialize Jaeger exporter", zap.Error(err))
@@ -190,7 +194,7 @@ func (c *Container) initBroker() error {
 		return err
 	}
 
-	eventConsumer, err := events.NewEventConsumer(brokerInstance, "visper-consumer-group", "visper-events")
+	eventConsumer, err := events.NewEventConsumer(brokerInstance, "visper-consumer-group", "visper-events", c.AuditLogRepo)
 	if err != nil {
 		return nil
 	}
@@ -199,4 +203,12 @@ func (c *Container) initBroker() error {
 	c.EventPublisher = eventPublisher
 
 	return nil
+}
+
+func (c *Container) initDatabase() {
+	err := database.InitDb(c.Config)
+	if err != nil {
+		c.Logger.Fatal("Failed to initialize database", zap.Error(err))
+	}
+	migration.Up1()
 }
