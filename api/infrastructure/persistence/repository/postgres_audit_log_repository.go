@@ -7,6 +7,7 @@ import (
 	"github.com/hilthontt/visper/api/domain/repository"
 	"github.com/hilthontt/visper/api/infrastructure/config"
 	"go.uber.org/zap"
+	"gorm.io/gorm/clause"
 )
 
 type PostgresAuditLogRepository struct {
@@ -21,14 +22,17 @@ func NewAuditLogRepository(cfg *config.Config, zapLogger *zap.Logger) repository
 }
 
 func (r *PostgresAuditLogRepository) CreateAuditLog(ctx context.Context, a model.AuditLog) (model.AuditLog, error) {
-	tx := r.database.WithContext(ctx).Begin()
-	err := tx.Create(&a).Error
-	if err != nil {
-		tx.Rollback()
-		r.logger.Error(ctx, Rollback.Error())
-		return a, nil
+	result := r.database.WithContext(ctx).
+		Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "event_id"}},
+			DoNothing: true,
+		}).
+		Create(&a)
+
+	if result.Error != nil {
+		r.logger.Error(ctx, result.Error.Error())
+		return a, result.Error
 	}
 
-	tx.Commit()
 	return a, nil
 }

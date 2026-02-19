@@ -1,16 +1,20 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"time"
 
+	"github.com/hilthontt/visper/proxy/internal/throttling"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -65,6 +69,43 @@ func main() {
 
 	metrics := NewMetrics("loadBalancer")
 
+	redisClient := redis.NewFailoverClient(&redis.FailoverOptions{
+		MasterName: "mymaster",
+		SentinelAddrs: []string{
+			"127.0.0.1:36379",
+			"127.0.0.1:36380",
+			"127.0.0.1:36381",
+		},
+		Password:         "password",
+		SentinelPassword: "password",
+		// Sentinel reports internal Docker IPs (172.18.x.x) for the master.
+		// Redirect them to localhost since ports are mapped to the host.
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			_, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			return (&net.Dialer{}).DialContext(ctx, "tcp4", "127.0.0.1:"+port)
+		},
+	})
+	globalCfg := throttling.ThrottleConfig{MaxRequests: 10_000, Interval: time.Minute, Spans: 6, Cooldown: 30 * time.Second}
+	ipCfg := throttling.ThrottleConfig{MaxRequests: 100, Interval: time.Minute, Spans: 6, Cooldown: 30 * time.Second}
+
+	ht := throttling.NewHierarchicalThrottler(
+		&throttling.ThrottleLevel{
+			Name:         "global",
+			KeyExtractor: func(r *http.Request) string { return "global" },
+			Throttler:    throttling.NewThrottler(globalCfg, redisClient),
+		},
+		&throttling.ThrottleLevel{
+			Name:         "per-ip",
+			KeyExtractor: func(r *http.Request) string { return r.RemoteAddr },
+			Throttler:    throttling.NewThrottler(ipCfg, redisClient),
+		},
+	)
+
+	go ht.Start(context.Background())
+
 	// Create load balancer
 	lb := NewLoadBalancer(
 		backendURLs,
@@ -76,6 +117,7 @@ func main() {
 	lb.metrics = metrics
 
 	mux := http.NewServeMux()
+
 	mux.Handle("/", lb)
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/admin/reload", func(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +139,7 @@ func main() {
 	// Start server
 	server := http.Server{
 		Addr:    config.ListenAddr,
-		Handler: mux,
+		Handler: chain(mux, HierarchicalThrottlingMiddleware(ht)),
 	}
 
 	log.Printf("Starting load balancer on %s with strategy: %s", config.ListenAddr, config.Strategy)

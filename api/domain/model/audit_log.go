@@ -10,7 +10,7 @@ type AuditLog struct {
 	CreatedAt time.Time `gorm:"type:TIMESTAMP with time zone;not null;index"`
 
 	// Event identity
-	EventID   string `gorm:"type:VARCHAR(36);not null;uniqueIndex"`
+	EventID   string `gorm:"type:VARCHAR(36);not null;index"`
 	EventType string `gorm:"type:VARCHAR(64);not null;index"`
 
 	// Actors - anonymous, so no FK constraints

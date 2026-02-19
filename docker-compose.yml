@@ -20,20 +20,118 @@ services:
     networks:
       - visper-network
 
-  redis:
+  # ── Redis Master ────────────────────────────────────────────
+  redis-master:
     image: redis:latest
-    container_name: visper-redis
+    container_name: visper-redis-master
     restart: unless-stopped
     command: redis-server --requirepass password --appendonly yes
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data
+      - redis_master_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      test: ["CMD", "redis-cli", "-a", "password", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - visper-network
+
+  # ── Redis Replica ───────────────────────────────────────────────
+  redis-replica:
+    image: redis:latest
+    container_name: visper-redis-replica
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass password
+      --replicaof redis-master 6379
+      --masterauth password
+      --appendonly yes
+    ports:
+      - "6380:6379"
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    networks:
+      - visper-network
+
+  # ── Sentinel 1 ───────────────────────────────────────────────
+  redis-sentinel-1:
+    image: redis:latest
+    container_name: visper-sentinel-1
+    restart: unless-stopped
+    ports:
+      - "36379:26379"
+    command: >
+      sh -c "
+        echo 'port 26379' > /tmp/sentinel.conf &&
+        echo 'sentinel resolve-hostnames yes' >> /tmp/sentinel.conf &&
+        echo 'sentinel monitor mymaster redis-master 6379 2' >> /tmp/sentinel.conf &&
+        echo 'sentinel auth-pass mymaster password' >> /tmp/sentinel.conf &&
+        echo 'sentinel down-after-milliseconds mymaster 5000' >> /tmp/sentinel.conf &&
+        echo 'sentinel failover-timeout mymaster 60000' >> /tmp/sentinel.conf &&
+        echo 'sentinel parallel-syncs mymaster 1' >> /tmp/sentinel.conf &&
+        redis-sentinel /tmp/sentinel.conf
+      "
+    volumes:
+      - ./sentinel.conf:/etc/sentinel.conf
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    networks:
+      - visper-network
+
+  # ── Sentinel 2 ───────────────────────────────────────────────
+  redis-sentinel-2:
+    image: redis:latest
+    container_name: visper-sentinel-2
+    restart: unless-stopped
+    ports:
+      - "36380:26379"
+    command: >
+      sh -c "
+        echo 'port 26379' > /tmp/sentinel.conf &&
+        echo 'sentinel resolve-hostnames yes' >> /tmp/sentinel.conf &&
+        echo 'sentinel monitor mymaster redis-master 6379 2' >> /tmp/sentinel.conf &&
+        echo 'sentinel auth-pass mymaster password' >> /tmp/sentinel.conf &&
+        echo 'sentinel down-after-milliseconds mymaster 5000' >> /tmp/sentinel.conf &&
+        echo 'sentinel failover-timeout mymaster 60000' >> /tmp/sentinel.conf &&
+        echo 'sentinel parallel-syncs mymaster 1' >> /tmp/sentinel.conf &&
+        redis-sentinel /tmp/sentinel.conf
+      "
+    volumes:
+      - ./sentinel.conf:/etc/sentinel.conf
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    networks:
+      - visper-network
+
+  # ── Sentinel 3 ───────────────────────────────────────────────
+  redis-sentinel-3:
+    image: redis:latest
+    container_name: visper-sentinel-3
+    restart: unless-stopped
+    ports:
+      - "36381:26379"
+    command: >
+      sh -c "
+        echo 'port 26379' > /tmp/sentinel.conf &&
+        echo 'sentinel resolve-hostnames yes' >> /tmp/sentinel.conf &&
+        echo 'sentinel monitor mymaster redis-master 6379 2' >> /tmp/sentinel.conf &&
+        echo 'sentinel auth-pass mymaster password' >> /tmp/sentinel.conf &&
+        echo 'sentinel down-after-milliseconds mymaster 5000' >> /tmp/sentinel.conf &&
+        echo 'sentinel failover-timeout mymaster 60000' >> /tmp/sentinel.conf &&
+        echo 'sentinel parallel-syncs mymaster 1' >> /tmp/sentinel.conf &&
+        redis-sentinel /tmp/sentinel.conf
+      "
+    volumes:
+      - ./sentinel.conf:/etc/sentinel.conf
+    depends_on:
+      redis-master:
+        condition: service_healthy
     networks:
       - visper-network
 
@@ -111,7 +209,7 @@ services:
 volumes:
   postgres_data:
     driver: local
-  redis_data:
+  redis_master_data:
     driver: local
   ollama_data:
     driver: local
