@@ -104,12 +104,18 @@ class OllamaClient:
                 prompt_eval_count=data.get("prompt_eval_count"),
                 eval_count=data.get("eval_count"),
             )
+        except httpx.TimeoutException as e:
+            logger.error(f"Ollama timeout after {self.timeout}s: {type(e).__name__}")
+            raise RuntimeError(f"Ollama timed out after {self.timeout}s — model may be loading")
+        except httpx.ConnectError as e:
+            logger.error(f"Ollama connection refused at {self.base_url}: {e}")
+            raise RuntimeError(f"Cannot connect to Ollama at {self.base_url}")
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Ollama HTTP {e.response.status_code}: {e.response.text}")
+            raise RuntimeError(f"Ollama returned {e.response.status_code}")
         except httpx.HTTPError as e:
-            logger.error(f"Ollama HTTP error: {e}")
-            raise RuntimeError(f"Failed to generate completion: {e}")
-        except Exception as e:
-            logger.error(f"Ollama generation error: {e}")
-            raise RuntimeError(f"Unexpected error during generation: {e}")
+            logger.error(f"Ollama HTTP error ({type(e).__name__}): {e}")
+            raise RuntimeError(f"Failed to chat: {e}")
             
     async def chat(
         self,

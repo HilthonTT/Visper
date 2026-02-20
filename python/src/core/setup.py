@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator, Callable
 from contextlib import _AsyncGeneratorContextManager, asynccontextmanager
+import logging
 from typing import Any
 
 import anyio
@@ -7,10 +8,12 @@ import fastapi
 import redis.asyncio as redis
 from arq import create_pool
 from arq.connections import RedisSettings
-from fastapi import APIRouter, Depends, FastAPI
+from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
+
+from ..api.v1.ai_bot import get_enhancement_service
 from ..core.utils.rate_limit import rate_limiter
 from ..middleware.client_cache_middleware import ClientCacheMiddleware
 from ..middleware.logger_middleware import LoggerMiddleware
@@ -26,6 +29,8 @@ from .config import (
     settings,
 )
 from .utils import cache, queue
+
+logger = logging.getLogger(__name__)
 
 async def create_redis_cache_pool() -> None:
     cache.pool = redis.ConnectionPool.from_url(settings.REDIS_CACHE_URL)
@@ -58,6 +63,18 @@ async def close_redis_rate_limit_pool() -> None:
 async def set_threadpool_tokens(number_of_tokens: int = 100) -> None:
     limiter = anyio.to_thread.current_default_thread_limiter()
     limiter.total_tokens = number_of_tokens
+
+async def warmup_ollama():
+    try:
+        service = get_enhancement_service()
+        logger.info("Warming up Ollama model...")
+        await service.ollama.generate(
+            prompt="Hello",
+            max_tokens=5,
+        )
+        logger.info("Ollama warmup complete")
+    except Exception as e:
+        logger.warning(f"Ollama warmup failed (will retry on first request): {e}")
     
 def lifespan_factory(
     settings: (
@@ -72,6 +89,7 @@ def lifespan_factory(
 ) -> Callable[[FastAPI], _AsyncGeneratorContextManager[Any]]:
     """Factory to create a lifespan async context manager for a FastAPI app."""
     
+    @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator:
         from asyncio import Event
         
@@ -91,6 +109,8 @@ def lifespan_factory(
                 await create_redis_rate_limit_pool()
 
             initialization_complete.set()
+            
+            await warmup_ollama()
 
             yield
         finally:

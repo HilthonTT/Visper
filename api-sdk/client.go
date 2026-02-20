@@ -17,6 +17,7 @@ type Client struct {
 	Room    *RoomService
 	Message *MessageService
 	Health  *HealthService
+	AI      *AIService
 }
 
 func DefaultClientOptions() []option.RequestOption {
@@ -34,17 +35,25 @@ func DefaultClientOptions() []option.RequestOption {
 	} else {
 		defaults = append(defaults, option.WithBaseURL("http://localhost:5005"))
 	}
+
 	return defaults
 }
 
 func NewClient(opts ...option.RequestOption) *Client {
 	opts = append(DefaultClientOptions(), opts...)
 
+	aiBaseURL := "http://localhost:8088"
+	if u, ok := os.LookupEnv("VISPER_AI_BASE_URL"); ok {
+		aiBaseURL = u
+	}
+	aiOpts := append(opts, option.WithBaseURL(aiBaseURL))
+
 	r := &Client{
 		Options: opts,
 		Room:    NewRoomService(opts...),
 		Message: NewMessageService(opts...),
 		Health:  NewHealthService(opts...),
+		AI:      NewAIService(aiOpts...),
 	}
 
 	return r

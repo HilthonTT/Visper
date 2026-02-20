@@ -22,7 +22,7 @@ async def get_user_from_redis(redis: Redis, user_id: str) -> dict[str, Any] | No
     if not user_id:
         return None
     
-    user_key = f"user:{user_id}"
+    user_key = f"{settings.REDIS_KEY_PREFIX}user:{user_id}"
     user_data = await redis.get(user_key)
     
     if not user_data:

@@ -72,6 +72,11 @@ type chatState struct {
 	wsMsgChan chan tea.Msg
 
 	fileExplorer fileExplorerState
+
+	// AI enhancement
+	aiEnhancing    bool
+	aiEnhanceStyle string
+	aiEnhanceTone  string
 }
 
 type participantSearchResultMsg struct {
@@ -209,6 +214,20 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case aiEnhanceResultMsg:
+		m.state.chat.aiEnhancing = false
+		if msg.err != nil {
+			m.state.notify = notifyState{
+				open:          true,
+				title:         "AI Enhancement Failed",
+				content:       "Could not reach AI service. Message sent as-is",
+				confirmAction: NoAction,
+			}
+			return m, nil
+		}
+		log.Printf("AI enhanced result: %q", msg.enhanced)
+		m.state.chat.messageInput.SetValue(msg.enhanced)
+		return m, nil
 	case imageFileSelectedMsg:
 		log.Printf("Image selected for upload: %s", msg.path)
 		return m, nil
@@ -693,6 +712,20 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		case msg.String() == "ctrl+p":
 			m = m.openQrCodeModal()
 			return m, nil
+		case msg.String() == "ctrl+a":
+			content := m.state.chat.messageInput.Value()
+			if content == "" || m.state.chat.aiEnhancing {
+				return m, nil
+			}
+			m.state.chat.aiEnhancing = true
+			// TODO: Set default later
+			if m.state.chat.aiEnhanceStyle == "" {
+				m.state.chat.aiEnhanceStyle = "professional"
+			}
+			if m.state.chat.aiEnhanceTone == "" {
+				m.state.chat.aiEnhanceTone = "polite"
+			}
+			return m, m.enhanceMessage(content)
 		case key.Matches(msg, keys.BackToMenu):
 			m = m.openWarnModalForLeaveRoom()
 			return m, nil
@@ -1100,11 +1133,19 @@ func (m model) renderChatCenter(width, height int) string {
 
 	sb.WriteString(inputBorder)
 
+	if m.state.chat.aiEnhancing {
+		enhancingStyle := m.theme.Base().Foreground(lipgloss.Color("#F59E0B")).Bold(true)
+		sb.WriteString(enhancingStyle.Render("  ✦ Enhancing with AI..."))
+		sb.WriteString("\n")
+	}
+
 	var hint string
 	if m.state.chat.editMode {
 		hint = m.theme.TextAccent().Bold(true).Render("EDIT MODE: ↑/↓ to select, Enter to edit, Esc to cancel")
 	} else {
-		hint = m.theme.TextBody().Faint(true).Render("Ctrl+S: search participants | Ctrl+E: edit messages | Ctrol+U: upload image")
+		hint = m.theme.TextBody().Faint(true).Render(
+			"Ctrl+S: search | Ctrl+E: edit | Ctrl+U: upload | Ctrl+A: AI enhance",
+		)
 	}
 	sb.WriteString(m.theme.Base().Padding(0, 1).Render(hint))
 

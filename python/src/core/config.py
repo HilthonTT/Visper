@@ -35,6 +35,9 @@ class ConsoleLoggerSettings(BaseSettings):
     CONSOLE_LOG_INCLUDE_STATUS_CODE: bool = False
     
 class RedisCacheSettings(BaseSettings):
+    # The GO Backend prefix
+    REDIS_KEY_PREFIX: str = "visper:"
+    
     REDIS_CACHE_HOST: str = "localhost"
     REDIS_CACHE_PORT: int = 6379
     REDIS_CACHE_PASSWORD: str | None = None 
@@ -89,7 +92,7 @@ class OllamaSettings(BaseSettings):
     OLLAMA_HOST: str = "localhost"
     OLLAMA_PORT: int = 11434
     OLLAMA_MODEL: str = "qwen2.5:3b"  # Lightweight 3B model, great for text enhancement
-    OLLAMA_TIMEOUT: int = 30
+    OLLAMA_TIMEOUT: int = 120
     OLLAMA_MAX_TOKENS: int = 500
     OLLAMA_TEMPERATURE: float = 0.7
     
