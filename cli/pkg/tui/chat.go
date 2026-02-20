@@ -229,7 +229,51 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		m.state.chat.messageInput.SetValue(msg.enhanced)
 		return m, nil
 	case imageFileSelectedMsg:
-		log.Printf("Image selected for upload: %s", msg.path)
+		if m.state.chat.room == nil {
+			return m, nil
+		}
+		// Show uploading indicator by reusing the AI enhancing flag concept
+		m.state.chat.aiEnhancing = true
+		return m, m.uploadFile(msg.path)
+	case fileUploadResultMsg:
+		m.state.chat.aiEnhancing = false
+		if msg.err != nil {
+			m.state.notify = notifyState{
+				open:          true,
+				title:         "Upload Failed",
+				content:       fmt.Sprintf("Could not upload image: %v", msg.err),
+				confirmAction: NoAction,
+			}
+			return m, nil
+		}
+
+		// Auto-send the image URL as a message
+		fileURL := msg.fileURL
+		roomID := m.state.chat.room.ID
+		userID := ""
+		if m.userID != nil {
+			userID = *m.userID
+		}
+
+		go func() {
+			opts := []option.RequestOption{}
+			if userID != "" {
+				opts = append(opts, option.WithHeader("X-User-ID", userID))
+			}
+			_, err := m.client.Message.Send(
+				m.context,
+				roomID,
+				apisdk.SendMessageParams{
+					Content:   fileURL,
+					Encrypted: true,
+				},
+				opts...,
+			)
+			if err != nil {
+				log.Printf("Failed to send image message: %v", err)
+			}
+		}()
+
 		return m, nil
 	case roomExpirationTickMsg:
 		m.state.chat.timeRemaining = formatDuration(msg.remaining)

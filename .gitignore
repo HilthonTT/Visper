@@ -39,3 +39,8 @@ web/node_modules
 *.pyc
 
 python/models/
+
+*.jpg
+*.png
+*.jpeg
+*.gif

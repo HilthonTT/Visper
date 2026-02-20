@@ -1,7 +1,11 @@
 package file
 
 import (
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hilthontt/visper/api/application/usecases/file"
@@ -30,7 +34,7 @@ func NewFilesController(fileUseCase file.FileUseCase, localStorage *storage.Loca
 }
 
 func (c *filesController) Upload(ctx *gin.Context) {
-	roomID := ctx.Param("roomId")
+	roomID := ctx.Param("id")
 	if roomID == "" {
 		ctx.JSON(http.StatusBadRequest, ErrorResponse{
 			Error:   "invalid_request",
@@ -101,8 +105,81 @@ func (c *filesController) Upload(ctx *gin.Context) {
 	})
 }
 
-func (r *filesController) Proxy(ctx *gin.Context) {
+func (c *filesController) Proxy(ctx *gin.Context) {
+	filePath := ctx.Param("path")
+	if filePath == "" {
+		ctx.JSON(http.StatusBadRequest, ErrorResponse{
+			Error:   "invalid_request",
+			Message: "file path is required",
+		})
+		return
+	}
 
+	// Strip leading slash added by Gin's wildcard
+	if len(filePath) > 0 && filePath[0] == '/' {
+		filePath = filePath[1:]
+	}
+
+	if !c.localStorage.FileExists(filePath) {
+		ctx.JSON(http.StatusNotFound, ErrorResponse{
+			Error:   "not_found",
+			Message: "file not found",
+		})
+		return
+	}
+
+	fullPath := c.localStorage.GetFilePath(filePath)
+
+	ext := strings.ToLower(filepath.Ext(filePath))
+	mimeTypes := map[string]string{
+		".jpg":  "image/jpeg",
+		".jpeg": "image/jpeg",
+		".png":  "image/png",
+		".gif":  "image/gif",
+		".webp": "image/webp",
+		".bmp":  "image/bmp",
+	}
+
+	mimeType, ok := mimeTypes[ext]
+	if !ok {
+		mimeType = "application/octet-stream"
+	}
+
+	f, err := os.Open(fullPath)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, ErrorResponse{
+			Error:   "read_error",
+			Message: "failed to open file",
+		})
+		return
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, ErrorResponse{
+			Error:   "read_error",
+			Message: "failed to stat file",
+		})
+		return
+	}
+
+	filename := filepath.Base(filePath)
+	ctx.Header("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, filename))
+	ctx.Header("Content-Type", mimeType)
+	ctx.Header("Content-Length", fmt.Sprintf("%d", info.Size()))
+
+	ctx.Header("Cache-Control", "public, max-age=31536000, immutable")
+	ctx.Header("ETag", fmt.Sprintf(`"%s"`, filename))
+
+	if match := ctx.GetHeader("If-None-Match"); match != "" {
+		if match == fmt.Sprintf(`"%s"`, filename) {
+			ctx.Status(http.StatusNotModified)
+			return
+		}
+	}
+
+	ctx.DataFromReader(http.StatusOK, info.Size(), mimeType, f, nil)
 }
 
 func (c *filesController) Down(ctx *gin.Context) {
@@ -180,7 +257,7 @@ func (c *filesController) DeleteFile(ctx *gin.Context) {
 }
 
 func (c *filesController) GetRoomFiles(ctx *gin.Context) {
-	roomID := ctx.Param("roomId")
+	roomID := ctx.Param("id")
 	if roomID == "" {
 		ctx.JSON(http.StatusBadRequest, ErrorResponse{
 			Error:   "invalid_request",

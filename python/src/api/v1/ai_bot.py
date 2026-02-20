@@ -378,7 +378,6 @@ async def get_enhancement_status(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Task {task_id} not found"
         )
-    
     return TaskStatusResponse(**task_data)
 
 @router.post("/enhance", response_model=EnhanceResponse)
@@ -475,7 +474,6 @@ async def enhance_message(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to enhance message"
         )
-
 
 @router.post("/enhance/batch", response_model=BatchEnhanceResponse)
 async def enhance_messages_batch(

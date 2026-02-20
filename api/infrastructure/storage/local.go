@@ -37,8 +37,10 @@ func (s *LocalStorage) SaveFile(file *multipart.FileHeader, roomID string) (stri
 		return "", "", fmt.Errorf("file size exceeds maximum allowed size of 5MB")
 	}
 
-	if !s.isValidImageType(file.Header.Get("Content-Type")) {
-		return "", "", fmt.Errorf("")
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	detectedType := extensionToMIME(ext)
+	if detectedType == "" {
+		return "", "", fmt.Errorf("invalid file type, only images are allowed")
 	}
 
 	src, err := file.Open()
@@ -47,7 +49,6 @@ func (s *LocalStorage) SaveFile(file *multipart.FileHeader, roomID string) (stri
 	}
 	defer src.Close()
 
-	ext := filepath.Ext(file.Filename)
 	fileID := uuid.NewString()
 	filename := fileID + ext
 
@@ -130,4 +131,16 @@ func (s *LocalStorage) GetAllRoomDirectories() ([]string, error) {
 
 func (s *LocalStorage) GetFilePath(relativePath string) string {
 	return filepath.Join(s.basePath, relativePath)
+}
+
+func extensionToMIME(ext string) string {
+	types := map[string]string{
+		".jpg":  "image/jpeg",
+		".jpeg": "image/jpeg",
+		".png":  "image/png",
+		".gif":  "image/gif",
+		".webp": "image/webp",
+		".bmp":  "image/bmp",
+	}
+	return types[ext]
 }

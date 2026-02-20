@@ -18,6 +18,7 @@ type Client struct {
 	Message *MessageService
 	Health  *HealthService
 	AI      *AIService
+	File    *FileService
 }
 
 func DefaultClientOptions() []option.RequestOption {
@@ -54,6 +55,7 @@ func NewClient(opts ...option.RequestOption) *Client {
 		Message: NewMessageService(opts...),
 		Health:  NewHealthService(opts...),
 		AI:      NewAIService(aiOpts...),
+		File:    NewFileService(opts...),
 	}
 
 	return r
