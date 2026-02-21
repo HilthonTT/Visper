@@ -77,6 +77,13 @@ type chatState struct {
 	aiEnhancing    bool
 	aiEnhanceStyle string
 	aiEnhanceTone  string
+
+	imageFetched map[string][]byte // messageID -> bytes (not URL, so it's cleared when message leaves)
+	imageFailed  map[string]bool
+
+	imagePreviews map[string]string // messageID+dimensions -> rendered preview string
+	imageFetching map[string]bool   // messageID -> currently fetching
+
 }
 
 type participantSearchResultMsg struct {
@@ -107,6 +114,13 @@ type roomExpiredMsg struct{}
 type roomExpirationDismissedMsg struct{}
 
 type roomExpirationRedirectMsg struct{}
+
+type imageFetchedMsg struct {
+	messageID string
+	url       string
+	bytes     []byte
+	err       error
+}
 
 func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 	if m.state.notification.wsCancel != nil {
@@ -178,6 +192,10 @@ func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 			room:                 newRoom,
 			isRoomOwner:          newRoom.CurrentUser.ID == newRoom.Owner.ID,
 			fileExplorer:         fileExplorerState{},
+			imageFetched:         make(map[string][]byte),
+			imageFailed:          make(map[string]bool),
+			imagePreviews:        make(map[string]string),
+			imageFetching:        make(map[string]bool),
 		}
 
 		return m, tea.Batch(
@@ -235,6 +253,25 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		// Show uploading indicator by reusing the AI enhancing flag concept
 		m.state.chat.aiEnhancing = true
 		return m, m.uploadFile(msg.path)
+
+	case imageFetchedMsg:
+		m.state.chat.imageFetching[msg.messageID] = false
+		if msg.err != nil {
+			m.state.chat.imageFailed[msg.messageID] = true
+		} else {
+			// Render once, cache the string result
+			centerWidth := m.viewportWidth - 25 - 40 - 4 // match your layout
+			previewWidth := centerWidth - 4
+			preview, err := m.imagePreviewer.ImagePreviewFromBytes(msg.bytes, previewWidth, 15, "")
+			if err != nil {
+				m.state.chat.imageFailed[msg.messageID] = true
+			} else {
+				cacheKey := fmt.Sprintf("%s_%d", msg.messageID, previewWidth)
+				m.state.chat.imagePreviews[cacheKey] = preview
+			}
+		}
+		m.state.chat.messagesViewport.SetContent(m.renderMessages())
+		return m, nil
 	case fileUploadResultMsg:
 		m.state.chat.aiEnhancing = false
 		if msg.err != nil {
@@ -390,17 +427,27 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 
 	case wsChannelReadyMsg:
 		m.state.chat.wsMsgChan = msg.msgChan
-		return m, waitForWSMessage(msg.msgChan)
+		return m, tea.Batch(
+			waitForWSMessage(msg.msgChan),
+		)
 
 	case wsMessageReceivedMsg:
 		m.state.chat.messages = append(m.state.chat.messages, msg.message)
+
+		if isImageURL(msg.message.Content) {
+			if !m.state.chat.imageFailed[msg.message.ID] {
+				if _, fetched := m.state.chat.imageFetched[msg.message.ID]; !fetched {
+					cmds = append(cmds, m.fetchImage(msg.message.ID, msg.message.Content))
+				}
+			}
+		}
+
 		m.state.chat.messagesViewport.SetContent(m.renderMessages())
 		m.state.chat.messagesViewport.GotoBottom()
-
 		if m.state.chat.wsMsgChan != nil {
-			return m, waitForWSMessage(m.state.chat.wsMsgChan)
+			cmds = append(cmds, waitForWSMessage(m.state.chat.wsMsgChan))
 		}
-		return m, nil
+		return m, tea.Batch(cmds...)
 
 	case wsMessageUpdatedMsg:
 		for i, message := range m.state.chat.messages {
@@ -584,15 +631,20 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		leftWidth := 25
 		rightWidth := 40
-		centerWidth := m.widthContainer - leftWidth - rightWidth - 4
+		centerWidth := m.viewportWidth - leftWidth - rightWidth - 4
 
-		messagesHeight := m.heightContainer - 8
+		// Approximate header height — must match renderChatHeader output
+		const headerHeight = 3
+		columnHeight := m.viewportHeight - headerHeight
+		messagesHeight := columnHeight - 4
+
 		m.state.chat.messagesViewport.Width = centerWidth
 		m.state.chat.messagesViewport.Height = messagesHeight
 		m.state.chat.messageInput.Width = centerWidth - 2
 		m.state.chat.editInput.Width = ModalWidth - 8
 
 		m.state.chat.cachedImageContent = ""
+		m.state.chat.imagePreviews = make(map[string]string)
 
 	case tea.KeyMsg:
 		// Handle modal input first if modal is open
@@ -1022,38 +1074,27 @@ func (m model) ChatView() string {
 	rightWidth := 40
 	centerWidth := m.viewportWidth - leftWidth - rightWidth - 4
 
-	messagesHeight := m.viewportHeight - 6
+	header := m.renderChatHeader()
+	headerHeight := lipgloss.Height(header)
+	columnHeight := m.viewportHeight - headerHeight
+
+	// Sync viewport dimensions every frame to stay consistent
 	m.state.chat.messagesViewport.Width = centerWidth
-	m.state.chat.messagesViewport.Height = messagesHeight
+	m.state.chat.messagesViewport.Height = columnHeight - 4
 	m.state.chat.messageInput.Width = centerWidth - 2
 
-	m.state.chat.messagesViewport.SetContent(m.renderMessages())
+	leftColumn := m.renderParticipantsSidebar(leftWidth, columnHeight)
+	centerColumn := m.renderChatCenter(centerWidth, columnHeight)
+	rightColumn := m.renderRightSidebar(rightWidth, columnHeight)
 
-	leftColumn := m.renderParticipantsSidebar(leftWidth, m.viewportHeight-2)
-	centerColumn := m.renderChatCenter(centerWidth, m.viewportHeight-2)
-	rightColumn := m.renderRightSidebar(rightWidth, m.viewportHeight-2)
-
-	header := m.renderChatHeader()
-
-	body := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		leftColumn,
-		centerColumn,
-		rightColumn,
-	)
-
-	content := lipgloss.JoinVertical(
-		lipgloss.Left,
-		header,
-		body,
-	)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, centerColumn, rightColumn)
+	content := lipgloss.JoinVertical(lipgloss.Left, header, body)
 
 	baseView := m.theme.Base().
 		Width(m.viewportWidth).
 		Height(m.viewportHeight).
 		Render(content)
 
-	// Show modal if open
 	if m.state.notify.open {
 		var notifyModal string
 		switch m.state.notify.confirmAction {
@@ -1233,13 +1274,7 @@ func (m model) renderMessages() string {
 		}
 
 		header := lipgloss.JoinHorizontal(lipgloss.Left, selectionIndicator, timestamp, " ", username)
-
-		var content string
-		if isOwnMessage {
-			content = m.theme.TextAccent().Render(msg.Content)
-		} else {
-			content = m.theme.TextBody().Render(msg.Content)
-		}
+		content := m.renderMessageContent(msg, isOwnMessage)
 
 		msgStyle := m.theme.Base().
 			Padding(0, 1).
@@ -1251,6 +1286,35 @@ func (m model) renderMessages() string {
 	}
 
 	return sb.String()
+}
+
+func (m model) renderMessageContent(msg apisdk.MessageResponse, isOwnMessage bool) string {
+	if isImageURL(msg.Content) {
+		if m.state.chat.imageFailed[msg.ID] {
+			return m.theme.TextBody().Faint(true).Render("[image unavailable]")
+		}
+
+		centerWidth := m.viewportWidth - 25 - 40 - 4
+		previewWidth := centerWidth - 4
+		cacheKey := fmt.Sprintf("%s_%d", msg.ID, previewWidth)
+
+		if preview, ok := m.state.chat.imagePreviews[cacheKey]; ok {
+			return preview // cached — zero cost
+		}
+
+		// Not yet fetched — trigger fetch if not already in flight
+		if !m.state.chat.imageFetching[msg.ID] {
+			m.state.chat.imageFetching[msg.ID] = true
+			// Can't return a Cmd from here, fetch is triggered from wsMessageReceivedMsg/fetchMissingImages
+		}
+
+		return m.theme.TextBody().Faint(true).Render("⏳ loading image...")
+	}
+
+	if isOwnMessage {
+		return m.theme.TextAccent().Render(msg.Content)
+	}
+	return m.theme.TextBody().Render(msg.Content)
 }
 
 func (m model) renderRightSidebar(width, height int) string {
@@ -1351,4 +1415,25 @@ func (m model) openEditMessageModal(currentContent string) model {
 		confirmAction: EditMessageAction,
 	}
 	return m
+}
+
+func (m model) fetchImage(messageID, url string) tea.Cmd {
+	return func() tea.Msg {
+		bytes, err := fetchImageBytes(url)
+		return imageFetchedMsg{messageID: messageID, url: url, bytes: bytes, err: err}
+	}
+}
+
+func (m model) fetchMissingImages() tea.Cmd {
+	var cmds []tea.Cmd
+	for _, msg := range m.state.chat.messages {
+		if isImageURL(msg.Content) {
+			if !m.state.chat.imageFailed[msg.ID] {
+				if _, fetched := m.state.chat.imageFetched[msg.ID]; !fetched {
+					cmds = append(cmds, m.fetchImage(msg.ID, msg.Content))
+				}
+			}
+		}
+	}
+	return tea.Batch(cmds...)
 }
