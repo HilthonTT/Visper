@@ -1,0 +1,10 @@
+bin/
+tmp/
+.env
+.env.*
+!.env.example
+*.log
+*.exe
+Dockerfile
+.dockerignore
+.air.toml
