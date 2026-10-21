@@ -86,6 +86,24 @@ func (r *RoomService) GetByJoinCode(ctx context.Context, body JoinByCodeParams, 
 	return res, err
 }
 
+// JoinByCodeWithToken joins a room using its join code together with the
+// secure token (as delivered in room invites and QR codes).
+func (r *RoomService) JoinByCodeWithToken(ctx context.Context, body JoinByCodeWithTokenParams, opts ...option.RequestOption) (*RoomResponse, error) {
+	opts = slices.Concat(r.Options, opts)
+	if body.JoinCode == "" {
+		return nil, ErrMissingJoinCodeParameter
+	}
+	if body.SecureToken == "" {
+		return nil, ErrMissingSecureTokenParameter
+	}
+
+	path := "api/v1/rooms/join-code/secure"
+	res := &RoomResponse{}
+	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, &res, opts...)
+
+	return res, err
+}
+
 // Join joins an existing room by room ID
 func (r *RoomService) Join(ctx context.Context, id string, body JoinRoomParams, opts ...option.RequestOption) (*SuccessResponse, error) {
 	opts = slices.Concat(r.Options, opts)
@@ -160,6 +178,16 @@ type JoinByCodeParams struct {
 }
 
 func (r *JoinByCodeParams) MarshalJSON() ([]byte, error) {
+	return apijson.MarshalRoot(r)
+}
+
+type JoinByCodeWithTokenParams struct {
+	JoinCode    string `json:"join_code"`
+	SecureToken string `json:"secure_token"`
+	Username    string `json:"username,omitempty"`
+}
+
+func (r *JoinByCodeWithTokenParams) MarshalJSON() ([]byte, error) {
 	return apijson.MarshalRoot(r)
 }
 

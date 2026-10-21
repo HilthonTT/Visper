@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -27,17 +28,19 @@ func NewFileService(opts ...option.RequestOption) *FileService {
 	}
 }
 
+type FileUploader struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+}
+
 type FileResponse struct {
-	ID        string    `json:"id"`
-	Filename  string    `json:"filename"`
-	MimeType  string    `json:"mime_type"`
-	Size      int64     `json:"size"`
-	URL       string    `json:"url"`
-	CreatedAt time.Time `json:"created_at"`
-	Uploader  struct {
-		ID       string `json:"id"`
-		Username string `json:"username"`
-	} `json:"uploader"`
+	ID        string       `json:"id"`
+	Filename  string       `json:"filename"`
+	MimeType  string       `json:"mimetype"`
+	Size      int64        `json:"size"`
+	URL       string       `json:"url"`
+	CreatedAt time.Time    `json:"createdAt"`
+	Uploader  FileUploader `json:"uploader"`
 }
 
 func (r *FileResponse) UnmarshalJSON(data []byte) error {
@@ -46,14 +49,13 @@ func (r *FileResponse) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*plain)(r))
 }
 
+// Upload uploads the file at filePath to the room. If userID is non-empty it
+// is sent as the X-User-ID header.
 func (s *FileService) Upload(ctx context.Context, roomID, filePath, userID string, opts ...option.RequestOption) (*FileResponse, error) {
-	opts = slices.Concat(s.Options, opts)
-
-	// Build the config to get base URL and HTTP client
-	cfg, err := requestconfig.NewRequestConfig(ctx, http.MethodPost, "", nil, nil, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build request config: %w", err)
+	if roomID == "" {
+		return nil, ErrMissingIDParameter
 	}
+	opts = slices.Concat(s.Options, opts)
 
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -71,34 +73,23 @@ func (s *FileService) Upload(ctx context.Context, roomID, filePath, userID strin
 	if _, err := io.Copy(part, f); err != nil {
 		return nil, fmt.Errorf("failed to write file to form: %w", err)
 	}
-	writer.Close()
-
-	url := fmt.Sprintf("%s/api/v1/rooms/%s/files/upload", cfg.BaseURL, roomID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, &body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("failed to finalize form: %w", err)
 	}
 
-	req.Header.Set("Content-Type", writer.FormDataContentType())
 	if userID != "" {
-		req.Header.Set("X-User-ID", userID)
+		opts = append(opts, option.WithHeader("X-User-ID", userID))
 	}
+	// Retrying would require re-reading the body; uploads are not idempotent.
+	opts = append(opts,
+		option.WithRequestBody(writer.FormDataContentType(), body.Bytes()),
+		option.WithMaxRetries(0),
+	)
 
-	resp, err := cfg.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("upload request failed: %w", err)
+	path := fmt.Sprintf("api/v1/rooms/%s/files/upload", url.PathEscape(roomID))
+	res := &FileResponse{}
+	if err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, res, opts...); err != nil {
+		return nil, fmt.Errorf("upload failed: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusCreated {
-		respBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("upload failed with status %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	var result FileResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	return &result, nil
+	return res, nil
 }

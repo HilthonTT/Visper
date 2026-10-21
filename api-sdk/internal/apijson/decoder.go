@@ -448,7 +448,7 @@ func (d *decoderBuilder) newStructTypeDecoder(t reflect.Type) decoderFunc {
 
 		for _, decoder := range anonymousDecoders {
 			// ignore errors
-			decoder.fn(node, value.FieldByIndex(decoder.idx), state)
+			_ = decoder.fn(node, value.FieldByIndex(decoder.idx), state)
 		}
 
 		if inlineDecoder != nil {

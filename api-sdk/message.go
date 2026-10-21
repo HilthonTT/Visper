@@ -1,11 +1,13 @@
-// api-sdk/message.go
 package apisdk
 
 import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/hilthontt/visper/api-sdk/internal/apijson"
@@ -14,7 +16,9 @@ import (
 )
 
 type MessageService struct {
-	Options       []option.RequestOption
+	Options []option.RequestOption
+
+	mu            sync.RWMutex
 	encryptionKey string // Room encryption key (set when joining room)
 }
 
@@ -23,21 +27,32 @@ func NewMessageService(opts ...option.RequestOption) *MessageService {
 	return m
 }
 
-// SetEncryptionKey sets the room's encryption key for automatic encrypt/decrypt
+// SetEncryptionKey sets the room's encryption key for automatic
+// encrypt/decrypt. Pass "" to disable encryption (e.g. after leaving a room).
+// It is safe to call concurrently with the other methods.
 func (m *MessageService) SetEncryptionKey(key string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.encryptionKey = key
+}
+
+func (m *MessageService) key() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.encryptionKey
 }
 
 // Send encrypts and sends a message to a room
 func (m *MessageService) Send(ctx context.Context, roomID string, body SendMessageParams, opts ...option.RequestOption) (*MessageResponse, error) {
 	opts = slices.Concat(m.Options, opts)
+	key := m.key()
 	if roomID == "" {
 		return nil, ErrMissingIDParameter
 	}
 
 	// Encrypt the message content before sending
-	if m.encryptionKey != "" {
-		encryptedContent, err := EncryptWithKeyB64(body.Content, m.encryptionKey)
+	if key != "" {
+		encryptedContent, err := EncryptWithKeyB64(body.Content, key)
 		if err != nil {
 			return nil, fmt.Errorf("encryption failed: %w", err)
 		}
@@ -53,8 +68,8 @@ func (m *MessageService) Send(ctx context.Context, roomID string, body SendMessa
 	}
 
 	// Decrypt response for convenience
-	if m.encryptionKey != "" && res.Encrypted {
-		decrypted, err := DecryptWithKeyB64(res.Content, m.encryptionKey)
+	if key != "" && res.Encrypted {
+		decrypted, err := DecryptWithKeyB64(res.Content, key)
 		if err != nil {
 			return res, fmt.Errorf("decryption failed: %w", err)
 		}
@@ -68,13 +83,14 @@ func (m *MessageService) Send(ctx context.Context, roomID string, body SendMessa
 // Update encrypts and updates a message
 func (m *MessageService) Update(ctx context.Context, roomID, messageID string, body UpdateMessageParams, opts ...option.RequestOption) (*MessageUpdatedResponse, error) {
 	opts = slices.Concat(m.Options, opts)
+	key := m.key()
 	if roomID == "" || messageID == "" {
 		return nil, ErrMissingIDParameter
 	}
 
 	// Encrypt before updating
-	if m.encryptionKey != "" {
-		encryptedContent, err := EncryptWithKeyB64(body.Content, m.encryptionKey)
+	if key != "" {
+		encryptedContent, err := EncryptWithKeyB64(body.Content, key)
 		if err != nil {
 			return nil, fmt.Errorf("encryption failed: %w", err)
 		}
@@ -90,8 +106,8 @@ func (m *MessageService) Update(ctx context.Context, roomID, messageID string, b
 	}
 
 	// Decrypt response
-	if m.encryptionKey != "" && res.Encrypted {
-		decrypted, err := DecryptWithKeyB64(res.Content, m.encryptionKey)
+	if key != "" && res.Encrypted {
+		decrypted, err := DecryptWithKeyB64(res.Content, key)
 		if err != nil {
 			return res, fmt.Errorf("decryption failed: %w", err)
 		}
@@ -105,13 +121,14 @@ func (m *MessageService) Update(ctx context.Context, roomID, messageID string, b
 // List retrieves and decrypts messages from a room
 func (m *MessageService) List(ctx context.Context, roomID string, query MessageListParams, opts ...option.RequestOption) (*MessagesResponse, error) {
 	opts = slices.Concat(m.Options, opts)
+	key := m.key()
 	if roomID == "" {
 		return nil, ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("api/v1/rooms/%s/messages", roomID)
+	path := fmt.Sprintf("api/v1/rooms/%s/messages", url.PathEscape(roomID))
 	if query.Limit > 0 {
-		path = fmt.Sprintf("%s?limit=%d", path, query.Limit)
+		path += "?" + url.Values{"limit": {strconv.FormatInt(query.Limit, 10)}}.Encode()
 	}
 
 	res := &MessagesResponse{}
@@ -121,10 +138,10 @@ func (m *MessageService) List(ctx context.Context, roomID string, query MessageL
 	}
 
 	// Decrypt all messages
-	if m.encryptionKey != "" {
+	if key != "" {
 		for i := range res.Messages {
 			if res.Messages[i].Encrypted {
-				decrypted, err := DecryptWithKeyB64(res.Messages[i].Content, m.encryptionKey)
+				decrypted, err := DecryptWithKeyB64(res.Messages[i].Content, key)
 				if err != nil {
 					// Log but don't fail - show encrypted content
 					res.Messages[i].Content = "[Decryption failed]"
@@ -142,14 +159,17 @@ func (m *MessageService) List(ctx context.Context, roomID string, query MessageL
 // ListAfter retrieves and decrypts messages after a specific timestamp
 func (m *MessageService) ListAfter(ctx context.Context, roomID string, query MessageListAfterParams, opts ...option.RequestOption) (*MessagesResponse, error) {
 	opts = slices.Concat(m.Options, opts)
+	key := m.key()
 	if roomID == "" {
 		return nil, ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("api/v1/rooms/%s/messages/after?timestamp=%s", roomID, query.Timestamp.Format(time.RFC3339))
+	// RFC3339 offsets contain "+", which must be escaped in a query string.
+	q := url.Values{"timestamp": {query.Timestamp.Format(time.RFC3339)}}
 	if query.Limit > 0 {
-		path = fmt.Sprintf("%s&limit=%d", path, query.Limit)
+		q.Set("limit", strconv.FormatInt(query.Limit, 10))
 	}
+	path := fmt.Sprintf("api/v1/rooms/%s/messages/after?%s", url.PathEscape(roomID), q.Encode())
 
 	res := &MessagesResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
@@ -157,10 +177,10 @@ func (m *MessageService) ListAfter(ctx context.Context, roomID string, query Mes
 		return nil, err
 	}
 
-	if m.encryptionKey != "" {
+	if key != "" {
 		for i := range res.Messages {
 			if res.Messages[i].Encrypted {
-				decrypted, err := DecryptWithKeyB64(res.Messages[i].Content, m.encryptionKey)
+				decrypted, err := DecryptWithKeyB64(res.Messages[i].Content, key)
 				if err != nil {
 					res.Messages[i].Content = "[Decryption failed]"
 					continue

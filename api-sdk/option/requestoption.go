@@ -31,7 +31,7 @@ func WithBaseURL(base string) RequestOption {
 
 	return requestconfig.RequestOptionFunc(func(rc *requestconfig.RequestConfig) error {
 		if err != nil {
-			return fmt.Errorf("requestoption: WithBaseURL failed to parse url %s", err)
+			return fmt.Errorf("requestoption: WithBaseURL failed to parse url: %w", err)
 		}
 
 		rc.BaseURL = u
@@ -138,7 +138,7 @@ func WithQuery(key, value string) RequestOption {
 func WithQueryAdd(key, value string) RequestOption {
 	return requestconfig.RequestOptionFunc(func(rc *requestconfig.RequestConfig) error {
 		query := rc.Request.URL.Query()
-		query.Del(key)
+		query.Add(key, value)
 		rc.Request.URL.RawQuery = query.Encode()
 		return nil
 	})

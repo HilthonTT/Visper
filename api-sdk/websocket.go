@@ -2,18 +2,18 @@ package apisdk
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"log"
-	"net/http"
 	"net/url"
-	"strings"
+	"slices"
 	"sync"
-	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/hilthontt/visper/api-sdk/internal/requestconfig"
 	"github.com/hilthontt/visper/api-sdk/option"
 )
+
+// ErrWebSocketClosed is returned when using a websocket after Close.
+var ErrWebSocketClosed = errors.New("websocket connection is closed")
 
 const (
 	MemberJoined = "member.joined"
@@ -46,10 +46,21 @@ type MessagePayload struct {
 	UserID    string `json:"userId"`
 	Username  string `json:"username"`
 	Timestamp string `json:"timestamp"`
+	Encrypted bool   `json:"encrypted"`
+}
+
+type MessageUpdatedPayload struct {
+	ID        string `json:"id"`
+	Content   string `json:"content"`
+	RoomID    string `json:"roomId"`
+	Timestamp string `json:"timestamp"`
+	Encrypted bool   `json:"encrypted"`
 }
 
 type MessageDeletedPayload struct {
-	ID string `json:"id"`
+	ID        string `json:"id"`
+	RoomID    string `json:"roomId"`
+	Timestamp string `json:"timestamp"`
 }
 
 type MemberPayload struct {
@@ -68,7 +79,9 @@ type ErrorPayload struct {
 	Retry   bool   `json:"retry,omitempty"`
 }
 
+// BootPayload is the payload of a [Kicked] event.
 type BootPayload struct {
+	UserID   string `json:"userId"`
 	Username string `json:"username"`
 	Reason   string `json:"reason"`
 }
@@ -77,26 +90,19 @@ type RoomDeletedPayload struct {
 	RoomID string `json:"roomid"`
 }
 
-type RoomWebSocket struct {
-	conn           *websocket.Conn
-	roomID         string
-	username       string
-	mu             sync.RWMutex
-	closed         bool
-	messageHandler func(WSMessage)
-	errorHandler   func(error)
+type RoomUpdatedPayload struct {
+	RoomID   string `json:"roomId"`
+	JoinCode string `json:"joinCode"`
 }
 
-func (ws *RoomWebSocket) Close() error {
-	ws.mu.Lock()
-	defer ws.mu.Unlock()
-
-	if ws.closed {
-		return nil
-	}
-
-	ws.closed = true
-	return ws.conn.Close()
+// RoomWebSocket is a connection to a room's event stream. It is safe for
+// concurrent use.
+type RoomWebSocket struct {
+	*wsConn
+	roomID         string
+	mu             sync.RWMutex
+	messageHandler func(WSMessage)
+	errorHandler   func(error)
 }
 
 func (ws *RoomWebSocket) SetMessageHandler(handler func(WSMessage)) {
@@ -105,59 +111,38 @@ func (ws *RoomWebSocket) SetMessageHandler(handler func(WSMessage)) {
 	ws.messageHandler = handler
 }
 
+// SetErrorHandler sets a callback invoked when the connection fails
+// unexpectedly (not after Close or context cancellation).
 func (ws *RoomWebSocket) SetErrorHandler(handler func(error)) {
 	ws.mu.Lock()
 	defer ws.mu.Unlock()
 	ws.errorHandler = handler
 }
 
+// Listen dispatches incoming messages to the message handler until the
+// connection fails, Close is called, or ctx is done; the connection is closed
+// when it returns. It returns ctx.Err() if ctx ended the loop.
 func (ws *RoomWebSocket) Listen(ctx context.Context) error {
-	defer ws.Close()
-
-	log.Printf("[WS] Started listening for messages on room %s", ws.roomID)
-
-	for {
-		select {
-		case <-ctx.Done():
-			log.Printf("[WS] Context done for room %s: %v", ws.roomID, ctx.Err())
-			return ctx.Err()
-		default:
-			var msg WSMessage
-			err := ws.conn.ReadJSON(&msg)
-			if err != nil {
-				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-					log.Printf("[WS] Unexpected close error for room %s: %v", ws.roomID, err)
-					return fmt.Errorf("websocket read error: %w", err)
-				}
-				log.Printf("[WS] Read error for room %s: %v", ws.roomID, err)
-				return err
-			}
-
-			log.Printf("[WS] Received message - Type: %s, RoomID: %s, Data: %+v", msg.Type, msg.RoomID, msg.Data)
-
-			ws.mu.RLock()
-			handler := ws.messageHandler
-			ws.mu.RUnlock()
-
-			if handler != nil {
-				log.Printf("[WS] Calling message handler for type: %s", msg.Type)
-				handler(msg)
-			} else {
-				log.Printf("[WS] No message handler set, dropping message type: %s", msg.Type)
-			}
+	return listen(ctx, ws.wsConn, func(msg WSMessage) {
+		ws.mu.RLock()
+		handler := ws.messageHandler
+		ws.mu.RUnlock()
+		if handler != nil {
+			handler(msg)
 		}
-	}
+	}, func(err error) {
+		ws.mu.RLock()
+		handler := ws.errorHandler
+		ws.mu.RUnlock()
+		if handler != nil {
+			handler(err)
+		}
+	})
 }
 
+// SendMessage sends content as a text frame.
 func (ws *RoomWebSocket) SendMessage(content string) error {
-	ws.mu.RLock()
-	defer ws.mu.RUnlock()
-
-	if ws.closed {
-		return fmt.Errorf("websocket connection is closed")
-	}
-
-	return ws.conn.WriteMessage(websocket.TextMessage, []byte(content))
+	return ws.write(websocket.TextMessage, []byte(content))
 }
 
 func (r *RoomService) ConnectWebSocket(
@@ -165,62 +150,18 @@ func (r *RoomService) ConnectWebSocket(
 	roomID string,
 	opts ...option.RequestOption,
 ) (*RoomWebSocket, error) {
-	opts = append(r.Options, opts...)
-
 	if roomID == "" {
 		return nil, ErrMissingIDParameter
 	}
+	opts = slices.Concat(r.Options, opts)
 
-	cfg, err := requestconfig.NewRequestConfig(ctx, http.MethodGet, "", nil, nil, opts...)
-	if err != nil {
-		return nil, err
-	}
-
-	baseURL := cfg.BaseURL.String()
-
-	// Convert http(s) to ws(s)
-	wsURL := baseURL
-	if after, ok := strings.CutPrefix(baseURL, "https://"); ok {
-		wsURL = "wss://" + after
-	} else if after0, ok0 := strings.CutPrefix(baseURL, "http://"); ok0 {
-		wsURL = "ws://" + after0
-	}
-
-	path := fmt.Sprintf("%s/api/v1/rooms/%s/ws", wsURL, roomID)
-
-	log.Printf("[WEBSOCKET_URL]: %s\n", path)
-
-	dialer := websocket.Dialer{
-		HandshakeTimeout: 10 * time.Second,
-	}
-
-	headers := http.Header{}
-	for key, values := range cfg.Request.Header {
-		for _, value := range values {
-			headers.Add(key, value)
-		}
-	}
-
-	if cfg.HTTPClient != nil {
-		if jar := cfg.HTTPClient.Jar; jar != nil {
-			if parsedURL, err := url.Parse(cfg.BaseURL.String()); err == nil {
-				cookies := jar.Cookies(parsedURL)
-				for _, cookie := range cookies {
-					headers.Add("Cookie", cookie.String())
-				}
-			}
-		}
-	}
-
-	conn, _, err := dialer.DialContext(ctx, path, headers)
+	conn, _, err := dialWebSocket(ctx, fmt.Sprintf("api/v1/rooms/%s/ws", url.PathEscape(roomID)), opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to websocket: %w", err)
 	}
 
-	ws := &RoomWebSocket{
-		conn:   conn,
+	return &RoomWebSocket{
+		wsConn: newWSConn(conn),
 		roomID: roomID,
-	}
-
-	return ws, nil
+	}, nil
 }

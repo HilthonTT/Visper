@@ -367,7 +367,7 @@ func (e *encoder) encodeMapEntries(key string, v reflect.Value, writer *multipar
 
 	elementEncoder := e.typeEncoder(v.Type().Elem())
 	for _, p := range pairs {
-		err := elementEncoder(key+string(p.key), p.value, writer)
+		err := elementEncoder(key+p.key, p.value, writer)
 		if err != nil {
 			return err
 		}

@@ -94,7 +94,7 @@ func getNormalizedOS() string {
 		return "Android"
 	case "darwin":
 		return "MacOS"
-	case "window":
+	case "windows":
 		return "Windows"
 	case "freebsd":
 		return "FreeBSD"
@@ -363,16 +363,7 @@ type bodyWithTimeout struct {
 }
 
 func (b *bodyWithTimeout) Read(p []byte) (int, error) {
-	n, err := b.rc.Read(p)
-	if err != nil {
-		return n, nil
-	}
-
-	if err == io.EOF {
-		return n, err
-	}
-
-	return n, err
+	return b.rc.Read(p)
 }
 
 func (b *bodyWithTimeout) Close() error {
@@ -407,10 +398,10 @@ func (cfg *RequestConfig) Execute() error {
 	}
 
 	parsedURL, err := cfg.BaseURL.Parse(strings.TrimLeft(cfg.Request.URL.String(), "/"))
-	cfg.Request.URL = parsedURL
 	if err != nil {
 		return err
 	}
+	cfg.Request.URL = parsedURL
 
 	if cfg.Body != nil && cfg.Request.Body == nil {
 		switch body := cfg.Body.(type) {
@@ -470,6 +461,9 @@ func (cfg *RequestConfig) Execute() error {
 
 		res, err = handler(req)
 		if ctx != nil && ctx.Err() != nil {
+			if res != nil && res.Body != nil {
+				res.Body.Close()
+			}
 			return ctx.Err()
 		}
 		if !shouldRetry(cfg.Request, res) || retryCount >= cfg.MaxRetries {
@@ -492,6 +486,11 @@ func (cfg *RequestConfig) Execute() error {
 		// Close the response body before retrying to prevent connection leaks
 		if res != nil && res.Body != nil {
 			res.Body.Close()
+		}
+		// Release this attempt's timeout context; the next attempt makes a new one.
+		if cancel != nil {
+			cancel()
+			cancel = nil
 		}
 
 		time.Sleep(retryDelay(res, retryCount))
@@ -534,6 +533,12 @@ func (cfg *RequestConfig) Execute() error {
 	}
 
 	_, intoCustomResponseBody := cfg.ResponseBodyInto.(**http.Response)
+	if cfg.ResponseBodyInto == nil && cfg.ResponseInto == nil {
+		// Nobody can read the body: drain and close it so the connection is
+		// released back to the pool.
+		_, _ = io.Copy(io.Discard, res.Body)
+		return res.Body.Close()
+	}
 	if cfg.ResponseBodyInto == nil || intoCustomResponseBody {
 		// We aren't reading the response body in this scope, but whoever is will need the
 		// cancel func from the context to observe request timeouts.

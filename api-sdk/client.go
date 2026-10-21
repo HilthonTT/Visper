@@ -41,13 +41,15 @@ func DefaultClientOptions() []option.RequestOption {
 }
 
 func NewClient(opts ...option.RequestOption) *Client {
-	opts = append(DefaultClientOptions(), opts...)
+	// Clip so that appending to opts (here or in a service) can never write into
+	// a backing array shared with another service's options.
+	opts = slices.Clip(slices.Concat(DefaultClientOptions(), opts))
 
 	aiBaseURL := "http://localhost:8088"
 	if u, ok := os.LookupEnv("VISPER_AI_BASE_URL"); ok {
 		aiBaseURL = u
 	}
-	aiOpts := append(opts, option.WithBaseURL(aiBaseURL))
+	aiOpts := slices.Concat(opts, []option.RequestOption{option.WithBaseURL(aiBaseURL)})
 
 	r := &Client{
 		Options: opts,

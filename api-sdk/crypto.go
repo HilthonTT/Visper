@@ -31,7 +31,7 @@ func GenerateKey() ([]byte, error) {
 func GenerateKeyBase64() (string, error) {
 	key, err := GenerateKey()
 	if err != nil {
-		return "", nil
+		return "", err
 	}
 
 	return base64.StdEncoding.EncodeToString(key), nil
