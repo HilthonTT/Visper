@@ -5,7 +5,6 @@ import (
 
 	"github.com/hilthontt/visper/api/domain/model"
 	"github.com/hilthontt/visper/api/domain/repository"
-	"github.com/hilthontt/visper/api/infrastructure/config"
 	"go.uber.org/zap"
 	"gorm.io/gorm/clause"
 )
@@ -14,13 +13,14 @@ type PostgresAuditLogRepository struct {
 	*BaseRepository[model.AuditLog]
 }
 
-func NewAuditLogRepository(cfg *config.Config, zapLogger *zap.Logger) repository.AuditLogRepository {
-	var preloads []string = []string{}
+func NewAuditLogRepository(zapLogger *zap.Logger) repository.AuditLogRepository {
 	return &PostgresAuditLogRepository{
-		BaseRepository: NewBaseRepository[model.AuditLog](cfg, preloads, zapLogger),
+		BaseRepository: NewBaseRepository[model.AuditLog](nil, zapLogger),
 	}
 }
 
+// CreateAuditLog inserts the entry; an entry whose event_id already exists is
+// silently skipped so that replayed events are not duplicated.
 func (r *PostgresAuditLogRepository) CreateAuditLog(ctx context.Context, a model.AuditLog) (model.AuditLog, error) {
 	result := r.database.WithContext(ctx).
 		Clauses(clause.OnConflict{
@@ -30,7 +30,7 @@ func (r *PostgresAuditLogRepository) CreateAuditLog(ctx context.Context, a model
 		Create(&a)
 
 	if result.Error != nil {
-		r.logger.Error(ctx, result.Error.Error())
+		r.logger.Error(ctx, "create audit log failed: %v", result.Error)
 		return a, result.Error
 	}
 

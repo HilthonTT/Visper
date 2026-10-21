@@ -29,26 +29,23 @@ type RoomController interface {
 }
 
 type roomController struct {
-	usecase       room.RoomUseCase
-	userUsecase   user.UserUseCase
-	wsRoomManager *websocket.RoomManager
-	wsCore        *websocket.Core
-	config        *config.Config
+	usecase     room.RoomUseCase
+	userUsecase user.UserUseCase
+	wsCore      *websocket.Core
+	config      *config.Config
 }
 
 func NewRoomController(
 	usecase room.RoomUseCase,
 	userUsecase user.UserUseCase,
-	wsRoomManager *websocket.RoomManager,
 	wsCore *websocket.Core,
 	config *config.Config,
 ) RoomController {
 	return &roomController{
-		usecase:       usecase,
-		userUsecase:   userUsecase,
-		wsRoomManager: wsRoomManager,
-		wsCore:        wsCore,
-		config:        config,
+		usecase:     usecase,
+		userUsecase: userUsecase,
+		wsCore:      wsCore,
+		config:      config,
 	}
 }
 
@@ -86,8 +83,7 @@ func (c *roomController) GenerateNewJoinCode(ctx *gin.Context) {
 		return
 	}
 
-	updatedMessage := websocket.NewRoomUpdated(room.ID, room.JoinCode)
-	c.wsCore.Broadcast() <- updatedMessage
+	c.wsCore.Publish(websocket.NewRoomUpdated(room.ID, room.JoinCode))
 
 	ctx.JSON(http.StatusOK, SuccessResponse{
 		Message: "room join code regenerated successfully",
@@ -167,80 +163,15 @@ func (c *roomController) GetRoom(ctx *gin.Context) {
 		return
 	}
 
-	ctx.JSON(http.StatusOK, c.toRoomResponse(room, user))
-}
-
-func (c *roomController) GetRoomByJoinCode(ctx *gin.Context) {
-	var req JoinByCodeRequest
-	if err := ctx.ShouldBindJSON(&req); err != nil {
-		ctx.JSON(http.StatusBadRequest, ErrorResponse{
-			Error:   "invalid_request",
-			Message: middlewares.TranslateValidationError(err),
+	// The response carries the room's encryption key and join code, so only
+	// members may read it.
+	if !room.IsMember(user.ID) {
+		ctx.JSON(http.StatusForbidden, ErrorResponse{
+			Error:   "forbidden",
+			Message: "you are not a member of this room",
 		})
 		return
 	}
-
-	room, err := c.usecase.GetByJoinCode(ctx.Request.Context(), req.JoinCode)
-	if err != nil {
-		status := http.StatusNotFound
-		if err.Error() != "room not found with join code: "+req.JoinCode &&
-			err.Error() != "room has expired" {
-			status = http.StatusInternalServerError
-		}
-		ctx.JSON(status, ErrorResponse{
-			Error:   "not_found",
-			Message: err.Error(),
-		})
-		return
-	}
-
-	user, exists := middlewares.GetUserFromContext(ctx)
-	if !exists {
-		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
-			Error:   "unauthorized",
-			Message: "user not found in context",
-		})
-		return
-	}
-
-	if req.Username != "" {
-		user.Username = req.Username
-	}
-
-	if err := c.usecase.JoinRoom(ctx.Request.Context(), room.ID, *user); err != nil {
-		ctx.JSON(http.StatusInternalServerError, ErrorResponse{
-			Error:   "join_failed",
-			Message: err.Error(),
-		})
-		return
-	}
-
-	if err := security.SetRoomAuth(ctx.Writer, user, room.ID); err != nil {
-		ctx.JSON(http.StatusInternalServerError, ErrorResponse{
-			Error:   "auth_failed",
-			Message: "failed to set authentication",
-		})
-		return
-	}
-
-	room, err = c.usecase.GetByID(ctx.Request.Context(), room.ID)
-	if err != nil {
-		status := http.StatusInternalServerError
-		if err.Error() == "room not found" || err.Error() == "room has expired" {
-			status = http.StatusNotFound
-		}
-		ctx.JSON(status, ErrorResponse{
-			Error:   "not_found",
-			Message: err.Error(),
-		})
-		return
-	}
-
-	c.wsCore.Broadcast() <- websocket.NewMemberJoined(room.ID, websocket.MemberPayload{
-		UserID:   user.ID,
-		Username: user.Username,
-		JoinedAt: time.Now().Format(time.RFC3339),
-	})
 
 	ctx.JSON(http.StatusOK, c.toRoomResponse(room, user))
 }
@@ -280,8 +211,7 @@ func (c *roomController) DeleteRoom(ctx *gin.Context) {
 
 	security.ClearRoomAuth(ctx.Writer, roomID)
 
-	deleteMessage := websocket.NewRoomDeleted(roomID)
-	c.wsCore.Broadcast() <- deleteMessage
+	c.wsCore.Publish(websocket.NewRoomDeleted(roomID))
 
 	ctx.JSON(http.StatusOK, SuccessResponse{
 		Message: "room deleted successfully",
@@ -340,12 +270,11 @@ func (c *roomController) JoinRoom(ctx *gin.Context) {
 		return
 	}
 
-	joinMessage := websocket.NewMemberJoined(roomID, websocket.MemberPayload{
+	c.wsCore.Publish(websocket.NewMemberJoined(roomID, websocket.MemberPayload{
 		UserID:   user.ID,
 		Username: user.Username,
 		JoinedAt: time.Now().Format(time.RFC3339),
-	})
-	c.wsCore.Broadcast() <- joinMessage
+	}))
 
 	ctx.JSON(http.StatusOK, SuccessResponse{
 		Message: "successfully joined room",
@@ -413,14 +342,13 @@ func (c *roomController) JoinRoomByJoinCode(ctx *gin.Context) {
 		return
 	}
 
-	joinMessage := websocket.NewMemberJoined(room.ID, websocket.MemberPayload{
+	c.wsCore.Publish(websocket.NewMemberJoined(room.ID, websocket.MemberPayload{
 		UserID:   user.ID,
 		Username: user.Username,
-		JoinedAt: time.Now().String(),
-	})
-	c.wsCore.Broadcast() <- joinMessage
+		JoinedAt: time.Now().Format(time.RFC3339),
+	}))
 
-	ctx.JSON(http.StatusOK, c.toRoomResponse(room, user))
+	ctx.JSON(http.StatusOK, c.toRoomResponse(c.reloadRoom(ctx, room), user))
 }
 
 func (c *roomController) LeaveRoom(ctx *gin.Context) {
@@ -458,8 +386,7 @@ func (c *roomController) LeaveRoom(ctx *gin.Context) {
 
 	security.ClearRoomAuth(ctx.Writer, roomID)
 
-	leaveMessage := websocket.NewMemberLeft(roomID, user.ID, user.Username)
-	c.wsCore.Broadcast() <- leaveMessage
+	c.wsCore.Publish(websocket.NewMemberLeft(roomID, user.ID, user.Username))
 
 	ctx.JSON(http.StatusOK, SuccessResponse{
 		Message: "successfully left room",
@@ -531,9 +458,9 @@ func (c *roomController) KickMember(ctx *gin.Context) {
 
 	user, exists := middlewares.GetUserFromContext(ctx)
 	if !exists {
-		ctx.JSON(http.StatusOK, map[string]any{
-			"is_member": false,
-			"room_id":   roomID,
+		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
+			Error:   "unauthorized",
+			Message: "user not found in context",
 		})
 		return
 	}
@@ -565,8 +492,7 @@ func (c *roomController) KickMember(ctx *gin.Context) {
 	}
 
 	const reason = "Removed by room owner"
-	kickMessage := websocket.NewErrorKicked(roomID, userToKick.ID, userToKick.Username, reason)
-	c.wsCore.Broadcast() <- kickMessage
+	c.wsCore.Publish(websocket.NewErrorKicked(roomID, userToKick.ID, userToKick.Username, reason))
 
 	ctx.JSON(http.StatusOK, SuccessResponse{
 		Message: "member kicked successfully",
@@ -616,7 +542,7 @@ func (c *roomController) RegenerateSecureToken(ctx *gin.Context) {
 		Message: "secure token regenerated successfully",
 		Data: map[string]string{
 			"secure_code": room.SecureCode,
-			"qr_code_url": room.GetQRCodeURL(c.config.GetServerAddress()),
+			"qr_code_url": room.GetQRCodeURL(c.config.GetFrontEndURL()),
 		},
 	})
 }
@@ -685,14 +611,13 @@ func (c *roomController) JoinRoomByJoinCodeWithToken(ctx *gin.Context) {
 		return
 	}
 
-	joinMessage := websocket.NewMemberJoined(room.ID, websocket.MemberPayload{
+	c.wsCore.Publish(websocket.NewMemberJoined(room.ID, websocket.MemberPayload{
 		UserID:   user.ID,
 		Username: user.Username,
 		JoinedAt: time.Now().Format(time.RFC3339),
-	})
-	c.wsCore.Broadcast() <- joinMessage
+	}))
 
-	ctx.JSON(http.StatusOK, c.toRoomResponse(room, user))
+	ctx.JSON(http.StatusOK, c.toRoomResponse(c.reloadRoom(ctx, room), user))
 }
 
 func (c *roomController) toRoomResponse(room *model.Room, currentUser *model.User) RoomResponse {
@@ -726,4 +651,13 @@ func (c *roomController) toRoomResponse(room *model.Room, currentUser *model.Use
 		},
 		EncryptionKey: room.EncryptionKey,
 	}
+}
+
+// reloadRoom re-reads the room after a join so that the response includes the
+// new member. It falls back to the given room if the reload fails.
+func (c *roomController) reloadRoom(ctx *gin.Context, room *model.Room) *model.Room {
+	if updated, err := c.usecase.GetByID(ctx.Request.Context(), room.ID); err == nil {
+		return updated
+	}
+	return room
 }

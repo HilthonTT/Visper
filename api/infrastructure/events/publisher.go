@@ -2,9 +2,11 @@ package events
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hilthontt/visper/api/infrastructure/broker"
 )
 
@@ -17,11 +19,8 @@ type EventPublisher struct {
 // NewEventPublisher creates a new event publisher
 func NewEventPublisher(brokerInstance *broker.Broker, topic string) (*EventPublisher, error) {
 	// Create topic if it doesn't exist
-	if err := brokerInstance.CreateTopic(topic, 3); err != nil {
-		// Topic might already exist, that's okay
-		if err.Error() != fmt.Sprintf("topic %s already exists", topic) {
-			return nil, fmt.Errorf("failed to create topic: %w", err)
-		}
+	if err := brokerInstance.CreateTopic(topic, 3); err != nil && !errors.Is(err, broker.ErrTopicExists) {
+		return nil, fmt.Errorf("failed to create topic: %w", err)
 	}
 
 	// Create producer with leader acknowledgment
@@ -123,7 +122,9 @@ func (ep *EventPublisher) PublishUserLeft(roomID, userID string) error {
 	return ep.Publish(event)
 }
 
-// generateEventID generates a unique event ID
+// generateEventID generates a unique event ID. Event IDs are the
+// deduplication key of the audit log, so they must not collide (a timestamp
+// based ID does when events are published concurrently).
 func generateEventID() string {
-	return fmt.Sprintf("evt_%d", time.Now().UnixNano())
+	return uuid.NewString()
 }

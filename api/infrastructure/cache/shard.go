@@ -34,7 +34,8 @@ func NewShardedCache(options Options, shardCount int) *ShardedCache {
 func (sc *ShardedCache) getShard(key string) *Cache {
 	hasher := fnv.New32a()
 	hasher.Write([]byte(key))
-	shardIndex := int(hasher.Sum32()) % sc.shardCount
+	// Modulo on the unsigned hash: int(uint32) can be negative on 32-bit platforms.
+	shardIndex := int(hasher.Sum32() % uint32(sc.shardCount))
 	return sc.shards[shardIndex]
 }
 

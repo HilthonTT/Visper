@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -28,79 +29,79 @@ func NewDistributedCache(redisClient *redis.Client, keyPrefix string, localOptio
 	}
 }
 
-// Set adds an item to both local and Redis caches
-func (dc *DistributedCache) Set(key string, value any, ttl time.Duration) error {
-	localTTL := ttl
-	if ttl > dc.localTTL {
-		localTTL = dc.localTTL
-	}
-	dc.local.Set(key, value, localTTL)
-
-	// Marshal values for Redis
+// Set adds an item to both local and Redis caches. A ttl <= 0 means the Redis
+// key does not expire; the local copy always expires after at most localTTL so
+// that changes made by other instances become visible.
+func (dc *DistributedCache) Set(ctx context.Context, key string, value any, ttl time.Duration) error {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
 
-	// Set in Redis
 	redisKey := dc.keyPrefix + key
-	ctx := context.Background()
-	return dc.redis.Set(ctx, redisKey, data, ttl).Err()
-}
-
-// Get retrieves an item, checking local cache first
-func (dc *DistributedCache) Get(key string, valuePtr any) (bool, error) {
-	// Check local cache first
-	if val, found := dc.local.Get(key); found {
-		// Unmarshal into the provided pointer
-		data, err := json.Marshal(val)
-		if err != nil {
-			return false, err
-		}
-
-		return true, json.Unmarshal(data, valuePtr)
+	if err := dc.redis.Set(ctx, redisKey, data, ttl).Err(); err != nil {
+		// Do not keep a local copy of a value that was never persisted.
+		dc.local.Delete(key)
+		return err
 	}
 
-	// Check Redis
+	dc.local.Set(key, data, dc.localTTLFor(ttl))
+	return nil
+}
+
+// Get retrieves an item, checking local cache first. The value is decoded
+// into valuePtr.
+func (dc *DistributedCache) Get(ctx context.Context, key string, valuePtr any) (bool, error) {
+	// The local cache stores the encoded JSON rather than the caller's value so
+	// that callers mutating the decoded struct can never corrupt the cache.
+	if val, found := dc.local.Get(key); found {
+		if data, ok := val.([]byte); ok {
+			return true, json.Unmarshal(data, valuePtr)
+		}
+		dc.local.Delete(key)
+	}
+
 	redisKey := dc.keyPrefix + key
-	ctx := context.Background()
 	data, err := dc.redis.Get(ctx, redisKey).Bytes()
 	if err != nil {
-		if err == redis.Nil {
+		if errors.Is(err, redis.Nil) {
 			return false, nil
 		}
 		return false, err
 	}
 
-	// Unmarshal the data
 	if err := json.Unmarshal(data, valuePtr); err != nil {
 		return false, err
 	}
 
-	// Update local cache
-	dc.local.Set(key, valuePtr, dc.localTTL)
+	dc.local.Set(key, data, dc.localTTL)
 
 	return true, nil
 }
 
+func (dc *DistributedCache) localTTLFor(ttl time.Duration) time.Duration {
+	if ttl <= 0 || ttl > dc.localTTL {
+		return dc.localTTL
+	}
+	return ttl
+}
+
 // Delete removes an item from both caches
-func (dc *DistributedCache) Delete(key string) error {
+func (dc *DistributedCache) Delete(ctx context.Context, key string) error {
 	// Delete from local cache
 	dc.local.Delete(key)
 
 	// Delete from Redis
 	redisKey := dc.keyPrefix + key
-	ctx := context.Background()
 	return dc.redis.Del(ctx, redisKey).Err()
 }
 
 // Flush clears both caches
-func (dc *DistributedCache) Flush() error {
+func (dc *DistributedCache) Flush(ctx context.Context) error {
 	// Flush local cache
 	dc.local.Flush()
 
 	// Flush Redis keys with our prefix
-	ctx := context.Background()
 	iter := dc.redis.Scan(ctx, 0, dc.keyPrefix+"*", 100).Iterator()
 
 	for iter.Next(ctx) {
@@ -127,17 +128,29 @@ func (dc *DistributedCache) ZRange(ctx context.Context, key string, start, stop 
 // ZRevRange returns members from a sorted set in reverse order
 func (dc *DistributedCache) ZRevRange(ctx context.Context, key string, start, stop int64) ([]string, error) {
 	redisKey := dc.keyPrefix + key
-	return dc.redis.ZRevRange(ctx, redisKey, start, stop).Result()
+	return dc.redis.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:   redisKey,
+		Start: start,
+		Stop:  stop,
+		Rev:   true,
+	}).Result()
 }
 
 // ZRangeByScore returns members from a sorted set by score range
 func (dc *DistributedCache) ZRangeByScore(ctx context.Context, key string, opt *redis.ZRangeBy) ([]string, error) {
 	redisKey := dc.keyPrefix + key
-	return dc.redis.ZRangeByScore(ctx, redisKey, opt).Result()
+	return dc.redis.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     redisKey,
+		Start:   opt.Min,
+		Stop:    opt.Max,
+		ByScore: true,
+		Offset:  opt.Offset,
+		Count:   opt.Count,
+	}).Result()
 }
 
 // ZRem removes members from a sorted set
-func (dc *DistributedCache) ZRem(ctx context.Context, key string, members ...interface{}) error {
+func (dc *DistributedCache) ZRem(ctx context.Context, key string, members ...any) error {
 	redisKey := dc.keyPrefix + key
 	return dc.redis.ZRem(ctx, redisKey, members...).Err()
 }
@@ -155,13 +168,13 @@ func (dc *DistributedCache) ZCard(ctx context.Context, key string) (int64, error
 }
 
 // SAdd adds members to a set
-func (dc *DistributedCache) SAdd(ctx context.Context, key string, members ...interface{}) error {
+func (dc *DistributedCache) SAdd(ctx context.Context, key string, members ...any) error {
 	redisKey := dc.keyPrefix + key
 	return dc.redis.SAdd(ctx, redisKey, members...).Err()
 }
 
 // SRem removes members from a set
-func (dc *DistributedCache) SRem(ctx context.Context, key string, members ...interface{}) error {
+func (dc *DistributedCache) SRem(ctx context.Context, key string, members ...any) error {
 	redisKey := dc.keyPrefix + key
 	return dc.redis.SRem(ctx, redisKey, members...).Err()
 }
@@ -177,6 +190,11 @@ func (dc *DistributedCache) Pipeline() redis.Pipeliner {
 	return dc.redis.Pipeline()
 }
 
+// TxPipeline returns a Redis pipeline wrapped in MULTI/EXEC.
+func (dc *DistributedCache) TxPipeline() redis.Pipeliner {
+	return dc.redis.TxPipeline()
+}
+
 // ExecPipeline executes a pipeline with key prefix handling
 func (dc *DistributedCache) ExecPipeline(ctx context.Context, pipe redis.Pipeliner) error {
 	_, err := pipe.Exec(ctx)
@@ -188,8 +206,8 @@ func (dc *DistributedCache) GetRedisKey(key string) string {
 	return dc.keyPrefix + key
 }
 
-// Close closes both caches
-func (dc *DistributedCache) Close() error {
+// Close stops the local cache. The Redis client is shared and owned by the
+// caller (see CloseRedis), so it is not closed here.
+func (dc *DistributedCache) Close() {
 	dc.local.Close()
-	return dc.redis.Close()
 }

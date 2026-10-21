@@ -119,7 +119,7 @@ func (p *AdaptiveProfiler) captureProfiles() {
 	timestamp := time.Now().Format("20060102-150405")
 
 	// Ensure profile directory exists
-	if err := os.MkdirAll(p.profileDir, 0755); err != nil {
+	if err := os.MkdirAll(p.profileDir, 0o750); err != nil {
 		fmt.Printf("Error creating profile directory: %v\n", err)
 		p.mutex.Lock()
 		p.isRunning = false

@@ -1,0 +1,26 @@
+# Build artefacts and local runtime data
+bin/
+tmp/
+data/
+uploads/
+logs/
+cmd/**/data/
+cmd/**/uploads/
+*.exe
+*.log
+build-errors.log
+
+# Local configuration and secrets (only config-docker.yml is needed in the image)
+.env
+.env.*
+infrastructure/config/config-development.yml
+infrastructure/config/config-production.yml
+
+# Tooling / VCS
+.git
+.air.toml
+Dockerfile
+.dockerignore
+*_test.go
+coverage.*
+*.out

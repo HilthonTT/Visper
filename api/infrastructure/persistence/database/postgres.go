@@ -1,9 +1,7 @@
 package database
 
 import (
-	"fmt"
 	"log"
-	"time"
 
 	"github.com/hilthontt/visper/api/infrastructure/config"
 	"gorm.io/driver/postgres"
@@ -13,29 +11,29 @@ import (
 var dbClient *gorm.DB
 
 func InitDb(cfg *config.Config) error {
-	var err error
-	cnn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s TimeZone=Asia/Tehran",
-		cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.User, cfg.Postgres.Password,
-		cfg.Postgres.DbName, cfg.Postgres.SSLMode)
+	// Timestamps are stored as TIMESTAMP WITH TIME ZONE; use UTC for the session.
+	dsn := cfg.GetPostgresConnectionString() + " TimeZone=UTC"
 
-	dbClient, err = gorm.Open(postgres.Open(cnn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return err
 	}
 
-	sqlDB, err := dbClient.DB()
+	sqlDB, err := db.DB()
 	if err != nil {
 		return err
 	}
 
-	err = sqlDB.Ping()
-	if err != nil {
+	if err := sqlDB.Ping(); err != nil {
 		return err
 	}
 
 	sqlDB.SetMaxIdleConns(cfg.Postgres.MaxIdleConns)
 	sqlDB.SetMaxOpenConns(cfg.Postgres.MaxOpenConns)
-	sqlDB.SetConnMaxLifetime(cfg.Postgres.ConnMaxLifetime * time.Minute)
+	// ConnMaxLifetime is already a time.Duration parsed from the config ("5s").
+	sqlDB.SetConnMaxLifetime(cfg.Postgres.ConnMaxLifetime)
+
+	dbClient = db
 
 	log.Println("Db connection established")
 	return nil
@@ -46,6 +44,11 @@ func GetDb() *gorm.DB {
 }
 
 func CloseDb() {
-	con, _ := dbClient.DB()
-	con.Close()
+	if dbClient == nil {
+		return
+	}
+
+	if con, err := dbClient.DB(); err == nil {
+		_ = con.Close()
+	}
 }

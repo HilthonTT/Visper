@@ -60,56 +60,58 @@ func ETagMiddleware(store ETagStore) gin.HandlerFunc {
 			}
 		}
 
-		writer := &responseWriter{
-			ResponseWriter: c.Writer,
-			body:           &bytes.Buffer{},
-		}
+		// The body is buffered so that the ETag header can still be set and a
+		// 304 returned after the handler ran. Previously the body was streamed
+		// straight through, which made both impossible.
+		original := c.Writer
+		writer := &bufferedWriter{ResponseWriter: original}
 		c.Writer = writer
 
 		c.Next()
 
-		if isETaggableResponse(c) {
-			responseBody := writer.body.Bytes()
-			etag := generateETag(responseBody)
+		c.Writer = original
+		body := writer.body.Bytes()
+
+		if len(body) > 0 && isETaggableResponse(original) {
+			etag := generateETag(body)
 
 			store.SetETag(resourceURI, etag)
-			c.Header("ETag", "\""+etag+"\"")
+			original.Header().Set("ETag", "\""+etag+"\"")
 
 			if c.Request.Method == http.MethodGet && ifNoneMatch == etag {
-				c.Status(http.StatusNotModified)
-				c.Writer = &emptyResponseWriter{ResponseWriter: c.Writer}
+				original.Header().Del("Content-Length")
+				original.WriteHeader(http.StatusNotModified)
+				original.WriteHeaderNow()
 				return
 			}
+		}
+
+		if len(body) > 0 {
+			_, _ = original.Write(body)
 		}
 	}
 }
 
-type responseWriter struct {
+// bufferedWriter captures the response body instead of sending it. Status
+// codes and headers still go to the underlying writer (gin only records them
+// until the first body write), and Hijack/Flush are delegated so websocket
+// upgrades keep working.
+type bufferedWriter struct {
 	gin.ResponseWriter
-	body *bytes.Buffer
+	body bytes.Buffer
 }
 
-func (w *responseWriter) Write(b []byte) (int, error) {
-	w.body.Write(b)
-	return w.ResponseWriter.Write(b)
+func (w *bufferedWriter) Write(b []byte) (int, error) {
+	return w.body.Write(b)
 }
 
-func (w *responseWriter) WriteString(s string) (int, error) {
-	w.body.WriteString(s)
-	return w.ResponseWriter.WriteString(s)
+func (w *bufferedWriter) WriteString(s string) (int, error) {
+	return w.body.WriteString(s)
 }
 
-type emptyResponseWriter struct {
-	gin.ResponseWriter
-}
-
-func (w *emptyResponseWriter) Write(b []byte) (int, error) {
-	return len(b), nil
-}
-
-func isETaggableResponse(c *gin.Context) bool {
-	contentType := c.Writer.Header().Get("Content-Type")
-	return c.Writer.Status() == http.StatusOK &&
+func isETaggableResponse(w gin.ResponseWriter) bool {
+	contentType := w.Header().Get("Content-Type")
+	return w.Status() == http.StatusOK &&
 		strings.Contains(strings.ToLower(contentType), "json")
 }
 
@@ -119,7 +121,9 @@ func generateETag(content []byte) string {
 }
 
 func canSkipETag(c *gin.Context) bool {
-	return c.Request.Method == http.MethodPost || c.Request.Method == http.MethodDelete
+	return c.Request.Method == http.MethodPost ||
+		c.Request.Method == http.MethodDelete ||
+		strings.EqualFold(c.GetHeader("Upgrade"), "websocket")
 }
 
 func containsMethod(methods []string, method string) bool {

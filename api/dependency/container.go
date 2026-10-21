@@ -9,6 +9,7 @@ import (
 	roomUseCase "github.com/hilthontt/visper/api/application/usecases/room"
 	userUseCase "github.com/hilthontt/visper/api/application/usecases/user"
 	"github.com/hilthontt/visper/api/domain/repository"
+	"github.com/hilthontt/visper/api/infrastructure/broker"
 	"github.com/hilthontt/visper/api/infrastructure/cache"
 	"github.com/hilthontt/visper/api/infrastructure/config"
 	"github.com/hilthontt/visper/api/infrastructure/events"
@@ -16,6 +17,7 @@ import (
 	"github.com/hilthontt/visper/api/infrastructure/logger"
 	"github.com/hilthontt/visper/api/infrastructure/metrics"
 	"github.com/hilthontt/visper/api/infrastructure/profiler"
+	"github.com/hilthontt/visper/api/infrastructure/security"
 	"github.com/hilthontt/visper/api/infrastructure/storage"
 	"github.com/hilthontt/visper/api/infrastructure/websocket"
 	"github.com/hilthontt/visper/api/presentation/controllers/file"
@@ -63,15 +65,24 @@ type Container struct {
 
 	EventConsumer  *events.EventConsumer
 	EventPublisher *events.EventPublisher
+	Broker         *broker.Broker
 
+	// ctx is cancelled by Shutdown and stops every background goroutine
+	// (websocket hubs, profiler, cleanup job).
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
+// NewContainer wires all dependencies. ctx is the application lifetime
+// context: cancelling it (or calling Shutdown) stops background workers.
 func NewContainer(ctx context.Context) (*Container, error) {
 	c := &Container{}
+	c.ctx, c.cancel = context.WithCancel(ctx)
 
 	c.Config = config.GetConfig()
+
+	// Secure cookies everywhere except development, which may run over HTTP.
+	security.SetSecureCookies(!c.Config.IsDevelopment())
 
 	loggerInstance, err := logger.NewDevelopmentLogger()
 	if err != nil {
@@ -92,18 +103,14 @@ func NewContainer(ctx context.Context) (*Container, error) {
 	c.initRepositories()
 
 	if err := c.initBroker(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error initializing broker: %w", err)
 	}
 
 	c.initWebSocket()
 	c.initUseCases()
 	c.initMiddleware()
 	c.initControllers()
-
-	wsCtx, cancel := context.WithCancel(ctx)
-	c.cancel = cancel
-	c.initBackgroundJobs(wsCtx)
-
+	c.initBackgroundJobs()
 	c.initProfile()
 
 	c.Logger.Info("All dependencies initialized successfully")

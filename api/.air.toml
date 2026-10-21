@@ -7,11 +7,12 @@ tmp_dir = "tmp"
 
 [build]
   args_bin = []
-  bin = "./bin/main"
-  cmd = "go build -o ./bin/main.exe ./cmd/"
+  # One config for every OS: air does not add ".exe" on Windows and cannot run
+  # an extension-less binary there, while Linux/macOS run "main.exe" just fine.
+  cmd = "go build -o ./tmp/main.exe ./cmd/api"
+  entrypoint = ["./tmp/main.exe"]
   delay = 1000
-  entrypoint = [".\\bin\\main.exe"]
-  exclude_dir = ["assets", "tmp", "vendor", "testdata"]
+  exclude_dir = ["assets", "tmp", "vendor", "testdata", "bin", "data", "uploads", "logs"]
   exclude_file = []
   exclude_regex = ["_test.go"]
   exclude_unchanged = false
@@ -19,7 +20,7 @@ tmp_dir = "tmp"
   full_bin = ""
   ignore_dangerous_root_dir = false
   include_dir = []
-  include_ext = ["go", "tpl", "tmpl", "html"]
+  include_ext = ["go", "tpl", "tmpl", "html", "yml"]
   include_file = []
   kill_delay = "0s"
   log = "build-errors.log"

@@ -2,6 +2,7 @@ package dependency
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -27,8 +28,8 @@ func (c *Container) initMiddleware() {
 }
 
 func (c *Container) initControllers() {
-	c.MessageController = message.NewMessageController(c.MessageUC, c.RoomUC, c.WSRoomManager, c.WSCore)
-	c.RoomController = room.NewRoomController(c.RoomUC, c.UserUC, c.WSRoomManager, c.WSCore, c.Config)
+	c.MessageController = message.NewMessageController(c.MessageUC, c.RoomUC, c.WSCore)
+	c.RoomController = room.NewRoomController(c.RoomUC, c.UserUC, c.WSCore, c.Config)
 	c.WebsocketController = wsCtrl.NewWebSocketController(c.RoomUC, c.UserUC, c.WSRoomManager, c.WSCore)
 	c.FilesController = file.NewFilesController(c.FileUC, c.Storage)
 	c.UserNotificationController = wsCtrl.NewUserNotificationController(c.UserUC, c.RoomUC, c.NotificationCore)
@@ -77,15 +78,15 @@ func (c *Container) SetupRouter() *gin.Engine {
 func (c *Container) registerAPIRoutes(router *gin.Engine) {
 	v1 := router.Group("/api/v1")
 	{
-
+		// The user middleware must run before the rate limiter: the limiter
+		// keys on the user and silently lets requests through without one.
+		v1.Use(middlewares.UserMiddleware(c.UserUC, c.Logger))
 		v1.Use(middlewares.RateLimiterMiddleware(cache.GetRedis(), c.Logger, middlewares.ModerateRateLimiterConfig()))
 		v1.Use(middlewares.ETagMiddleware(c.ETagStore))
-		v1.Use(middlewares.UserMiddleware(c.UserUC, c.Logger))
 
 		v1.Use(func(c *gin.Context) {
 			if hub := sentrygin.GetHubFromContext(c); hub != nil {
-				user, exists := middlewares.GetUserFromContext(c)
-				if !exists {
+				if user, exists := middlewares.GetUserFromContext(c); exists {
 					hub.Scope().SetUser(sentry.User{
 						ID:        user.ID,
 						Username:  user.Username,
@@ -106,7 +107,7 @@ func (c *Container) registerAPIRoutes(router *gin.Engine) {
 }
 
 func (c *Container) healthCheckHandler(ctx *gin.Context) {
-	ctx.JSON(200, gin.H{
+	ctx.JSON(http.StatusOK, gin.H{
 		"status": "healthy",
 		"time":   time.Now().Format(time.RFC3339),
 	})
@@ -115,7 +116,9 @@ func (c *Container) healthCheckHandler(ctx *gin.Context) {
 func (c *Container) registerObservabilityRoutes(router *gin.Engine) {
 	metricsGroup := router.Group("/observability")
 	{
-		metrics.GetHandler(metricsGroup, c.MetricsManager)
+		// pprof exposes heap contents and the process command line, so it is
+		// only mounted outside production.
+		metrics.GetHandler(metricsGroup, c.MetricsManager, !c.Config.IsProduction())
 	}
 }
 
@@ -126,7 +129,7 @@ func (c *Container) Shutdown() error {
 		c.FileCleanupJob.Stop()
 	}
 
-	// Cancel WebSocket context
+	// Stop websocket hubs, profiler and background jobs.
 	if c.cancel != nil {
 		c.cancel()
 	}
@@ -139,16 +142,22 @@ func (c *Container) Shutdown() error {
 		}
 	}
 
-	cache.CloseRedis()
-	c.DistributedCache.Close()
-
-	if err := c.Logger.Log.Sync(); err != nil {
-		c.Logger.Error("failed to sync logger", zap.Error(err))
+	if c.Broker != nil {
+		if err := c.Broker.Close(); err != nil {
+			c.Logger.Error("failed to close broker", zap.Error(err))
+		}
 	}
+
+	if c.DistributedCache != nil {
+		c.DistributedCache.Close()
+	}
+	cache.CloseRedis()
+	database.CloseDb()
 
 	c.Logger.Info("Dependencies shut down successfully")
 
-	database.CloseDb()
+	// Sync errors on stdout/stderr are expected on some platforms; ignore them.
+	_ = c.Logger.Log.Sync()
 
 	return nil
 }

@@ -2,6 +2,7 @@ package user
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -49,7 +50,7 @@ func (uc *userUseCase) GetOrCreateUser(ctx context.Context, id string) (*model.U
 	}
 
 	// Check if error is "not found" (redis.Nil)
-	if err == redis.Nil {
+	if errors.Is(err, redis.Nil) {
 		// User doesn't exist, create a new one
 		newUser := &model.User{
 			ID:        id,
@@ -124,8 +125,7 @@ func (uc *userUseCase) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("failed to delete user: %w", err)
 	}
 
-	usernameIndexKey := fmt.Sprintf("user:username:%s", user.Username)
-	_ = uc.repository.Delete(ctx, usernameIndexKey)
+	_ = uc.repository.DeleteUsernameIndex(ctx, user.Username)
 
 	uc.logger.Info("user deleted successfully", zap.String("userID", id), zap.String("username", user.Username))
 	return nil
@@ -165,13 +165,15 @@ func (uc *userUseCase) IsUsernameAvailable(ctx context.Context, username string)
 	}
 
 	_, err := uc.repository.GetByUsername(ctx, username)
-	if err != nil {
+	switch {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, redis.Nil):
 		// Username not found means it's available
 		return true, nil
+	default:
+		return false, err
 	}
-
-	// Username exists
-	return false, nil
 }
 
 func (uc *userUseCase) UpdateUsername(ctx context.Context, userID string, newUsername string) error {
@@ -219,8 +221,7 @@ func (uc *userUseCase) UpdateUsername(ctx context.Context, userID string, newUse
 	}
 
 	// Remove old username index
-	oldIndexKey := fmt.Sprintf("user:username:%s", oldUsername)
-	_ = uc.repository.Delete(ctx, oldIndexKey)
+	_ = uc.repository.DeleteUsernameIndex(ctx, oldUsername)
 
 	uc.logger.Info("username updated successfully", zap.String("userID", userID), zap.String("oldUsername", oldUsername), zap.String("newUsername", newUsername))
 	return nil

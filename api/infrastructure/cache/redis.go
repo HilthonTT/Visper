@@ -3,7 +3,7 @@ package cache
 import (
 	"context"
 	"fmt"
-	"time"
+	"strconv"
 
 	"github.com/hilthontt/visper/api/infrastructure/config"
 	"github.com/redis/go-redis/v9"
@@ -12,19 +12,29 @@ import (
 var redisClient *redis.Client
 
 func InitRedis(cfg *config.Config) error {
+	db := 0
+	if cfg.Redis.Db != "" {
+		parsed, err := strconv.Atoi(cfg.Redis.Db)
+		if err != nil {
+			return fmt.Errorf("invalid redis.db %q: %w", cfg.Redis.Db, err)
+		}
+		db = parsed
+	}
+
+	// The timeouts are already time.Duration values parsed from the config
+	// (e.g. "5s"); they must not be multiplied by time.Second again.
 	redisClient = redis.NewClient(&redis.Options{
-		Addr:         fmt.Sprintf("%s:%s", cfg.Redis.Host, cfg.Redis.Port),
+		Addr:         cfg.GetRedisAddress(),
 		Password:     cfg.Redis.Password,
-		DB:           0,
-		DialTimeout:  cfg.Redis.DialTimeout * time.Second,
-		ReadTimeout:  cfg.Redis.ReadTimeout * time.Second,
-		WriteTimeout: cfg.Redis.WriteTimeout * time.Second,
+		DB:           db,
+		DialTimeout:  cfg.Redis.DialTimeout,
+		ReadTimeout:  cfg.Redis.ReadTimeout,
+		WriteTimeout: cfg.Redis.WriteTimeout,
 		PoolSize:     cfg.Redis.PoolSize,
 		PoolTimeout:  cfg.Redis.PoolTimeout,
 	})
 
-	_, err := redisClient.Ping(context.Background()).Result()
-	if err != nil {
+	if err := redisClient.Ping(context.Background()).Err(); err != nil {
 		return err
 	}
 
@@ -36,5 +46,7 @@ func GetRedis() *redis.Client {
 }
 
 func CloseRedis() {
-	redisClient.Close()
+	if redisClient != nil {
+		_ = redisClient.Close()
+	}
 }

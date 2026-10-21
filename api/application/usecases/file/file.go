@@ -2,12 +2,14 @@ package file
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"mime/multipart"
 
 	"github.com/hilthontt/visper/api/domain/model"
 	"github.com/hilthontt/visper/api/domain/repository"
 	"github.com/hilthontt/visper/api/infrastructure/storage"
+	"github.com/redis/go-redis/v9"
 )
 
 type FileUseCase interface {
@@ -53,7 +55,7 @@ func (uc *fileUseCase) UploadFile(ctx context.Context, fileHeader *multipart.Fil
 		return nil, fmt.Errorf("user is not a member of this room")
 	}
 
-	relativePath, fileID, err := uc.localStorage.SaveFile(fileHeader, roomID)
+	relativePath, fileID, mimeType, err := uc.localStorage.SaveFile(fileHeader, roomID)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +65,9 @@ func (uc *fileUseCase) UploadFile(ctx context.Context, fileHeader *multipart.Fil
 		RoomID:   roomID,
 		UserID:   userID,
 		Filename: fileHeader.Filename,
-		MimeType: fileHeader.Header.Get("Content-Type"),
+		// Use the type detected from the stored content, not the
+		// client-supplied Content-Type header.
+		MimeType: mimeType,
 		Size:     fileHeader.Size,
 		Path:     relativePath,
 		URL:      fmt.Sprintf("%s/api/v1/d/%s", uc.serverURL, relativePath),
@@ -136,9 +140,9 @@ func (uc *fileUseCase) CleanupOrphanedFiles(ctx context.Context) error {
 	}
 
 	for _, roomID := range roomDirs {
-		_, err := uc.roomRepo.GetByID(ctx, roomID)
-		if err != nil {
-			// Room doesn't exist, delete the directory
+		// Only a definite "not found" means the room is gone; on any other
+		// error (e.g. Redis unavailable) keep the files.
+		if _, err := uc.roomRepo.GetByID(ctx, roomID); errors.Is(err, redis.Nil) {
 			_ = uc.localStorage.DeleteRoomFiles(roomID)
 		}
 	}

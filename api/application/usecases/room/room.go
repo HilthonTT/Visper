@@ -2,6 +2,7 @@ package room
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -220,7 +221,7 @@ func (uc *roomUseCase) GetByID(ctx context.Context, id string) (*model.Room, err
 
 	room, err := uc.repository.GetByID(ctx, id)
 	if err != nil {
-		if err == redis.Nil {
+		if errors.Is(err, redis.Nil) {
 			return nil, fmt.Errorf("room not found")
 		}
 		uc.logger.Error("failed to get room by ID", zap.Error(err), zap.String("roomID", id))
@@ -351,7 +352,7 @@ func (uc *roomUseCase) JoinRoom(ctx context.Context, roomID string, user model.U
 	}
 
 	go func() {
-		if err := uc.eventPublisher.PublishRoomJoined(room.ID, room.Owner.ID); err != nil {
+		if err := uc.eventPublisher.PublishRoomJoined(room.ID, user.ID); err != nil {
 			log.Printf("Failed to publish room joined event: %v", err)
 		}
 	}()

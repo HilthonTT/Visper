@@ -14,6 +14,8 @@ logger:
 cors:
   allowOrigins: "*"
 
+# Secrets below are development defaults matching docker-compose.yml.
+# Override them with VISPER_POSTGRES_PASSWORD / VISPER_REDIS_PASSWORD etc.
 postgres:
   host: "postgres" # Use service name from docker-compose
   port: "5432"
@@ -40,9 +42,9 @@ redis:
 jaeger:
   serviceName: "visper-api"
   serviceVersion: "v1.0.0"
-  endpoint: "http://localhost:14268/api/traces"
+  endpoint: "http://jaeger:4318" # OTLP/HTTP receiver of the jaeger service (legacy :14268/api/traces URLs are mapped automatically)
 
 sentry:
-  dsn: ""
-  debug: true
+  dsn: "" # set VISPER_SENTRY_DSN to enable
+  debug: false
   sendDefaultPII: false

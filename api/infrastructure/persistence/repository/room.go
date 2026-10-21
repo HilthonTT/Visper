@@ -53,7 +53,7 @@ func (r *roomRepository) AddUser(ctx context.Context, roomID string, user model.
 	// Get room from cache
 	roomKey := fmt.Sprintf("room:%s", roomID)
 	var room model.Room
-	found, err := r.cache.Get(roomKey, &room)
+	found, err := r.cache.Get(ctx, roomKey, &room)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to get room from cache")
@@ -80,7 +80,7 @@ func (r *roomRepository) AddUser(ctx context.Context, roomID string, user model.
 	room.Members = append(room.Members, user)
 
 	// Update cache
-	if err := r.cache.Set(roomKey, &room, 0); err != nil {
+	if err := r.cache.Set(ctx, roomKey, &room, 0); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to update room in cache")
 		return err
@@ -102,7 +102,7 @@ func (r *roomRepository) Create(ctx context.Context, room *model.Room) error {
 	room.CreatedAt = time.Now()
 
 	key := fmt.Sprintf("room:%s", room.ID)
-	if err := r.cache.Set(key, room, 0); err != nil {
+	if err := r.cache.Set(ctx, key, room, 0); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to create room in cache")
 		return err
@@ -126,9 +126,16 @@ func (r *roomRepository) Delete(ctx context.Context, id string) error {
 	span.SetAttributes(attribute.String("room.id", id))
 
 	key := fmt.Sprintf("room:%s", id)
-	if err := r.cache.Delete(key); err != nil {
+	if err := r.cache.Delete(ctx, key); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to delete room from cache")
+		return err
+	}
+
+	// Drop the membership set too; it would otherwise leak forever.
+	if err := r.cache.Delete(ctx, fmt.Sprintf("room:%s:users", id)); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to delete room users set")
 		return err
 	}
 
@@ -190,7 +197,7 @@ func (r *roomRepository) GetByID(ctx context.Context, id string) (*model.Room, e
 	key := fmt.Sprintf("room:%s", id)
 	var room model.Room
 
-	found, err := r.cache.Get(key, &room)
+	found, err := r.cache.Get(ctx, key, &room)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to get room from cache")
@@ -275,7 +282,7 @@ func (r *roomRepository) RemoveUser(ctx context.Context, roomID string, userID s
 	roomKey := fmt.Sprintf("room:%s", roomID)
 	var room model.Room
 
-	found, err := r.cache.Get(roomKey, &room)
+	found, err := r.cache.Get(ctx, roomKey, &room)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to get room from cache")
@@ -302,7 +309,7 @@ func (r *roomRepository) RemoveUser(ctx context.Context, roomID string, userID s
 
 	span.SetAttributes(attribute.Bool("user.found_in_members", userFound))
 
-	if err := r.cache.Set(roomKey, &room, 0); err != nil {
+	if err := r.cache.Set(ctx, roomKey, &room, 0); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to update room in cache")
 		return err
@@ -325,7 +332,7 @@ func (r *roomRepository) Update(ctx context.Context, room *model.Room) error {
 
 	// Check if room exists in cache
 	var existingRoom model.Room
-	found, err := r.cache.Get(key, &existingRoom)
+	found, err := r.cache.Get(ctx, key, &existingRoom)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to get existing room from cache")
@@ -339,7 +346,7 @@ func (r *roomRepository) Update(ctx context.Context, room *model.Room) error {
 
 	span.SetAttributes(attribute.Bool("room.exists", true))
 
-	if err := r.cache.Set(key, room, 0); err != nil {
+	if err := r.cache.Set(ctx, key, room, 0); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to update room in cache")
 		return err

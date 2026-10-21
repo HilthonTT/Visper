@@ -6,10 +6,14 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
 )
+
+// EnvPrefix is the prefix of environment variables that override config keys.
+const EnvPrefix = "VISPER"
 
 type Config struct {
 	Server   ServerConfig
@@ -130,6 +134,11 @@ func LoadConfig(filename string, fileType string) (*viper.Viper, error) {
 		v.AddConfigPath(filepath.Join(wd, "infrastructure", "config"))
 	}
 
+	// Every key can be overridden from the environment with the VISPER_ prefix,
+	// e.g. postgres.password -> VISPER_POSTGRES_PASSWORD. Secrets should be
+	// provided this way instead of being committed to the YAML files.
+	v.SetEnvPrefix(EnvPrefix)
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
 	err := v.ReadInConfig()
@@ -197,16 +206,24 @@ func (c *Config) IsProduction() bool {
 	return c.Server.RunMode == "release" || c.Server.RunMode == "production"
 }
 
+// GetPostgresConnectionString returns a libpq keyword/value DSN. Values are
+// quoted so that passwords containing spaces or quotes are handled correctly.
 func (c *Config) GetPostgresConnectionString() string {
 	return fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
-		c.Postgres.Host,
-		c.Postgres.Port,
-		c.Postgres.User,
-		c.Postgres.Password,
-		c.Postgres.DbName,
-		c.Postgres.SSLMode,
+		dsnQuote(c.Postgres.Host),
+		dsnQuote(c.Postgres.Port),
+		dsnQuote(c.Postgres.User),
+		dsnQuote(c.Postgres.Password),
+		dsnQuote(c.Postgres.DbName),
+		dsnQuote(c.Postgres.SSLMode),
 	)
+}
+
+// dsnQuote quotes a libpq connection string value.
+func dsnQuote(v string) string {
+	r := strings.NewReplacer(`\`, `\\`, `'`, `\'`)
+	return "'" + r.Replace(v) + "'"
 }
 
 func (c *Config) GetRedisAddress() string {

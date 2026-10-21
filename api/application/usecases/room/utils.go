@@ -3,31 +3,34 @@ package room
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"time"
 )
 
+const (
+	// joinCodeCharset excludes look-alike characters. Its length (32) divides
+	// 256, so mapping a random byte with % is unbiased.
+	joinCodeCharset = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	joinCodeLength  = 6
+
+	secureCodeLength = 32
+)
+
+// generateSecureCode returns a URL-safe random token. crypto/rand.Read never
+// returns an error (it aborts the program if the OS RNG is unavailable).
 func generateSecureCode() string {
-	const tokenLength = 32
-
-	b := make([]byte, tokenLength)
-	if _, err := rand.Read(b); err != nil {
-		for i := range b {
-			b[i] = byte(time.Now().UnixNano() % 256)
-		}
-	}
-
+	b := make([]byte, secureCodeLength)
+	_, _ = rand.Read(b)
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
+// generateJoinCode returns a random, human friendly join code. It uses
+// crypto/rand: join codes grant access to rooms and must not be predictable.
 func generateJoinCode() string {
-	const charset = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // Exclude similar looking chars
-	const codeLength = 6
+	b := make([]byte, joinCodeLength)
+	_, _ = rand.Read(b)
 
-	code := make([]byte, codeLength)
-	for i := range code {
-		code[i] = charset[time.Now().UnixNano()%int64(len(charset))]
-		time.Sleep(time.Nanosecond) // Ensure different values for the time
+	for i := range b {
+		b[i] = joinCodeCharset[int(b[i])%len(joinCodeCharset)]
 	}
 
-	return string(code)
+	return string(b)
 }

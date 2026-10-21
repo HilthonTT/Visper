@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/hilthontt/visper/api/domain/model"
@@ -18,6 +19,7 @@ type EventConsumer struct {
 	consumer           *broker.Consumer
 	handlers           map[EventType]EventHandler
 	stopCh             chan struct{}
+	stopOnce           sync.Once
 	auditLogRepository repository.AuditLogRepository
 }
 
@@ -55,7 +57,7 @@ func (ec *EventConsumer) RegisterHandler(eventType EventType, handler EventHandl
 	ec.handlers[eventType] = handler
 }
 
-// Start starts consuming events
+// Start consumes events until Stop is called.
 func (ec *EventConsumer) Start() {
 	log.Println("Event consumer started")
 
@@ -65,32 +67,44 @@ func (ec *EventConsumer) Start() {
 			log.Println("Event consumer stopped")
 			return
 		default:
-			// Poll for new messages
-			records, err := ec.consumer.Poll(100) // 100ms timeout
-			if err != nil {
-				log.Printf("Error polling messages: %v", err)
-				time.Sleep(1 * time.Second)
-				continue
-			}
+		}
 
-			// Process each record
-			for _, record := range records {
-				if err := ec.processRecord(record); err != nil {
-					log.Printf("Error processing record: %v", err)
-				}
-			}
+		records, err := ec.consumer.Poll(100)
+		if err != nil {
+			log.Printf("Error polling messages: %v", err)
+			ec.wait(time.Second)
+			continue
+		}
 
-			// Small delay if no messages
-			if len(records) == 0 {
-				time.Sleep(100 * time.Millisecond)
+		for _, record := range records {
+			if err := ec.processRecord(record); err != nil {
+				log.Printf("Error processing record: %v", err)
 			}
+		}
+
+		// Small delay if no messages
+		if len(records) == 0 {
+			ec.wait(100 * time.Millisecond)
 		}
 	}
 }
 
-// Stop stops the consumer
+// wait sleeps for d or until Stop is called.
+func (ec *EventConsumer) wait(d time.Duration) {
+	t := time.NewTimer(d)
+	defer t.Stop()
+
+	select {
+	case <-t.C:
+	case <-ec.stopCh:
+	}
+}
+
+// Stop stops the consumer. It is safe to call more than once.
 func (ec *EventConsumer) Stop() {
-	close(ec.stopCh)
+	ec.stopOnce.Do(func() {
+		close(ec.stopCh)
+	})
 }
 
 // processRecord processes a single consumer record
@@ -116,7 +130,7 @@ func (ec *EventConsumer) processRecord(record *broker.ConsumerRecord) error {
 
 func (ec *EventConsumer) handleRoomCreated(event *Event) error {
 	expiresIn := event.Data["expires_in_seconds"]
-	log.Printf("Room created: %s by user %s (expires in %.0f seconds)",
+	log.Printf("Room created: %s by user %s (expires in %v seconds)",
 		event.RoomID, event.UserID, expiresIn)
 
 	return nil
@@ -174,9 +188,9 @@ func (ec *EventConsumer) writeAuditLog(event *Event, handlerErr error) error {
 		entry.ErrorMessage = sql.NullString{Valid: true, String: handlerErr.Error()}
 	}
 
-	_, err = ec.auditLogRepository.CreateAuditLog(context.Background(), entry)
-	if err != nil {
-		return err
-	}
-	return nil
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err = ec.auditLogRepository.CreateAuditLog(ctx, entry)
+	return err
 }

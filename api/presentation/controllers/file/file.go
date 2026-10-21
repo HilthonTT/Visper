@@ -1,6 +1,7 @@
 package file
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +13,10 @@ import (
 	"github.com/hilthontt/visper/api/infrastructure/storage"
 	"github.com/hilthontt/visper/api/presentation/middlewares"
 )
+
+// maxUploadRequestSize is the largest accepted upload request: the file limit
+// plus room for the multipart envelope.
+const maxUploadRequestSize = storage.MaxFileSize + 1<<20
 
 type FilesController interface {
 	Upload(ctx *gin.Context)
@@ -52,8 +57,20 @@ func (c *filesController) Upload(ctx *gin.Context) {
 		return
 	}
 
+	// Bound the request body: the multipart parser would otherwise spool
+	// arbitrarily large uploads to disk before the size check runs.
+	ctx.Request.Body = http.MaxBytesReader(ctx.Writer, ctx.Request.Body, maxUploadRequestSize)
+
 	fileHeader, err := ctx.FormFile("file")
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			ctx.JSON(http.StatusRequestEntityTooLarge, ErrorResponse{
+				Error:   "file_too_large",
+				Message: storage.ErrFileTooLarge.Error(),
+			})
+			return
+		}
 		ctx.JSON(http.StatusBadRequest, ErrorResponse{
 			Error:   "invalid_request",
 			Message: "file is required",
@@ -66,20 +83,20 @@ func (c *filesController) Upload(ctx *gin.Context) {
 		status := http.StatusInternalServerError
 		errorCode := "upload_failed"
 
-		switch err.Error() {
-		case "room not found":
+		switch {
+		case err.Error() == "room not found":
 			status = http.StatusNotFound
 			errorCode = "not_found"
-		case "room has expired":
+		case err.Error() == "room has expired":
 			status = http.StatusGone
 			errorCode = "expired"
-		case "user is not a member of this room":
+		case err.Error() == "user is not a member of this room":
 			status = http.StatusForbidden
 			errorCode = "forbidden"
-		case "file size exceeds maximum allowed size of 5MB":
+		case errors.Is(err, storage.ErrFileTooLarge):
 			status = http.StatusRequestEntityTooLarge
 			errorCode = "file_too_large"
-		case "invalid file type, only images are allowed":
+		case errors.Is(err, storage.ErrInvalidFileType), errors.Is(err, storage.ErrInvalidPath):
 			status = http.StatusBadRequest
 			errorCode = "invalid_file_type"
 		}
@@ -105,43 +122,39 @@ func (c *filesController) Upload(ctx *gin.Context) {
 	})
 }
 
-func (c *filesController) Proxy(ctx *gin.Context) {
-	filePath := ctx.Param("path")
-	if filePath == "" {
+// resolveFile maps the "*path" wildcard to a file inside the uploads
+// directory. It writes the error response and returns ok=false on failure.
+func (c *filesController) resolveFile(ctx *gin.Context) (relativePath, fullPath string, ok bool) {
+	relativePath = strings.TrimPrefix(ctx.Param("path"), "/")
+	if relativePath == "" {
 		ctx.JSON(http.StatusBadRequest, ErrorResponse{
 			Error:   "invalid_request",
 			Message: "file path is required",
 		})
-		return
+		return "", "", false
 	}
 
-	// Strip leading slash added by Gin's wildcard
-	if len(filePath) > 0 && filePath[0] == '/' {
-		filePath = filePath[1:]
-	}
-
-	if !c.localStorage.FileExists(filePath) {
+	fullPath, err := c.localStorage.GetFilePath(relativePath)
+	if err != nil || !c.localStorage.FileExists(relativePath) {
+		// Paths escaping the uploads directory are reported as not found.
 		ctx.JSON(http.StatusNotFound, ErrorResponse{
 			Error:   "not_found",
 			Message: "file not found",
 		})
+		return "", "", false
+	}
+
+	return relativePath, fullPath, true
+}
+
+func (c *filesController) Proxy(ctx *gin.Context) {
+	filePath, fullPath, ok := c.resolveFile(ctx)
+	if !ok {
 		return
 	}
 
-	fullPath := c.localStorage.GetFilePath(filePath)
-
-	ext := strings.ToLower(filepath.Ext(filePath))
-	mimeTypes := map[string]string{
-		".jpg":  "image/jpeg",
-		".jpeg": "image/jpeg",
-		".png":  "image/png",
-		".gif":  "image/gif",
-		".webp": "image/webp",
-		".bmp":  "image/bmp",
-	}
-
-	mimeType, ok := mimeTypes[ext]
-	if !ok {
+	mimeType := storage.MIMETypeFromExtension(filepath.Ext(filePath))
+	if mimeType == "" {
 		mimeType = "application/octet-stream"
 	}
 
@@ -164,48 +177,29 @@ func (c *filesController) Proxy(ctx *gin.Context) {
 		return
 	}
 
-	filename := filepath.Base(filePath)
+	filename := filepath.Base(fullPath)
+	etag := fmt.Sprintf(`"%s"`, filename)
+
 	ctx.Header("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, filename))
-	ctx.Header("Content-Type", mimeType)
-	ctx.Header("Content-Length", fmt.Sprintf("%d", info.Size()))
-
+	ctx.Header("X-Content-Type-Options", "nosniff")
 	ctx.Header("Cache-Control", "public, max-age=31536000, immutable")
-	ctx.Header("ETag", fmt.Sprintf(`"%s"`, filename))
+	ctx.Header("ETag", etag)
 
-	if match := ctx.GetHeader("If-None-Match"); match != "" {
-		if match == fmt.Sprintf(`"%s"`, filename) {
-			ctx.Status(http.StatusNotModified)
-			return
-		}
+	if ctx.GetHeader("If-None-Match") == etag {
+		ctx.Status(http.StatusNotModified)
+		return
 	}
 
 	ctx.DataFromReader(http.StatusOK, info.Size(), mimeType, f, nil)
 }
 
 func (c *filesController) Down(ctx *gin.Context) {
-	filePath := ctx.Param("path")
-	if filePath == "" {
-		ctx.JSON(http.StatusBadRequest, ErrorResponse{
-			Error:   "invalid_request",
-			Message: "file path is required",
-		})
+	_, fullPath, ok := c.resolveFile(ctx)
+	if !ok {
 		return
 	}
 
-	if len(filePath) > 0 && filePath[0] == '/' {
-		filePath = filePath[1:]
-	}
-
-	if !c.localStorage.FileExists(filePath) {
-		ctx.JSON(http.StatusNotFound, ErrorResponse{
-			Error:   "not_found",
-			Message: "file not found",
-		})
-		return
-	}
-
-	fullPath := c.localStorage.GetFilePath(filePath)
-
+	ctx.Header("X-Content-Type-Options", "nosniff")
 	ctx.File(fullPath)
 }
 

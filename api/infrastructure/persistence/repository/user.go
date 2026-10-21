@@ -38,7 +38,7 @@ func (r *userRepository) Create(ctx context.Context, user *model.User) error {
 	user.CreatedAt = time.Now()
 	key := fmt.Sprintf("user:%s", user.ID)
 
-	if err := r.cache.Set(key, user, 0); err != nil {
+	if err := r.cache.Set(ctx, key, user, 0); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to create user")
 		return err
@@ -56,7 +56,7 @@ func (r *userRepository) Delete(ctx context.Context, id string) error {
 
 	key := fmt.Sprintf("user:%s", id)
 
-	if err := r.cache.Delete(key); err != nil {
+	if err := r.cache.Delete(ctx, key); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to delete user")
 		return err
@@ -75,7 +75,7 @@ func (r *userRepository) GetByID(ctx context.Context, id string) (*model.User, e
 	key := fmt.Sprintf("user:%s", id)
 	var user model.User
 
-	found, err := r.cache.Get(key, &user)
+	found, err := r.cache.Get(ctx, key, &user)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to get user from cache")
@@ -105,7 +105,7 @@ func (r *userRepository) GetByUsername(ctx context.Context, username string) (*m
 	indexKey := fmt.Sprintf("user:username:%s", username)
 	var userID string
 
-	found, err := r.cache.Get(indexKey, &userID)
+	found, err := r.cache.Get(ctx, indexKey, &userID)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to get username index from cache")
@@ -115,7 +115,7 @@ func (r *userRepository) GetByUsername(ctx context.Context, username string) (*m
 	if !found {
 		span.SetAttributes(attribute.Bool("username.index.found", false))
 		span.SetStatus(codes.Error, "username index not found")
-		return nil, fmt.Errorf("user not found")
+		return nil, redis.Nil
 	}
 
 	span.SetAttributes(
@@ -146,12 +146,28 @@ func (r *userRepository) SetUsernameIndex(ctx context.Context, username string, 
 
 	key := fmt.Sprintf("user:username:%s", username)
 
-	if err := r.cache.Set(key, userID, 0); err != nil {
+	if err := r.cache.Set(ctx, key, userID, 0); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to set username index")
 		return err
 	}
 
 	span.SetStatus(codes.Ok, "username index set successfully")
+	return nil
+}
+
+func (r *userRepository) DeleteUsernameIndex(ctx context.Context, username string) error {
+	ctx, span := r.tracer.Start(ctx, "userRepository.DeleteUsernameIndex")
+	defer span.End()
+
+	span.SetAttributes(attribute.String("user.username", username))
+
+	if err := r.cache.Delete(ctx, fmt.Sprintf("user:username:%s", username)); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to delete username index")
+		return err
+	}
+
+	span.SetStatus(codes.Ok, "username index deleted successfully")
 	return nil
 }

@@ -7,12 +7,9 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const (
-	writeWait      = 10 * time.Second
-	pongWait       = 60 * time.Second
-	pingPeriod     = (pongWait * 9) / 10
-	maxMessageSize = 512
-)
+// maxNotificationMessageSize bounds frames read from notification clients;
+// they are not expected to send anything but control frames.
+const maxNotificationMessageSize = 512
 
 type NotificationClient struct {
 	conn     *websocket.Conn
@@ -40,21 +37,20 @@ func NewNotificationMessage(msgType, userID string, data map[string]any) *Notifi
 	return &NotificationMessage{
 		Type:   msgType,
 		UserID: userID,
-		Data:   data, // Changed from Payload
+		Data:   data,
 	}
 }
 
 func (c *NotificationClient) ReadMessage(core *NotificationCore) {
 	defer func() {
-		core.Unregister() <- c
-		c.conn.Close()
+		core.UnregisterClient(c)
+		_ = c.conn.Close()
 	}()
 
-	c.conn.SetReadLimit(maxMessageSize)
-	c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.conn.SetReadLimit(maxNotificationMessageSize)
+	_ = c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error {
-		c.conn.SetReadDeadline(time.Now().Add(pongWait))
-		return nil
+		return c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
 	for {
@@ -73,15 +69,15 @@ func (c *NotificationClient) WriteMessage() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
-		c.conn.Close()
+		_ = c.conn.Close()
 	}()
 
 	for {
 		select {
 		case message, ok := <-c.send:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 
@@ -91,7 +87,7 @@ func (c *NotificationClient) WriteMessage() {
 			}
 
 		case <-ticker.C:
-			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}

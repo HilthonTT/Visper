@@ -83,23 +83,22 @@ func (c *webSocketController) HandleConnection(ctx *gin.Context) {
 
 	conn, err := c.wsRoomManager.Upgrade(ctx.Writer, ctx.Request)
 	if err != nil {
+		// The upgrader has already written an HTTP error response.
 		log.Printf("WebSocket upgrade failed for user %s in room %s: %v", user.ID, roomID, err)
-		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "upgrade_failed",
-			"message": "failed to upgrade connection",
-		})
 		return
 	}
 
 	client := websocket.NewClient(conn, user.ID, roomID, user.Username)
-	c.wsCore.Register() <- client
+	if !c.wsCore.RegisterClient(client) {
+		client.Close()
+		return
+	}
 
-	joinMessage := websocket.NewMemberJoined(roomID, websocket.MemberPayload{
+	c.wsCore.Publish(websocket.NewMemberJoined(roomID, websocket.MemberPayload{
 		UserID:   user.ID,
 		Username: user.Username,
-		JoinedAt: time.Now().String(),
-	})
-	c.wsCore.Broadcast() <- joinMessage
+		JoinedAt: time.Now().Format(time.RFC3339),
+	}))
 
 	go client.WriteMessage()
 	go client.ReadMessage(c.wsCore)

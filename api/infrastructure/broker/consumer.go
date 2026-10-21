@@ -1,15 +1,21 @@
 package broker
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 )
 
-// Consumer reads messages from topics
+// Consumer reads messages from topics. Committed offsets are persisted per
+// consumer group next to the topic data, so a restarted consumer resumes where
+// it left off instead of replaying the whole log.
 type Consumer struct {
 	broker     *Broker
 	groupID    string
@@ -43,37 +49,39 @@ func (c *Consumer) Subscribe(topicName string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Get topic
 	topic, err := c.broker.GetTopic(topicName)
 	if err != nil {
 		return fmt.Errorf("failed to get topic: %w", err)
 	}
 
-	// Initialize offsets for this topic
 	if _, exists := c.offsets[topicName]; !exists {
 		c.offsets[topicName] = make(map[int]int64)
 	}
 
-	// Initialize offsets for each partition
+	stored, err := c.loadOffsets(topic)
+	if err != nil {
+		log.Printf("broker: ignoring unreadable offsets for group %s, topic %s: %v", c.groupID, topicName, err)
+		stored = nil
+	}
+
 	for _, partition := range topic.partitions {
-		// If we already have an offset for this partition, use it
 		if _, exists := c.offsets[topicName][partition.id]; exists {
 			continue
 		}
 
-		// Otherwise, load from offset store or start from beginning
-		offset, err := c.loadOffset(topicName, partition.id)
-		if err != nil {
-			// If no stored offset, start from beginning
-			c.offsets[topicName][partition.id] = 0
-		} else {
-			c.offsets[topicName][partition.id] = offset
+		offset := stored[partition.id]
+		if end := partition.endOffset(); offset < 0 || offset > end {
+			// The log was truncated or replaced; do not read past its end.
+			offset = end
 		}
+		c.offsets[topicName][partition.id] = offset
 	}
 
 	return nil
 }
 
+// Poll returns at most one message per partition of each subscribed topic.
+// timeoutMs is currently unused: Poll never blocks.
 func (c *Consumer) Poll(timeoutMs int) ([]*ConsumerRecord, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -86,48 +94,48 @@ func (c *Consumer) Poll(timeoutMs int) ([]*ConsumerRecord, error) {
 			return nil, fmt.Errorf("failed to get topic: %w", err)
 		}
 
+		advanced := false
 		for partitionID, offset := range partitionOffsets {
 			partition := topic.partitions[partitionID]
 
-			// Check if we've reached the end of the partition
-			if offset >= partition.offset {
+			if offset >= partition.endOffset() {
 				continue
 			}
 
-			// Read message
 			msg, nextOffset, err := partition.readMessage(offset)
 			if err != nil {
-				// Skip corrupted messages
-				if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-					// Update offset to skip this message
-					c.offsets[topicName][partitionID] = partition.offset
+				if errors.Is(err, io.EOF) {
+					continue
+				}
+				if errors.Is(err, ErrCorruptRecord) {
+					// Record boundaries are unknown past a corrupt record; skip to
+					// the end of the partition instead of retrying forever.
+					end := partition.endOffset()
+					log.Printf("broker: %v; skipping partition %s/%d to offset %d", err, topicName, partitionID, end)
+					partitionOffsets[partitionID] = end
+					advanced = true
 					continue
 				}
 				return nil, fmt.Errorf("failed to read message: %w", err)
 			}
 
-			// Create consumer record
-			record := &ConsumerRecord{
+			records = append(records, &ConsumerRecord{
 				Topic:     topicName,
 				Partition: partitionID,
 				Offset:    offset,
 				Key:       msg.Key,
 				Value:     msg.Value,
 				Timestamp: msg.Timestamp,
+			})
+
+			partitionOffsets[partitionID] = nextOffset
+			advanced = true
+		}
+
+		if advanced && c.autoCommit {
+			if err := c.commitTopic(topic, partitionOffsets); err != nil {
+				log.Printf("broker: failed to commit offsets for group %s, topic %s: %v", c.groupID, topicName, err)
 			}
-
-			records = append(records, record)
-
-			// Update offset
-			c.offsets[topicName][partitionID] = nextOffset
-
-			// Auto-commit offset if enabled
-			if c.autoCommit {
-				c.commitOffset(topicName, partitionID, nextOffset)
-			}
-
-			// Only read one message per partition per poll to be fair
-			break
 		}
 	}
 
@@ -140,28 +148,66 @@ func (c *Consumer) CommitOffsets() error {
 	defer c.mu.Unlock()
 
 	for topicName, partitionOffsets := range c.offsets {
-		for partitionID, offset := range partitionOffsets {
-			if err := c.commitOffset(topicName, partitionID, offset); err != nil {
-				return err
-			}
+		topic, err := c.broker.GetTopic(topicName)
+		if err != nil {
+			return err
+		}
+		if err := c.commitTopic(topic, partitionOffsets); err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
-// commitOffset commits a single offset to storage
-func (c *Consumer) commitOffset(topic string, partition int, offset int64) error {
-	// In a real implementation, this would persist the offset
-	// to a file or database. For simplicity, we're just logging it.
-	log.Printf("Committed offset %d for topic %s, partition %d",
-		offset, topic, partition)
-	return nil
+func (c *Consumer) offsetsPath(topic *Topic) string {
+	return filepath.Join(topic.dir, "offsets-"+filepath.Base(c.groupID)+".json")
 }
 
-// loadOffset loads a committed offset from storage
-func (c *Consumer) loadOffset(topic string, partition int) (int64, error) {
-	// In a real implementation, this would load the offset from
-	// a file or database. For simplicity, we're returning an error.
-	return 0, fmt.Errorf("no stored offset")
+// commitTopic atomically persists the offsets of one topic.
+func (c *Consumer) commitTopic(topic *Topic, offsets map[int]int64) error {
+	encoded := make(map[string]int64, len(offsets))
+	for partition, offset := range offsets {
+		encoded[strconv.Itoa(partition)] = offset
+	}
+
+	data, err := json.Marshal(encoded)
+	if err != nil {
+		return err
+	}
+
+	path := c.offsetsPath(topic)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// loadOffsets reads the committed offsets of a topic. A missing file yields
+// no offsets (start from the beginning).
+func (c *Consumer) loadOffsets(topic *Topic) (map[int]int64, error) {
+	data, err := os.ReadFile(c.offsetsPath(topic))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	var encoded map[string]int64
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		return nil, err
+	}
+
+	offsets := make(map[int]int64, len(encoded))
+	for key, offset := range encoded {
+		partition, err := strconv.Atoi(key)
+		if err != nil {
+			return nil, fmt.Errorf("invalid partition %q: %w", key, err)
+		}
+		offsets[partition] = offset
+	}
+
+	return offsets, nil
 }

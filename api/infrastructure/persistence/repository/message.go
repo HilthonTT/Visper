@@ -36,16 +36,33 @@ func (r *messageRepository) GetByID(ctx context.Context, roomID, messageID strin
 		attribute.String("message.id", messageID),
 	)
 
+	msg, _, err := r.find(ctx, roomID, messageID)
+	if err != nil {
+		span.RecordError(err)
+		span.SetAttributes(attribute.Bool("message.found", false))
+		span.SetStatus(codes.Error, "message not found")
+		return nil, err
+	}
+
+	span.SetAttributes(
+		attribute.Bool("message.found", true),
+		attribute.String("message.user_id", msg.UserID),
+		attribute.Bool("message.encrypted", msg.Encrypted),
+	)
+	span.SetStatus(codes.Ok, "message retrieved successfully")
+	return msg, nil
+}
+
+// find returns the message together with the exact sorted-set member it is
+// stored as. Removing a member requires the original bytes: re-marshalling the
+// decoded struct is not guaranteed to reproduce them.
+func (r *messageRepository) find(ctx context.Context, roomID, messageID string) (*model.Message, string, error) {
 	key := fmt.Sprintf("room:%s:messages", roomID)
 
 	results, err := r.cache.ZRange(ctx, key, 0, -1)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to get messages from sorted set")
-		return nil, err
+		return nil, "", err
 	}
-
-	span.SetAttributes(attribute.Int("messages.scanned_count", len(results)))
 
 	for _, data := range results {
 		var msg model.Message
@@ -53,19 +70,11 @@ func (r *messageRepository) GetByID(ctx context.Context, roomID, messageID strin
 			continue
 		}
 		if msg.ID == messageID {
-			span.SetAttributes(
-				attribute.Bool("message.found", true),
-				attribute.String("message.user_id", msg.UserID),
-				attribute.Bool("message.encrypted", msg.Encrypted),
-			)
-			span.SetStatus(codes.Ok, "message retrieved successfully")
-			return &msg, nil
+			return &msg, data, nil
 		}
 	}
 
-	span.SetAttributes(attribute.Bool("message.found", false))
-	span.SetStatus(codes.Error, "message not found")
-	return nil, redis.Nil
+	return nil, "", redis.Nil
 }
 
 func (r *messageRepository) Create(ctx context.Context, message *model.Message) error {
@@ -118,18 +127,11 @@ func (r *messageRepository) Update(ctx context.Context, message *model.Message) 
 
 	key := fmt.Sprintf("room:%s:messages", message.RoomID)
 
-	oldMessage, err := r.GetByID(ctx, message.RoomID, message.ID)
+	oldMessage, oldData, err := r.find(ctx, message.RoomID, message.ID)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to get old message")
 		return err
-	}
-
-	oldData, err := json.Marshal(oldMessage)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to marshal old message")
-		return fmt.Errorf("failed to marshal old message: %w", err)
 	}
 
 	message.UpdatedAt = time.Now()
@@ -147,8 +149,8 @@ func (r *messageRepository) Update(ctx context.Context, message *model.Message) 
 		attribute.Int("message.new_size_bytes", len(newData)),
 	)
 
-	// Use pipeline for atomic update
-	pipe := r.cache.Pipeline()
+	// Use a MULTI/EXEC pipeline so the remove+add is atomic.
+	pipe := r.cache.TxPipeline()
 
 	redisKey := r.cache.GetRedisKey(key)
 	pipe.ZRem(ctx, redisKey, oldData)
@@ -181,18 +183,11 @@ func (r *messageRepository) Delete(ctx context.Context, roomID string, messageID
 
 	key := fmt.Sprintf("room:%s:messages", roomID)
 
-	message, err := r.GetByID(ctx, roomID, messageID)
+	_, data, err := r.find(ctx, roomID, messageID)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to get message for deletion")
 		return err
-	}
-
-	data, err := json.Marshal(message)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to marshal message for deletion")
-		return fmt.Errorf("failed to marshal message: %w", err)
 	}
 
 	if err := r.cache.ZRem(ctx, key, data); err != nil {

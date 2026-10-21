@@ -1,17 +1,15 @@
 package dependency
 
 import (
-	"context"
-
 	"github.com/hilthontt/visper/api/infrastructure/websocket"
 )
 
 func (c *Container) initWebSocket() {
-	c.WSRoomManager = websocket.NewRoomManager()
-	c.WSCore = websocket.NewCore(c.RoomRepo, c.MessageRepo)
-	c.NotificationCore = websocket.NewNotificationCore()
+	checkOrigin := websocket.NewOriginChecker(c.Config.Cors.AllowOrigins)
 
-	c.ctx, c.cancel = context.WithCancel(context.Background())
+	c.WSRoomManager = websocket.NewRoomManager(checkOrigin)
+	c.WSCore = websocket.NewCore(c.WSRoomManager, c.MessageRepo)
+	c.NotificationCore = websocket.NewNotificationCore(checkOrigin)
 
 	go c.WSCore.Run(c.ctx)
 	go c.NotificationCore.Run(c.ctx)

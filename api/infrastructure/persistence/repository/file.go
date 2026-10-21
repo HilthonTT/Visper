@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -104,10 +105,8 @@ func (r *fileRepository) DeleteByRoomID(ctx context.Context, roomID string) erro
 	}
 
 	for _, id := range fileIDs {
-		if err := r.Delete(ctx, id); err != nil {
-
-			continue
-		}
+		// Best effort: a missing file record must not stop the cleanup.
+		_ = r.Delete(ctx, id)
 	}
 
 	return r.client.Del(ctx, roomFileKey).Err()
@@ -126,10 +125,10 @@ func (r *fileRepository) GetOrphanedFiles(ctx context.Context) ([]*model.File, e
 			continue
 		}
 
-		// Check if room still exists
+		// The file is orphaned only if the room definitely no longer exists;
+		// transient errors must not cause files to be deleted.
 		_, err = r.roomRepository.GetByID(ctx, file.RoomID)
-		if err != nil {
-			// Room doesn't exist, file is orphaned
+		if errors.Is(err, redis.Nil) {
 			orphanedFiles = append(orphanedFiles, file)
 		}
 	}

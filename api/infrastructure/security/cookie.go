@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,6 +20,20 @@ const (
 	roomAuthLifetime = 10 * 24 * time.Hour // 10 days
 )
 
+// secureCookies controls the Secure attribute. It defaults to true and is
+// only switched off for development over plain HTTP (see SetSecureCookies).
+var secureCookies = func() *atomic.Bool {
+	b := &atomic.Bool{}
+	b.Store(true)
+	return b
+}()
+
+// SetSecureCookies sets whether cookies carry the Secure attribute. It is
+// configured once at startup from the run mode.
+func SetSecureCookies(secure bool) {
+	secureCookies.Store(secure)
+}
+
 type cookieConfig struct {
 	name     string
 	value    string
@@ -28,14 +43,16 @@ type cookieConfig struct {
 }
 
 func setSecureCookie(w http.ResponseWriter, cfg cookieConfig) {
-	http.SetCookie(w, &http.Cookie{
+	// HttpOnly is per cookie on purpose: visper_room_auth_js must be readable
+	// by the web client. All other attributes are always hardened.
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // G124: HttpOnly=false is intentional for the JS-readable room cookie; Secure is config-driven
 		Name:     cfg.name,
 		Value:    cfg.value,
 		Path:     cfg.path,
 		HttpOnly: cfg.httpOnly,
 		MaxAge:   cfg.maxAge,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   true,
+		Secure:   secureCookies.Load(),
 	})
 }
 

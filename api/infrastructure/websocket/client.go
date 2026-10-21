@@ -8,37 +8,63 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	writeWait  = 10 * time.Second
+	pongWait   = 60 * time.Second
+	pingPeriod = (pongWait * 9) / 10
+
+	// maxClientMessageSize bounds a single frame read from a room client.
+	maxClientMessageSize = 32 * 1024
+
+	clientSendBuffer = 64
+)
+
 type Client struct {
-	conn     *connWrapper
+	conn *websocket.Conn
+
+	// Message is the outbound queue. It is never closed: senders must not
+	// block on it and the writer stops on closed/drain instead, so a
+	// concurrent send can never panic.
 	Message  chan *WSMessage
 	ID       string `json:"id"`
 	RoomID   string `json:"roomId"`
 	Username string `json:"username"`
 
-	// Protection against double-close and race conditions
 	closeOnce sync.Once
-	closed    chan struct{} // signals when client is closed
-	mu        sync.RWMutex
+	closed    chan struct{} // closed when the connection is torn down
+
+	drainOnce sync.Once
+	drain     chan struct{} // closed to flush queued messages and then close
 }
 
 func NewClient(conn *websocket.Conn, id, roomID, username string) *Client {
 	return &Client{
-		conn:     newConnWrapper(conn),
-		Message:  make(chan *WSMessage, 64),
+		conn:     conn,
+		Message:  make(chan *WSMessage, clientSendBuffer),
 		ID:       id,
 		RoomID:   roomID,
 		Username: username,
 		closed:   make(chan struct{}),
+		drain:    make(chan struct{}),
 	}
 }
 
+// Close tears the connection down immediately. It is safe to call
+// concurrently and more than once.
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
 		close(c.closed)
-		c.mu.Lock()
-		_ = c.conn.Close()
-		c.mu.Unlock()
-		close(c.Message)
+		if c.conn != nil {
+			_ = c.conn.Close()
+		}
+	})
+}
+
+// CloseAfterFlush asks the writer to deliver the messages already queued
+// (e.g. a "kicked" notice), send a close frame and then close the connection.
+func (c *Client) CloseAfterFlush() {
+	c.drainOnce.Do(func() {
+		close(c.drain)
 	})
 }
 
@@ -51,27 +77,44 @@ func (c *Client) IsClosed() bool {
 	}
 }
 
+func (c *Client) isDraining() bool {
+	select {
+	case <-c.drain:
+		return true
+	default:
+		return false
+	}
+}
+
+// send queues msg without blocking. It reports false when the client is gone
+// or its buffer is full.
+func (c *Client) send(msg *WSMessage) bool {
+	if c.IsClosed() {
+		return false
+	}
+
+	select {
+	case c.Message <- msg:
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *Client) ReadMessage(core *Core) {
 	defer func() {
-		core.Unregister() <- c
+		core.UnregisterClient(c)
 		c.Close()
 	}()
 
-	_ = c.conn.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-
-	c.conn.conn.SetPongHandler(func(string) error {
-		_ = c.conn.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		return nil
+	c.conn.SetReadLimit(maxClientMessageSize)
+	_ = c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.conn.SetPongHandler(func(string) error {
+		return c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	})
 
 	for {
-		select {
-		case <-c.closed:
-			return
-		default:
-		}
-
-		_, raw, err := c.conn.conn.ReadMessage()
+		_, raw, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("ws read error (client %s): %v", c.ID, err)
@@ -79,16 +122,14 @@ func (c *Client) ReadMessage(core *Core) {
 			return
 		}
 
+		// A client that was kicked or left must not be able to keep posting.
+		if c.IsClosed() || c.isDraining() {
+			return
+		}
+
 		if len(raw) == 0 {
 			continue
 		}
-
-		if len(raw) > 32768 { // 32KB max message size
-			log.Printf("message too large from client %s: %d bytes", c.ID, len(raw))
-			continue
-		}
-
-		now := time.Now().Format(time.RFC3339)
 
 		payload := struct {
 			Content   string `json:"content"`
@@ -99,69 +140,74 @@ func (c *Client) ReadMessage(core *Core) {
 		}{
 			Content:   string(raw),
 			Username:  c.Username,
-			Timestamp: now,
+			Timestamp: time.Now().Format(time.RFC3339),
 			UserID:    c.ID,
 			Encrypted: false,
 		}
 
-		msg := &WSMessage{
+		if !core.Publish(&WSMessage{
 			Type:   MessageReceived,
 			RoomID: c.RoomID,
 			Data:   payload,
-		}
-
-		select {
-		case core.Broadcast() <- msg:
-		case <-c.closed:
+		}) {
 			return
 		}
 	}
 }
 
 func (c *Client) WriteMessage() {
-	defer c.Close()
-
-	// Ping ticker to keep connection alive
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	ticker := time.NewTicker(pingPeriod)
+	defer func() {
+		ticker.Stop()
+		c.Close()
+	}()
 
 	for {
 		select {
-		case msg, ok := <-c.Message:
-			if !ok {
-				// Channel closed, connection shutting down
-				c.mu.Lock()
-				_ = c.conn.conn.WriteMessage(websocket.CloseMessage, []byte{})
-				c.mu.Unlock()
-				return
-			}
-
-			// Set write deadline
-			_ = c.conn.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-
-			c.mu.Lock()
-			err := c.conn.WriteJSON(msg)
-			c.mu.Unlock()
-
-			if err != nil {
+		case msg := <-c.Message:
+			if err := c.write(msg); err != nil {
 				log.Printf("ws write error (client %s): %v", c.ID, err)
 				return
 			}
 
 		case <-ticker.C:
-			// Send ping
-			c.mu.Lock()
-			_ = c.conn.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			err := c.conn.conn.WriteMessage(websocket.PingMessage, nil)
-			c.mu.Unlock()
-
-			if err != nil {
+			if err := c.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait)); err != nil {
 				log.Printf("ping error (client %s): %v", c.ID, err)
 				return
 			}
+
+		case <-c.drain:
+			c.flush()
+			_ = c.conn.WriteControl(
+				websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+				time.Now().Add(writeWait),
+			)
+			return
 
 		case <-c.closed:
 			return
 		}
 	}
+}
+
+// flush writes every message that is already queued.
+func (c *Client) flush() {
+	for {
+		select {
+		case msg := <-c.Message:
+			if err := c.write(msg); err != nil {
+				return
+			}
+		default:
+			return
+		}
+	}
+}
+
+// write is only called from the WriteMessage goroutine, which is the single
+// writer of data frames for this connection.
+func (c *Client) write(msg *WSMessage) error {
+	_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+	return c.conn.WriteJSON(msg)
 }

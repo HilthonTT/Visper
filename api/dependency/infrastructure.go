@@ -1,7 +1,7 @@
 package dependency
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -22,8 +22,16 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	brokerDataDir = "./data/broker"
+	profileDir    = "./data/profiles"
+	reportDir     = "./data/reports"
+)
+
 func (c *Container) initInfrastructure() error {
-	c.initDatabase()
+	if err := c.initDatabase(); err != nil {
+		return err
+	}
 
 	tracerProvider, err := exporters.InitJaegerExporter(c.Config)
 	if err != nil {
@@ -37,7 +45,7 @@ func (c *Container) initInfrastructure() error {
 			zap.String("service", c.Config.Jaeger.ServiceName),
 		)
 
-		go exporters.SendTelemetryTrace(c.Config)
+		go exporters.SendTelemetryTrace(tracerProvider, c.Config)
 	}
 
 	meter := exporters.Prometheus(c.Config.Jaeger.ServiceName, c.Config.Jaeger.ServiceVersion)
@@ -63,43 +71,64 @@ func (c *Container) initInfrastructure() error {
 
 	c.Logger.Info("Metrics initialized successfully")
 
-	storage, err := storage.NewLocalStorage()
+	localStorage, err := storage.NewLocalStorage()
 	if err != nil {
 		return err
 	}
-	c.Storage = storage
+	c.Storage = localStorage
 
 	return nil
 }
 
-func (c *Container) initBackgroundJobs(ctx context.Context) {
+func (c *Container) initBackgroundJobs() {
 	c.FileCleanupJob = jobs.NewFileCleanupJob(c.FileUC, c.Logger, 6*time.Hour)
 
 	go func() {
-		time.Sleep(2 * time.Second) // Wait for all dependencies to initialize
+		// Give the server a moment to come up before the first cleanup run.
+		select {
+		case <-time.After(2 * time.Second):
+		case <-c.ctx.Done():
+			return
+		}
 		c.Logger.Info("Starting background jobs...")
-		c.FileCleanupJob.Start(ctx)
+		c.FileCleanupJob.Start(c.ctx)
 	}()
 
-	c.Logger.Info("Background jobs initialized and started successfully")
+	c.Logger.Info("Background jobs initialized")
 }
 
 func (c *Container) initProfile() {
-	profileDir := "/var/log/myapp/profiles"
-	reportDir := "/var/log/myapp/reports"
-
-	// Create report directory
-	if err := os.MkdirAll(reportDir, 0755); err != nil {
+	if err := os.MkdirAll(reportDir, 0o750); err != nil {
 		c.Logger.Error("Failed to create report directory",
 			zap.String("dir", reportDir),
 			zap.Error(err))
 		return
 	}
 
-	// Find all CPU profiles from the last 24 hours
+	c.generateProfileReports()
+
+	c.Profiler = profiler.NewAdaptiveProfiler(profileDir)
+	c.Profiler.Start(c.ctx)
+}
+
+// generateProfileReports renders SVG/text reports for CPU profiles captured in
+// the last 24 hours. It needs the Go toolchain and is skipped when it is not
+// available (e.g. in the production container image).
+func (c *Container) generateProfileReports() {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		c.Logger.Debug("go toolchain not found, skipping profile report generation")
+		return
+	}
+
+	if _, err := os.Stat(profileDir); err != nil {
+		// Nothing captured yet.
+		return
+	}
+
 	yesterday := time.Now().Add(-24 * time.Hour)
 
-	err := filepath.Walk(profileDir, func(path string, info fs.FileInfo, err error) error {
+	err = filepath.WalkDir(profileDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			c.Logger.Warn("Error accessing path during walk",
 				zap.String("path", path),
@@ -108,62 +137,45 @@ func (c *Container) initProfile() {
 		}
 
 		// Only process CPU profiles
-		if !strings.HasPrefix(filepath.Base(path), "cpu-") {
+		if d.IsDir() || !strings.HasPrefix(d.Name(), "cpu-") {
 			return nil
 		}
 
-		// Check if the file is recent enough
+		info, err := d.Info()
+		if errors.Is(err, fs.ErrNotExist) {
+			// Removed while walking.
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+
 		if info.ModTime().Before(yesterday) {
-			c.Logger.Debug("Skipping old profile",
-				zap.String("path", path),
-				zap.Time("modTime", info.ModTime()))
 			return nil
 		}
 
-		c.Logger.Info("Processing CPU profile",
-			zap.String("path", path),
-			zap.Time("modTime", info.ModTime()))
+		base := strings.TrimSuffix(d.Name(), ".pprof")
+		for _, report := range []struct{ flag, ext string }{{"-svg", ".svg"}, {"-top", ".txt"}} {
+			outPath := filepath.Join(reportDir, base+report.ext)
+			// goBin comes from LookPath and path from walking our own profile
+			// directory; the arguments are not user controlled.
+			out, err := exec.Command(goBin, "tool", "pprof", report.flag, path).Output() //nolint:gosec // G204: trusted, non-user input
+			if err != nil {
+				c.Logger.Error("Failed to generate profile report",
+					zap.String("path", path),
+					zap.String("output", outPath),
+					zap.Error(err))
+				continue
+			}
 
-		// Generate SVG for this profile
-		svgPath := filepath.Join(reportDir, strings.TrimSuffix(filepath.Base(path), ".pprof")+".svg")
-		cmd := exec.Command("go", "tool", "pprof", "-svg", path)
-		svg, err := cmd.Output()
-		if err != nil {
-			c.Logger.Error("Failed to generate SVG",
-				zap.String("path", path),
-				zap.String("svgPath", svgPath),
-				zap.Error(err))
-			return nil
-		}
+			if err := os.WriteFile(outPath, out, 0o600); err != nil {
+				c.Logger.Error("Failed to write profile report",
+					zap.String("output", outPath),
+					zap.Error(err))
+				continue
+			}
 
-		// Write SVG to file
-		if err = os.WriteFile(svgPath, svg, 0644); err != nil {
-			c.Logger.Error("Failed to write SVG file",
-				zap.String("svgPath", svgPath),
-				zap.Error(err))
-		} else {
-			c.Logger.Info("Generated SVG report", zap.String("path", svgPath))
-		}
-
-		// Also generate a text report
-		txtPath := filepath.Join(reportDir, strings.TrimSuffix(filepath.Base(path), ".pprof")+".txt")
-		cmd = exec.Command("go", "tool", "pprof", "-top", path)
-		txt, err := cmd.Output()
-		if err != nil {
-			c.Logger.Error("Failed to generate text report",
-				zap.String("path", path),
-				zap.String("txtPath", txtPath),
-				zap.Error(err))
-			return nil
-		}
-
-		// Write text report to file
-		if err = os.WriteFile(txtPath, txt, 0644); err != nil {
-			c.Logger.Error("Failed to write text report",
-				zap.String("txtPath", txtPath),
-				zap.Error(err))
-		} else {
-			c.Logger.Info("Generated text report", zap.String("path", txtPath))
+			c.Logger.Info("Generated profile report", zap.String("path", outPath))
 		}
 
 		return nil
@@ -173,21 +185,15 @@ func (c *Container) initProfile() {
 		c.Logger.Error("Error walking profile directory",
 			zap.String("dir", profileDir),
 			zap.Error(err))
-	} else {
-		c.Logger.Info("Profile processing complete",
-			zap.String("profileDir", profileDir),
-			zap.String("reportDir", reportDir))
 	}
-
-	c.Profiler = profiler.NewAdaptiveProfiler(profileDir)
-	c.Profiler.Start(c.ctx)
 }
 
 func (c *Container) initBroker() error {
-	brokerInstance, err := broker.NewBroker("./data/broker")
+	brokerInstance, err := broker.NewBroker(brokerDataDir)
 	if err != nil {
 		return err
 	}
+	c.Broker = brokerInstance
 
 	eventPublisher, err := events.NewEventPublisher(brokerInstance, "visper-events")
 	if err != nil {
@@ -196,7 +202,7 @@ func (c *Container) initBroker() error {
 
 	eventConsumer, err := events.NewEventConsumer(brokerInstance, "visper-consumer-group", "visper-events", c.AuditLogRepo)
 	if err != nil {
-		return nil
+		return err
 	}
 
 	c.EventConsumer = eventConsumer
@@ -205,10 +211,14 @@ func (c *Container) initBroker() error {
 	return nil
 }
 
-func (c *Container) initDatabase() {
-	err := database.InitDb(c.Config)
-	if err != nil {
-		c.Logger.Fatal("Failed to initialize database", zap.Error(err))
+func (c *Container) initDatabase() error {
+	if err := database.InitDb(c.Config); err != nil {
+		return fmt.Errorf("failed to initialize database: %w", err)
 	}
-	migration.Up1()
+
+	if err := migration.Up1(); err != nil {
+		return fmt.Errorf("failed to run migrations: %w", err)
+	}
+
+	return nil
 }

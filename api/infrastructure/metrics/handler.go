@@ -8,8 +8,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-func GetHandler(router *gin.RouterGroup, m Manager) {
+// GetHandler mounts the Prometheus endpoint and, when enablePprof is true,
+// the net/http/pprof debug endpoints.
+func GetHandler(router *gin.RouterGroup, m Manager, enablePprof bool) {
 	router.GET("/metrics", systemMetricsMiddleware(m), gin.WrapH(promhttp.Handler()))
+
+	if !enablePprof {
+		return
+	}
 
 	pprofGroup := router.Group("/debug/pprof")
 	{

@@ -31,15 +31,13 @@ func (c *Container) initRepositories() {
 		// Use noop tracer if TracerProvider is nil
 		c.Logger.Warn("TracerProvider is nil, using noop tracer for repositories")
 		tracer = noop.NewTracerProvider().Tracer(RepoTracerName)
-		// Or use global tracer provider as fallback
-		// tracer = otel.GetTracerProvider().Tracer(RepoTracerName)
 	}
 
 	c.MessageRepo = repository.NewMessageRepository(distributedCache, tracer)
 	c.UserRepo = repository.NewUserRepository(distributedCache, tracer)
 	c.RoomRepo = repository.NewRoomRepository(distributedCache, c.UserRepo, tracer)
 	c.FileRepo = repository.NewFileRepository(redisClient, c.RoomRepo)
-	c.AuditLogRepo = repository.NewAuditLogRepository(c.Config, c.Logger.Log)
+	c.AuditLogRepo = repository.NewAuditLogRepository(c.Logger.Log)
 
 	c.Logger.Info("Repositories initialized successfully")
 }

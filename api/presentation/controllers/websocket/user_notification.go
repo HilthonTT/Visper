@@ -51,16 +51,16 @@ func (c *userNotificationController) HandleUserNotificationConnection(ctx *gin.C
 
 	conn, err := c.wsNotificationCore.Upgrade(ctx.Writer, ctx.Request)
 	if err != nil {
+		// The upgrader has already written an HTTP error response.
 		log.Printf("WebSocket upgrade failed for user %s: %v", user.ID, err)
-		ctx.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "upgrade_failed",
-			"message": "failed to upgrade connection",
-		})
 		return
 	}
 
 	client := websocket.NewNotificationClient(conn, user.ID, user.Username)
-	c.wsNotificationCore.Register() <- client
+	if !c.wsNotificationCore.RegisterClient(client) {
+		_ = conn.Close()
+		return
+	}
 
 	log.Printf("User %s (%s) connected to notification stream", user.Username, user.ID)
 
@@ -130,7 +130,7 @@ func (c *userNotificationController) NotifySelfRoomInvite(ctx *gin.Context) {
 			"join_code":   joinCode,
 			"secure_code": secureCode,
 			"timestamp":   time.Now().Unix(),
-			"expires_at":  room.Expiry.String(),
+			"expires_at":  roomExpiresAt(room),
 		},
 	)
 
@@ -167,4 +167,13 @@ func (c *userNotificationController) getUserFromRequest(ctx *gin.Context) (*mode
 	}
 
 	return nil, fmt.Errorf("no valid authentication found")
+}
+
+// roomExpiresAt returns the room expiry as an RFC3339 timestamp (what clients
+// parse), or an empty string for rooms that never expire.
+func roomExpiresAt(room *model.Room) string {
+	if room.Expiry <= 0 {
+		return ""
+	}
+	return room.CreatedAt.Add(room.Expiry).UTC().Format(time.RFC3339)
 }

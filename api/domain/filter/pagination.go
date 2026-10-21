@@ -6,6 +6,11 @@ import (
 	"github.com/hilthontt/visper/api/infrastructure/common"
 )
 
+const (
+	DefaultPageSize = 10
+	MaxPageSize     = 100
+)
+
 type PagedList[T any] struct {
 	PageNumber      int   `json:"pageNumber"`
 	PageSize        int64 `json:"pageSize"`
@@ -34,7 +39,9 @@ func NewPagedList[T any](items *[]T, count int64, pageNumber int, pageSize int64
 		Items:      items,
 	}
 
-	pl.TotalPages = int(math.Ceil(float64(count) / float64(pageSize)))
+	if pageSize > 0 {
+		pl.TotalPages = int(math.Ceil(float64(count) / float64(pageSize)))
+	}
 	pl.HasNextPage = pl.PageNumber < pl.TotalPages
 	pl.HasPreviousPage = pl.PageNumber > 1
 
@@ -52,20 +59,28 @@ func Paginate[TInput any, TOutput any](totalRows int64, items *[]TInput, pageNum
 	return NewPagedList(&rItems, totalRows, pageNumber, pageSize), err
 }
 
+// GetOffset returns the number of rows to skip. Pages are 1-based:
+// page 2 with size 10 covers rows 11-20 (offset 10).
 func (p *PaginationInputWithFilter) GetOffset() int {
-	// 2 , 10 => 11-20
 	return (p.GetPageNumber() - 1) * p.GetPageSize()
 }
 
+// GetPageSize returns the page size, defaulting non-positive values to
+// DefaultPageSize and capping it at MaxPageSize.
 func (p *PaginationInputWithFilter) GetPageSize() int {
-	if p.PageSize == 0 {
-		p.PageSize = 10
+	switch {
+	case p.PageSize <= 0:
+		p.PageSize = DefaultPageSize
+	case p.PageSize > MaxPageSize:
+		p.PageSize = MaxPageSize
 	}
 	return p.PageSize
 }
 
+// GetPageNumber returns the 1-based page number; non-positive values (which
+// would produce a negative offset) are treated as the first page.
 func (p *PaginationInputWithFilter) GetPageNumber() int {
-	if p.PageNumber == 0 {
+	if p.PageNumber <= 0 {
 		p.PageNumber = 1
 	}
 	return p.PageNumber

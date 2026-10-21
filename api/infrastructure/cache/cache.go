@@ -43,7 +43,8 @@ type Cache struct {
 	cleanupInterval time.Duration
 	maxItems        int
 	evictionPolicy  EvictionPolicy
-	stopCleanup     chan bool
+	stopCleanup     chan struct{}
+	closeOnce       sync.Once
 	onEvicted       func(string, any)
 	stats           Stats
 }
@@ -80,12 +81,15 @@ func NewCache(options Options) *Cache {
 		cleanupInterval: options.CleanupInterval,
 		maxItems:        options.MaxItems,
 		evictionPolicy:  options.EvictionPolicy,
-		stopCleanup:     make(chan bool),
+		stopCleanup:     make(chan struct{}),
 		onEvicted:       options.OnEvicted,
 	}
 
-	// Start the cleanup goroutine
-	go cache.startCleanupTimer()
+	// Start the cleanup goroutine (time.NewTicker panics on a non-positive
+	// interval, so only expire lazily on Get in that case).
+	if cache.cleanupInterval > 0 {
+		go cache.startCleanupTimer()
+	}
 
 	return cache
 }
@@ -113,7 +117,7 @@ func (c *Cache) cleanup() {
 	now := time.Now().UnixNano()
 	for key, item := range c.items {
 		if item.Expiration > 0 && now > item.Expiration {
-			delete(c.items, key)
+			c.deleteItem(key)
 		}
 	}
 }
@@ -163,7 +167,6 @@ func (c *Cache) deleteItem(key string) {
 	if c.onEvicted != nil {
 		if item, found := c.items[key]; found {
 			c.onEvicted(key, item.Value)
-			releaseItem(&item)
 		}
 	}
 
@@ -181,21 +184,25 @@ func (c *Cache) Set(key string, value any, expiration time.Duration) {
 		c.evict()
 	}
 
+	now := time.Now()
 	var exp int64
 	if expiration > 0 {
-		exp = time.Now().Add(expiration).UnixNano()
+		exp = now.Add(expiration).UnixNano()
 	}
 
+	// Created/LastAccess drive the FIFO and LRU eviction policies.
 	c.items[key] = Item{
 		Value:      value,
 		Expiration: exp,
+		Created:    now,
+		LastAccess: now,
 	}
 
 	c.stats.TotalItems++
 }
 
 // Get retrieves an item from the cache
-func (c *Cache) Get(key string) (interface{}, bool) {
+func (c *Cache) Get(key string) (any, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -270,9 +277,11 @@ func (c *Cache) Flush() {
 	c.stats = Stats{}
 }
 
-// Close stops the cleanup goroutine
+// Close stops the cleanup goroutine. It is safe to call more than once.
 func (c *Cache) Close() {
-	c.stopCleanup <- true
+	c.closeOnce.Do(func() {
+		close(c.stopCleanup)
+	})
 }
 
 // Count returns the number of items in the cache

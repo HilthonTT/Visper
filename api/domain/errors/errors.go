@@ -25,7 +25,7 @@ const (
 	notAuthenticatedErrorMessage ErrorMessage = "not Authenticated"
 
 	TokenGeneratorError        ErrorType    = "TokenGeneratorError"
-	tokenGeneratorErrorMessage ErrorMessage = "error in token generation"
+	tokenGeneratorErrorMessage ErrorMessage = "error in token generation" //nolint:gosec // G101: an error message, not a credential
 
 	NotAuthorized             ErrorType    = "NotAuthorized"
 	notAuthorizedErrorMessage ErrorMessage = "not authorized"

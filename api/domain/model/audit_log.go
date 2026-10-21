@@ -10,7 +10,9 @@ type AuditLog struct {
 	CreatedAt time.Time `gorm:"type:TIMESTAMP with time zone;not null;index"`
 
 	// Event identity
-	EventID   string `gorm:"type:VARCHAR(36);not null;index"`
+	// Unique so that CreateAuditLog's ON CONFLICT (event_id) DO NOTHING has a
+	// matching constraint and replayed events are deduplicated.
+	EventID   string `gorm:"type:VARCHAR(36);not null;uniqueIndex:uidx_audit_logs_event_id"`
 	EventType string `gorm:"type:VARCHAR(64);not null;index"`
 
 	// Actors - anonymous, so no FK constraints

@@ -19,35 +19,33 @@ type BaseModel struct {
 	DeletedBy  *sql.NullString `gorm:"null"`
 }
 
-func (m *BaseModel) BeforeCreate(tx *gorm.DB) {
-	value := tx.Statement.Context.Value("user")
-	userId := -1
+// actorKey is the context key holding the acting user's ID (a string).
+const actorKey = "user"
 
-	if value != nil {
-		userId = int(value.(float64))
+// actor returns the acting user's ID from the statement context, if any.
+// The type assertion is checked so an unexpected value cannot panic.
+func actor(tx *gorm.DB) *sql.NullString {
+	if id, ok := tx.Statement.Context.Value(actorKey).(string); ok && id != "" {
+		return &sql.NullString{Valid: true, String: id}
 	}
+	return &sql.NullString{Valid: false}
+}
+
+// BeforeCreate is a GORM hook; it must return an error to be recognised.
+func (m *BaseModel) BeforeCreate(tx *gorm.DB) error {
 	m.CreatedAt = time.Now().UTC()
-	m.CreatedBy = userId
+	m.CreatedBy = -1
+	return nil
 }
 
-func (m *BaseModel) BeforeUpdate(tx *gorm.DB) (err error) {
-	value := tx.Statement.Context.Value("user")
-	var userId = &sql.NullString{Valid: false}
-	if value != nil {
-		userId = &sql.NullString{Valid: true, String: string(value.(string))}
-	}
+func (m *BaseModel) BeforeUpdate(tx *gorm.DB) error {
 	m.ModifiedAt = sql.NullTime{Time: time.Now().UTC(), Valid: true}
-	m.ModifiedBy = userId
-	return
+	m.ModifiedBy = actor(tx)
+	return nil
 }
 
-func (m *BaseModel) BeforeDelete(tx *gorm.DB) (err error) {
-	value := tx.Statement.Context.Value("user")
-	var userId = &sql.NullString{Valid: false}
-	if value != nil {
-		userId = &sql.NullString{Valid: true, String: string(value.(string))}
-	}
+func (m *BaseModel) BeforeDelete(tx *gorm.DB) error {
 	m.DeletedAt = sql.NullTime{Time: time.Now().UTC(), Valid: true}
-	m.DeletedBy = userId
-	return
+	m.DeletedBy = actor(tx)
+	return nil
 }

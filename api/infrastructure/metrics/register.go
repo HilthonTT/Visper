@@ -186,7 +186,7 @@ func (m *metricsManager) DeltaUpDownCounter(ctx context.Context, name string, va
 		return
 	}
 
-	upDownCounter.Add(ctx, 1, metric.WithAttributes(m.getAttributes(name, labels...)...))
+	upDownCounter.Add(ctx, value, metric.WithAttributes(m.getAttributes(name, labels...)...))
 }
 
 // RecordHistogram records the specified value in the respective buckets of the histogram metric.

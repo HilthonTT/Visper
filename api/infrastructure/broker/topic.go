@@ -1,17 +1,16 @@
 package broker
 
 import (
-	"bufio"
-	"encoding/binary"
+	"errors"
 	"fmt"
-	"hash/crc32"
-	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 )
+
+// ErrTopicExists is returned by CreateTopic for a topic that already exists.
+var ErrTopicExists = errors.New("topic already exists")
 
 // TopicManager handles topic and partition creation and access
 type TopicManager struct {
@@ -20,11 +19,12 @@ type TopicManager struct {
 	mu      sync.RWMutex
 }
 
-// Topic represents a named channel for messages
+// Topic represents a named channel for messages. Its partitions are fixed at
+// creation time and never modified afterwards.
 type Topic struct {
 	name       string
+	dir        string
 	partitions []*Partition
-	mu         sync.RWMutex
 }
 
 // Partition represents an ordered, immutable sequence of messages
@@ -34,35 +34,45 @@ type Partition struct {
 	file      *os.File
 	mu        sync.Mutex
 	offset    int64
+	dirty     bool // written since the last fsync
 	lastSync  time.Time
 	syncEvery time.Duration
+
+	stop      chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 // CreateTopic creates a new topic with the specified number of partitions
 func (tm *TopicManager) CreateTopic(name string, numPartitions int) (*Topic, error) {
+	if numPartitions <= 0 {
+		return nil, fmt.Errorf("topic %s: invalid number of partitions %d", name, numPartitions)
+	}
+
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
-	// Check if the topic already exists
 	if _, exists := tm.topics[name]; exists {
-		return nil, fmt.Errorf("topic %s already exists", name)
+		return nil, fmt.Errorf("topic %s: %w", name, ErrTopicExists)
 	}
 
-	// Create the topic directory
 	topicDir := filepath.Join(tm.baseDir, name)
-	if err := os.MkdirAll(topicDir, 0755); err != nil {
+	if err := os.MkdirAll(topicDir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create topic directory: %w", err)
 	}
 
-	// Create topic and its partitions
 	topic := &Topic{
 		name:       name,
+		dir:        topicDir,
 		partitions: make([]*Partition, numPartitions),
 	}
 
 	for i := range numPartitions {
 		partition, err := createPartition(topic, i, topicDir)
 		if err != nil {
+			for _, p := range topic.partitions[:i] {
+				_ = p.close()
+			}
 			return nil, fmt.Errorf("failed to create partition %d: %w", i, err)
 		}
 		topic.partitions[i] = partition
@@ -72,11 +82,23 @@ func (tm *TopicManager) CreateTopic(name string, numPartitions int) (*Topic, err
 	return topic, nil
 }
 
-// createPartition creates a new partition file
+// GetTopic returns the topic with the given name.
+func (tm *TopicManager) GetTopic(name string) (*Topic, error) {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+
+	topic, exists := tm.topics[name]
+	if !exists {
+		return nil, fmt.Errorf("topic %s does not exist", name)
+	}
+
+	return topic, nil
+}
+
+// createPartition creates or opens a partition file
 func createPartition(topic *Topic, id int, topicDir string) (*Partition, error) {
-	// Create or open partition file
 	filePath := filepath.Join(topicDir, fmt.Sprintf("partition-%d.log", id))
-	file, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
+	file, err := os.OpenFile(filePath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open partition file: %w", err)
 	}
@@ -84,7 +106,7 @@ func createPartition(topic *Topic, id int, topicDir string) (*Partition, error) 
 	// Get current file size as initial offset
 	info, err := file.Stat()
 	if err != nil {
-		file.Close()
+		_ = file.Close()
 		return nil, fmt.Errorf("failed to stat partition file: %w", err)
 	}
 
@@ -94,225 +116,72 @@ func createPartition(topic *Topic, id int, topicDir string) (*Partition, error) 
 		file:      file,
 		offset:    info.Size(),
 		syncEvery: 50 * time.Millisecond,
+		stop:      make(chan struct{}),
+		done:      make(chan struct{}),
 	}
 
-	// Start background sync goroutine
 	go partition.syncLoop()
 
 	return partition, nil
 }
 
-// syncLoop periodically syncs partition data to disk
+// syncLoop periodically flushes written data to disk. It only fsyncs when
+// something was written since the last sync.
 func (p *Partition) syncLoop() {
+	defer close(p.done)
+
 	ticker := time.NewTicker(p.syncEvery)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		p.mu.Lock()
-
-		if time.Since(p.lastSync) >= p.syncEvery {
-			p.file.Sync()
-			p.lastSync = time.Now()
-		}
-
-		p.mu.Unlock()
-	}
-}
-
-// RecoverPartition recovers a partition after a crash
-func RecoverPartition(topicDir string, partitionID int) (*Partition, error) {
-	filePath := filepath.Join(topicDir, fmt.Sprintf("partition-%d.log", partitionID))
-
-	// Open the file
-	file, err := os.OpenFile(filePath, os.O_RDWR, 0644)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open partition file: %w", err)
-	}
-
-	// Scan the file to find the valid end
-	var offset int64 = 0
-	reader := bufio.NewReader(file)
-
 	for {
-		// Remember current position
-		currentOffset := offset
-
-		// Read message size
-		sizeBytes := make([]byte, 8)
-		_, err := io.ReadFull(reader, sizeBytes)
-		if err != nil {
-			if err == io.EOF {
-				// Reached the end of file, file is valid
-				break
+		select {
+		case <-ticker.C:
+			p.mu.Lock()
+			if p.dirty {
+				_ = p.syncLocked()
 			}
-			if err == io.ErrUnexpectedEOF {
-				// Partial write detected, truncate file here
-				log.Printf("Partial write detected at offset %d, truncating", currentOffset)
-				file.Truncate(currentOffset)
-				offset = currentOffset
-				break
-			}
-			return nil, fmt.Errorf("failed to read message size: %w", err)
+			p.mu.Unlock()
+		case <-p.stop:
+			return
 		}
-
-		// Parse message size
-		messageSize := binary.BigEndian.Uint64(sizeBytes)
-
-		// Skip message content
-		if _, err := io.CopyN(io.Discard, reader, int64(messageSize)); err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				// Partial write detected, truncate file here
-				log.Printf("Partial message detected at offset %d, truncating", currentOffset)
-				file.Truncate(currentOffset)
-				offset = currentOffset
-				break
-			}
-			return nil, fmt.Errorf("failed to skip message: %w", err)
-		}
-
-		// Update offset
-		offset = currentOffset + 8 + int64(messageSize)
 	}
-
-	// Seek to the end
-	if _, err := file.Seek(offset, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("failed to seek to end: %w", err)
-	}
-
-	// Create partition
-	partition := &Partition{
-		id:        partitionID,
-		file:      file,
-		offset:    offset,
-		syncEvery: 50 * time.Millisecond,
-	}
-
-	// Start background sync goroutine
-	go partition.syncLoop()
-
-	return partition, nil
 }
 
-// Message format with checksum
-// ┌────────┬────────┬─────────┬─────────────────┬──────────┐
-// │ Length │ Header │ Checksum│ Message Payload │ Checksum │
-// │ (8B)   │ (var)  │  (4B)   │      (var)      │   (4B)   │
-// └────────┴────────┴─────────┴─────────────────┴──────────┘
-
-// writeMessageWithIntegrity writes a message with checksum
-func (p *Partition) WriteMessageWithIntegrity(msg *Message) (int64, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Record current offset
-	currentOffset := p.offset
-
-	// Serialize message header and payload
-	headerBytes, payloadBytes, err := serializeMessageParts(msg)
-	if err != nil {
-		return -1, err
+// syncLocked fsyncs the partition file. p.mu must be held.
+func (p *Partition) syncLocked() error {
+	if err := p.file.Sync(); err != nil {
+		return err
 	}
-
-	// Calculate checksums
-	headerChecksum := crc32.ChecksumIEEE(headerBytes)
-	payloadChecksum := crc32.ChecksumIEEE(payloadBytes)
-
-	// Calculate total message size
-	totalSize := uint64(len(headerBytes) + 4 + len(payloadBytes) + 4) // header + header checksum + payload + payload checksum
-
-	// Write length prefix
-	sizeBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(sizeBytes, totalSize)
-	if _, err := p.file.Write(sizeBytes); err != nil {
-		return -1, fmt.Errorf("failed to write message size: %w", err)
-	}
-
-	// Write header
-	if _, err := p.file.Write(headerBytes); err != nil {
-		return -1, fmt.Errorf("failed to write message header: %w", err)
-	}
-
-	// Write header checksum
-	checksumBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(checksumBytes, headerChecksum)
-	if _, err := p.file.Write(checksumBytes); err != nil {
-		return -1, fmt.Errorf("failed to write header checksum: %w", err)
-	}
-
-	// Write payload
-	if _, err := p.file.Write(payloadBytes); err != nil {
-		return -1, fmt.Errorf("failed to write message payload: %w", err)
-	}
-
-	// Write payload checksum
-	binary.BigEndian.PutUint32(checksumBytes, payloadChecksum)
-	if _, err := p.file.Write(checksumBytes); err != nil {
-		return -1, fmt.Errorf("failed to write payload checksum: %w", err)
-	}
-
-	// Update partition offset
-	p.offset += int64(8 + totalSize)
-
-	// Schedule sync if needed
-	if time.Since(p.lastSync) >= p.syncEvery {
-		p.file.Sync()
-		p.lastSync = time.Now()
-	}
-
-	return currentOffset, nil
+	p.dirty = false
+	p.lastSync = time.Now()
+	return nil
 }
 
-// readMessageWithIntegrity reads a message with integrity checking
-func (p *Partition) ReadMessageWithIntegrity(offset int64) (*Message, int64, error) {
+// sync fsyncs the partition file.
+func (p *Partition) sync() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.syncLocked()
+}
 
-	// Seek to the offset
-	if _, err := p.file.Seek(offset, io.SeekStart); err != nil {
-		return nil, offset, fmt.Errorf("failed to seek to offset: %w", err)
-	}
+// close stops the sync loop, flushes and closes the partition file.
+func (p *Partition) close() error {
+	var err error
+	p.closeOnce.Do(func() {
+		close(p.stop)
+		<-p.done
 
-	// Read message size
-	sizeBytes := make([]byte, 8)
-	if _, err := io.ReadFull(p.file, sizeBytes); err != nil {
-		return nil, offset, fmt.Errorf("failed to read message size: %w", err)
-	}
-	totalSize := binary.BigEndian.Uint64(sizeBytes)
+		p.mu.Lock()
+		defer p.mu.Unlock()
 
-	// Read the full message
-	msgBytes := make([]byte, totalSize)
-	if _, err := io.ReadFull(p.file, msgBytes); err != nil {
-		return nil, offset, fmt.Errorf("failed to read message: %w", err)
-	}
+		err = errors.Join(p.file.Sync(), p.file.Close())
+	})
+	return err
+}
 
-	// Extract header length (first 4 bytes of message)
-	headerLength := binary.BigEndian.Uint32(msgBytes[0:4])
-
-	// Extract parts
-	headerBytes := msgBytes[0:headerLength]
-	headerChecksumBytes := msgBytes[headerLength : headerLength+4]
-	payloadBytes := msgBytes[headerLength+4 : len(msgBytes)-4]
-	payloadChecksumBytes := msgBytes[len(msgBytes)-4:]
-
-	// Verify checksums
-	headerChecksum := binary.BigEndian.Uint32(headerChecksumBytes)
-	if calculatedHeaderChecksum := crc32.ChecksumIEEE(headerBytes); calculatedHeaderChecksum != headerChecksum {
-		return nil, offset, fmt.Errorf("header checksum mismatch")
-	}
-
-	payloadChecksum := binary.BigEndian.Uint32(payloadChecksumBytes)
-	if calculatedPayloadChecksum := crc32.ChecksumIEEE(payloadBytes); calculatedPayloadChecksum != payloadChecksum {
-		return nil, offset, fmt.Errorf("payload checksum mismatch")
-	}
-
-	// Parse message
-	msg, err := deserializeMessage(headerBytes, payloadBytes)
-	if err != nil {
-		return nil, offset, fmt.Errorf("failed to deserialize message: %w", err)
-	}
-
-	// Calculate next offset
-	nextOffset := offset + int64(8) + int64(totalSize)
-
-	return msg, nextOffset, nil
+// endOffset returns the offset at which the next message will be written.
+func (p *Partition) endOffset() int64 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.offset
 }
