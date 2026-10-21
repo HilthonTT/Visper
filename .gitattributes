@@ -1,0 +1,12 @@
+* text=auto eol=lf
+
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.exe  binary
+
+# Generated files: collapse in diffs and exclude from language stats
+**/go.sum                    linguist-generated=true -diff
+go.work.sum                  linguist-generated=true -diff
+web/pnpm-lock.yaml           linguist-generated=true -diff
+web/src/routeTree.gen.ts     linguist-generated=true

@@ -1,46 +1,64 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
+# ── OS / editors ─────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+
+# ── Secrets ──────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Logs ─────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Go ───────────────────────────────────────────────────────
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-
-# Test binary, built with `go test -c`
 *.test
-
-# Code coverage profiles and other test artifacts
 *.out
 coverage.*
 *.coverprofile
 profile.cov
+bin/
+tmp/
+dist/
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
-go.work
-go.work.sum
-
-# env file
-.env
-
-# Editor/IDE
-# .idea/
-# .vscode/
-
-*.log
+# ── API runtime data ─────────────────────────────────────────
 api/infrastructure/config/config-development.yml
+api/data/
+api/uploads/
+api/cmd/**/data/
+api/cmd/**/uploads/
 
-web/node_modules
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+ai/env/
+ai/models/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
 
-*.pyc
+# ── Web ──────────────────────────────────────────────────────
+node_modules/
+web/dist/
+web/.tanstack/
+web/.output/
+web/.vinxi/
 
-python/models/
-
+# ── Media dropped into the repo by accident ──────────────────
+# (tracked assets such as the CLI waifu embeds and web/public icons are
+#  explicitly re-included below)
 *.jpg
-*.png
 *.jpeg
 *.gif
+*.png
+!cli/**/embeds/*.png
+!web/public/*.png

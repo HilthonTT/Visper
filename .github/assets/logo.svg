@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Visper icon">
+  <title>Visper</title>
+  <rect width="128" height="128" rx="24" fill="#07140F"/>
+  <!-- Chat bubble sealed with a padlock -->
+  <rect x="18" y="20" width="92" height="66" rx="18" fill="#10B981"/>
+  <path d="M34 84V106L56 84Z" fill="#10B981"/>
+  <path d="M53 52V44A11 11 0 0 1 75 44V52" stroke="#07140F" stroke-width="6" fill="none"/>
+  <rect x="45" y="50" width="38" height="26" rx="5" fill="#07140F"/>
+  <circle cx="64" cy="61" r="4" fill="#10B981"/>
+  <path d="M62 62h4v7h-4z" fill="#10B981"/>
+</svg>
