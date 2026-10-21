@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=80", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "visper-ai"
+version = "0.1.0"
+description = "Visper AI service: FastAPI message enhancement backed by Ollama, Redis and an ARQ worker."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "fastapi>=0.158.2",
+    "uvicorn[standard]>=0.54.0",
+    "pydantic>=2.14.1",
+    "pydantic-settings>=2.16.1",
+    # arq 0.28 pins redis<6, so redis stays on the 5.x line until arq relaxes it.
+    "redis[hiredis]>=5.3.1,<6",
+    "arq>=0.28.0",
+    "httpx>=0.28.1",
+    "structlog>=26.1.0",
+    "anyio>=4.15.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "fakeredis>=2.40.0",
+    "ruff>=0.17.1",
+    "mypy>=2.4.0",
+]
+
+[project.scripts]
+visper-ai = "visper_ai.main:main"
+visper-ai-worker = "visper_ai.core.worker.settings:start_arq_service"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = ["env", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "ASYNC", "SIM"]
+ignore = [
+    "B008",   # FastAPI Depends() in defaults is idiomatic
+    "UP042",  # keep (str, Enum): StrEnum changes str()/format() output
+]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+packages = ["visper_ai"]
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
