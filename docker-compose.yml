@@ -1,53 +1,91 @@
+# Local development infrastructure for Visper.
+#
+#   cp .env.example .env
+#   docker compose up -d                 # infrastructure only
+#   docker compose --profile app up -d   # infrastructure + Visper services
+#
+# GPU acceleration for Ollama (NVIDIA only):
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+
+x-sentinel: &sentinel
+  image: redis:8
+  restart: unless-stopped
+  environment:
+    REDIS_PASSWORD: ${REDIS_PASSWORD:-password}
+  # The config is generated at startup because Sentinel rewrites its own
+  # config file and needs it to be writable.
+  command:
+    - sh
+    - -c
+    - |
+      cat > /tmp/sentinel.conf <<EOF
+      port 26379
+      sentinel resolve-hostnames yes
+      sentinel monitor mymaster redis-master 6379 2
+      sentinel auth-pass mymaster $$REDIS_PASSWORD
+      sentinel down-after-milliseconds mymaster 5000
+      sentinel failover-timeout mymaster 60000
+      sentinel parallel-syncs mymaster 1
+      EOF
+      exec redis-sentinel /tmp/sentinel.conf
+  depends_on:
+    redis-master:
+      condition: service_healthy
+  networks:
+    - visper-network
+
 services:
   postgres:
-    image: postgres:latest
+    image: postgres:18
     container_name: visper-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: admin
-      POSTGRES_DB: visper_db
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin}
+      POSTGRES_DB: ${POSTGRES_DB:-visper_db}
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d visper_db"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - visper-network
 
-  # ── Redis Master ────────────────────────────────────────────
+  # ── Redis master / replica ─────────────────────────────────
   redis-master:
-    image: redis:latest
+    image: redis:8
     container_name: visper-redis-master
     restart: unless-stopped
-    command: redis-server --requirepass password --appendonly yes
+    command: redis-server --requirepass ${REDIS_PASSWORD:-password} --appendonly yes
     ports:
       - "6379:6379"
     volumes:
       - redis_master_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "password", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" --no-auth-warning ping | grep PONG"]
       interval: 10s
       timeout: 5s
       retries: 5
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-password}
     networks:
-      - visper-network
+      visper-network:
+        aliases: [redis]
 
-  # ── Redis Replica ───────────────────────────────────────────────
   redis-replica:
-    image: redis:latest
+    image: redis:8
     container_name: visper-redis-replica
     restart: unless-stopped
     command: >
       redis-server
-      --requirepass password
+      --requirepass ${REDIS_PASSWORD:-password}
       --replicaof redis-master 6379
-      --masterauth password
+      --masterauth ${REDIS_PASSWORD:-password}
       --appendonly yes
     ports:
       - "6380:6379"
@@ -57,84 +95,26 @@ services:
     networks:
       - visper-network
 
-  # ── Sentinel 1 ───────────────────────────────────────────────
+  # ── Redis Sentinels ────────────────────────────────────────
   redis-sentinel-1:
-    image: redis:latest
+    <<: *sentinel
     container_name: visper-sentinel-1
-    restart: unless-stopped
     ports:
       - "36379:26379"
-    command: >
-      sh -c "
-        echo 'port 26379' > /tmp/sentinel.conf &&
-        echo 'sentinel resolve-hostnames yes' >> /tmp/sentinel.conf &&
-        echo 'sentinel monitor mymaster redis-master 6379 2' >> /tmp/sentinel.conf &&
-        echo 'sentinel auth-pass mymaster password' >> /tmp/sentinel.conf &&
-        echo 'sentinel down-after-milliseconds mymaster 5000' >> /tmp/sentinel.conf &&
-        echo 'sentinel failover-timeout mymaster 60000' >> /tmp/sentinel.conf &&
-        echo 'sentinel parallel-syncs mymaster 1' >> /tmp/sentinel.conf &&
-        redis-sentinel /tmp/sentinel.conf
-      "
-    volumes:
-      - ./sentinel.conf:/etc/sentinel.conf
-    depends_on:
-      redis-master:
-        condition: service_healthy
-    networks:
-      - visper-network
 
-  # ── Sentinel 2 ───────────────────────────────────────────────
   redis-sentinel-2:
-    image: redis:latest
+    <<: *sentinel
     container_name: visper-sentinel-2
-    restart: unless-stopped
     ports:
       - "36380:26379"
-    command: >
-      sh -c "
-        echo 'port 26379' > /tmp/sentinel.conf &&
-        echo 'sentinel resolve-hostnames yes' >> /tmp/sentinel.conf &&
-        echo 'sentinel monitor mymaster redis-master 6379 2' >> /tmp/sentinel.conf &&
-        echo 'sentinel auth-pass mymaster password' >> /tmp/sentinel.conf &&
-        echo 'sentinel down-after-milliseconds mymaster 5000' >> /tmp/sentinel.conf &&
-        echo 'sentinel failover-timeout mymaster 60000' >> /tmp/sentinel.conf &&
-        echo 'sentinel parallel-syncs mymaster 1' >> /tmp/sentinel.conf &&
-        redis-sentinel /tmp/sentinel.conf
-      "
-    volumes:
-      - ./sentinel.conf:/etc/sentinel.conf
-    depends_on:
-      redis-master:
-        condition: service_healthy
-    networks:
-      - visper-network
 
-  # ── Sentinel 3 ───────────────────────────────────────────────
   redis-sentinel-3:
-    image: redis:latest
+    <<: *sentinel
     container_name: visper-sentinel-3
-    restart: unless-stopped
     ports:
       - "36381:26379"
-    command: >
-      sh -c "
-        echo 'port 26379' > /tmp/sentinel.conf &&
-        echo 'sentinel resolve-hostnames yes' >> /tmp/sentinel.conf &&
-        echo 'sentinel monitor mymaster redis-master 6379 2' >> /tmp/sentinel.conf &&
-        echo 'sentinel auth-pass mymaster password' >> /tmp/sentinel.conf &&
-        echo 'sentinel down-after-milliseconds mymaster 5000' >> /tmp/sentinel.conf &&
-        echo 'sentinel failover-timeout mymaster 60000' >> /tmp/sentinel.conf &&
-        echo 'sentinel parallel-syncs mymaster 1' >> /tmp/sentinel.conf &&
-        redis-sentinel /tmp/sentinel.conf
-      "
-    volumes:
-      - ./sentinel.conf:/etc/sentinel.conf
-    depends_on:
-      redis-master:
-        condition: service_healthy
-    networks:
-      - visper-network
 
+  # ── Tracing ────────────────────────────────────────────────
   jaeger:
     image: jaegertracing/all-in-one:latest
     container_name: visper-jaeger
@@ -142,27 +122,20 @@ services:
     environment:
       - COLLECTOR_OTLP_ENABLED=true
     ports:
-      - "16686:16686" # Jaeger UI (main interface)
-      - "14268:14268" # Jaeger collector HTTP (used by your app)
-      - "14250:14250" # Jaeger gRPC
-      - "4317:4317" # OTLP gRPC receiver
-      - "4318:4318" # OTLP HTTP receiver
+      - "16686:16686" # Jaeger UI
+      - "14268:14268" # Collector HTTP
+      - "14250:14250" # Collector gRPC
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
     healthcheck:
-      test:
-        [
-          "CMD",
-          "wget",
-          "--no-verbose",
-          "--tries=1",
-          "--spider",
-          "http://localhost:14269/",
-        ]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:14269/"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - visper-network
 
+  # ── AI (Ollama) ────────────────────────────────────────────
   ollama:
     image: ollama/ollama:latest
     container_name: visper-ollama
@@ -178,41 +151,115 @@ services:
       retries: 5
     networks:
       - visper-network
-    # Optional: Uncomment if you have NVIDIA GPU
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
 
-    # Init container to pull the model on first run
+  # One-shot job that pulls the model on first run.
   ollama-init:
     image: ollama/ollama:latest
     container_name: visper-ollama-init
+    restart: "no"
     depends_on:
       ollama:
         condition: service_healthy
-    entrypoint: /bin/sh
-    command: >
-      -c "
-      echo 'Pulling qwen2.5:3b model...';
-      ollama pull qwen2.5:3b;
-      echo 'Model pulled successfully';
-      "
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-qwen2.5:3b}"]
     environment:
       - OLLAMA_HOST=ollama:11434
     networks:
       - visper-network
 
+  # ── Visper services (docker compose --profile app up) ─────
+  api:
+    build: ./api
+    container_name: visper-api
+    profiles: [app]
+    restart: unless-stopped
+    environment:
+      APP_ENV: docker
+      VISPER_POSTGRES_HOST: postgres
+      VISPER_POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      VISPER_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin}
+      VISPER_POSTGRES_DBNAME: ${POSTGRES_DB:-visper_db}
+      VISPER_REDIS_HOST: redis-master
+      VISPER_REDIS_PASSWORD: ${REDIS_PASSWORD:-password}
+    ports:
+      - "5005:5005"
+    volumes:
+      - api_data:/app/data
+      - api_uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-master:
+        condition: service_healthy
+    networks:
+      - visper-network
+
+  proxy:
+    build: ./proxy
+    container_name: visper-proxy
+    profiles: [app]
+    restart: unless-stopped
+    environment:
+      PROXY_BACKENDS: http://api:5005
+      REDIS_SENTINEL_ADDRS: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+      REDIS_MASTER_NAME: mymaster
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-password}
+    ports:
+      - "5004:5004"
+    depends_on:
+      - api
+      - redis-sentinel-1
+      - redis-sentinel-2
+      - redis-sentinel-3
+    networks:
+      - visper-network
+
+  ai:
+    build: ./ai
+    container_name: visper-ai
+    profiles: [app]
+    restart: unless-stopped
+    environment: &ai-env
+      APP_HOST: 0.0.0.0
+      APP_PORT: "8088"
+      REDIS_CACHE_HOST: redis-master
+      REDIS_CACHE_PASSWORD: ${REDIS_PASSWORD:-password}
+      REDIS_QUEUE_HOST: redis-master
+      REDIS_QUEUE_PASSWORD: ${REDIS_PASSWORD:-password}
+      REDIS_RATE_LIMIT_HOST: redis-master
+      REDIS_RATE_LIMIT_PASSWORD: ${REDIS_PASSWORD:-password}
+      OLLAMA_HOST: ollama
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+    ports:
+      - "8088:8088"
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    networks:
+      - visper-network
+
+  ai-worker:
+    build: ./ai
+    container_name: visper-ai-worker
+    profiles: [app]
+    restart: unless-stopped
+    command: ["arq", "visper_ai.core.worker.settings.WorkerSettings"]
+    environment: *ai-env
+    healthcheck:
+      disable: true # the image's healthcheck targets the HTTP API, not the worker
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    networks:
+      - visper-network
+
 volumes:
   postgres_data:
-    driver: local
   redis_master_data:
-    driver: local
   ollama_data:
-    driver: local
+  api_data:
+  api_uploads:
 
 networks:
   visper-network:
