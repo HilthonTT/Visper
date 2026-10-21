@@ -1,22 +1,10 @@
 /// <reference types="vite/client" />
 
-import "styled-components";
+interface ImportMetaEnv {
+	/** Base URL of the Visper API, e.g. http://localhost:5005 */
+	readonly VITE_BACKEND_API_URL?: string;
+}
 
-declare module "styled-components" {
-  export interface DefaultTheme {
-    id: string;
-    name: string;
-    colors: {
-      body: string;
-      scrollHandle: string;
-      scrollHandleHover: string;
-      primary: string;
-      secondary: string;
-      text: {
-        100: string;
-        200: string;
-        300: string;
-      };
-    };
-  }
+interface ImportMeta {
+	readonly env: ImportMetaEnv;
 }

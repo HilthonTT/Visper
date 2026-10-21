@@ -1,13 +1,13 @@
-import { createGlobalStyle, DefaultTheme } from "styled-components";
+import { createGlobalStyle } from "styled-components";
 import { normalize } from "styled-normalize";
 
-const GlobalStyle = createGlobalStyle<{ theme: DefaultTheme }>`
+const GlobalStyle = createGlobalStyle`
   ${normalize}
 
   *, ::before, ::after {
     border-width: 0;
     border-style: solid;
-    border-color: theme('borderColor.DEFAULT', currentColor);
+    border-color: currentColor;
   }
 
   blockquote, dl, dd, h1, h2, h3,

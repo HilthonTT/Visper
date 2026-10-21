@@ -1,9 +1,10 @@
+import type { ReactNode } from "react";
 import { Wrapper } from "../styles/output-styled";
 
 interface GeneralOutputProps {
-  children: React.ReactNode;
+	children: ReactNode;
 }
 
 export const GeneralOutput = ({ children }: GeneralOutputProps) => {
-  return <Wrapper>{children}</Wrapper>;
+	return <Wrapper>{children}</Wrapper>;
 };

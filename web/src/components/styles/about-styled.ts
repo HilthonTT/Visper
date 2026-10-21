@@ -9,10 +9,6 @@ export const AboutWrapper = styled.div`
   }
 `;
 
-export const HighlightSpan = styled.span`
-  font-weight: 700;
-`;
-
-export const HighlightAlt = styled.span`
+export const Highlight = styled.span`
   font-weight: 700;
 `;

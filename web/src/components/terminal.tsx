@@ -1,286 +1,186 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import lodash from "lodash";
-import { argTab } from "@/lib/funcs";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useUser } from "@/contexts/user-context";
+import type { RoomParams } from "@/hooks/use-room-params";
+import { commandNames } from "@/lib/commands";
+import { autocomplete } from "@/lib/funcs";
+import { themeNames } from "@/lib/themes";
+import { HistoryItem } from "./history-item";
 import {
-  Form,
-  Hints,
-  Input,
-  MobileBr,
-  MobileSpan,
-  Wrapper,
+	Form,
+	Hints,
+	Input,
+	MobileBr,
+	MobileSpan,
+	Wrapper,
 } from "./styles/terminal-styled";
 import { TerminalInfo } from "./terminal-info";
-import type { RootSearchValues } from "@/schemas/root-schema";
-import { useUser } from "@/contexts/user-context";
-import { HistoryItem } from "./history-item";
 
-type Command = {
-  cmd: string;
-  desc: string;
-  tab: number;
-  special?: boolean;
+type HistoryEntry = {
+	/** Stable key so past entries don't remount (and re-run effects) on submit. */
+	id: number;
+	input: string;
 };
 
-export const commands: Command[] = [
-  {
-    cmd: "about",
-    desc: "about Sat Naing",
-    tab: 8,
-  },
-  {
-    cmd: "clear",
-    desc: "clear the terminal",
-    tab: 8,
-  },
-  {
-    cmd: "echo",
-    desc: "print out anything",
-    tab: 9,
-  },
-  {
-    cmd: "env",
-    desc: "print environment variables",
-    tab: 10,
-  },
-  {
-    cmd: "setuserid",
-    desc: "sets the user id",
-    tab: 4,
-    special: true,
-  },
-  {
-    cmd: "setjoincode",
-    desc: "sets the room join code",
-    tab: 2,
-    special: true,
-  },
-  {
-    cmd: "setsecurecode",
-    desc: "sets the room secure code",
-    tab: 0,
-    special: true,
-  },
-  {
-    cmd: "joinroom",
-    desc: "joins room with the specified information",
-    tab: 5,
-    special: true,
-  },
-  {
-    cmd: "whoami",
-    desc: "about current user",
-    tab: 7,
-  },
-  {
-    cmd: "help",
-    desc: "check available commands",
-    tab: 9,
-  },
-  {
-    cmd: "history",
-    desc: "view command history",
-    tab: 6,
-  },
-  {
-    cmd: "pwd",
-    desc: "print current working directory",
-    tab: 10,
-  },
-  {
-    cmd: "welcome",
-    desc: "display hero section",
-    tab: 6,
-  },
-  {
-    cmd: "themes",
-    desc: "check available themes",
-    tab: 7,
-  },
-];
-
 interface TerminalProps {
-  searchParams: RootSearchValues;
+	searchParams: RoomParams;
 }
 
 export const Terminal = ({ searchParams }: TerminalProps) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+	const inputRef = useRef<HTMLInputElement>(null);
+	const nextId = useRef(1);
 
-  const { setJoinCode, setSecureCode } = useUser();
+	const { setJoinCode, setSecureCode } = useUser();
 
-  const [inputVal, setInputVal] = useState("");
-  const [cmdHistory, setCmdHistory] = useState<string[]>(["welcome"]);
-  const [rerender, setRerender] = useState(false);
-  const [hints, setHints] = useState<string[]>([]);
-  const [pointer, setPointer] = useState(-1);
+	const [inputVal, setInputVal] = useState("");
+	const [entries, setEntries] = useState<HistoryEntry[]>([
+		{ id: 0, input: "welcome" },
+	]);
+	const [rerender, setRerender] = useState(false);
+	const [hints, setHints] = useState<string[]>([]);
+	const [pointer, setPointer] = useState(-1);
 
-  const handleChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      setRerender(false);
-      setInputVal(e.target.value);
-    },
-    [], // Remove inputVal dependency
-  );
+	const cmdHistory = useMemo(() => entries.map((e) => e.input), [entries]);
 
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setCmdHistory([inputVal, ...cmdHistory]);
-    setInputVal("");
-    setRerender(true);
-    setHints([]);
-    setPointer(-1);
-  };
+	const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+		setRerender(false);
+		setInputVal(e.target.value);
+	}, []);
 
-  const clearHistory = useCallback(() => {
-    setCmdHistory([]);
-    setHints([]);
-  }, []);
+	const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+		e.preventDefault();
+		const entry = { id: nextId.current++, input: inputVal };
+		setEntries((prev) => [entry, ...prev]);
+		setInputVal("");
+		setRerender(true);
+		setHints([]);
+		setPointer(-1);
+	};
 
-  const handleDivClick = () => {
-    if (inputRef.current) {
-      inputRef.current.focus();
-    }
-  };
+	const clearHistory = useCallback(() => {
+		setEntries([]);
+		setHints([]);
+		setPointer(-1);
+	}, []);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    setRerender(false);
+	const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+		setRerender(false);
 
-    const ctrlI = e.ctrlKey && e.key.toLowerCase() === "i";
-    const ctrlL = e.ctrlKey && e.key.toLowerCase() === "l";
+		const key = e.key.toLowerCase();
+		const ctrlI = e.ctrlKey && key === "i";
+		const ctrlL = e.ctrlKey && key === "l";
 
-    if (e.key === "Tab" || ctrlI) {
-      e.preventDefault();
-      if (!inputVal) {
-        return;
-      }
+		if (e.key === "Tab" || ctrlI) {
+			e.preventDefault();
+			const { value, hints: nextHints } = autocomplete(
+				inputVal,
+				commandNames,
+				themeNames,
+			);
+			if (value !== undefined) {
+				setInputVal(value);
+			}
+			setHints(nextHints);
+			return;
+		}
 
-      let hintsCmds: string[] = [];
+		if (ctrlL) {
+			// Prevent the browser from focusing the address bar.
+			e.preventDefault();
+			clearHistory();
+			return;
+		}
 
-      commands.forEach(({ cmd }) => {
-        if (lodash.startsWith(cmd, inputVal)) {
-          hintsCmds = [...hintsCmds, cmd];
-        }
-      });
+		if (e.key === "ArrowUp") {
+			// Prevent the caret from jumping to the start of the input.
+			e.preventDefault();
+			if (pointer + 1 >= cmdHistory.length) {
+				return;
+			}
+			setInputVal(cmdHistory[pointer + 1]);
+			setPointer(pointer + 1);
+			return;
+		}
 
-      const returnedHints = argTab(inputVal, setInputVal, setHints, hintsCmds);
-      hintsCmds = returnedHints ? [...hintsCmds, ...returnedHints] : hintsCmds;
+		if (e.key === "ArrowDown") {
+			e.preventDefault();
+			if (pointer < 0) {
+				return;
+			}
+			if (pointer === 0) {
+				setInputVal("");
+				setPointer(-1);
+				return;
+			}
+			setInputVal(cmdHistory[pointer - 1]);
+			setPointer(pointer - 1);
+		}
+	};
 
-      if (hintsCmds.length > 1) {
-        setHints(hintsCmds);
-      } else if (hintsCmds.length === 1) {
-        const currentCmd = lodash.split(inputVal, " ");
-        setInputVal(
-          currentCmd.length !== 1
-            ? `${currentCmd[0]} ${currentCmd[1]} ${hintsCmds[0]}`
-            : hintsCmds[0],
-        );
+	// Clicking anywhere focuses the input, unless the user is selecting text.
+	useEffect(() => {
+		const focusInput = () => {
+			if (window.getSelection()?.toString()) {
+				return;
+			}
+			inputRef.current?.focus();
+		};
+		document.addEventListener("click", focusInput);
+		return () => document.removeEventListener("click", focusInput);
+	}, []);
 
-        setHints([]);
-      }
-    }
+	useEffect(() => {
+		if (searchParams.joinCode) {
+			setJoinCode(searchParams.joinCode);
+		}
+		if (searchParams.secureCode) {
+			setSecureCode(searchParams.secureCode);
+		}
+	}, [
+		searchParams.joinCode,
+		searchParams.secureCode,
+		setJoinCode,
+		setSecureCode,
+	]);
 
-    if (ctrlL) {
-      clearHistory();
-    }
+	return (
+		<Wrapper data-testid="terminal-wrapper">
+			{hints.length > 1 && (
+				<div>
+					{hints.map((hCmd) => (
+						<Hints key={hCmd}>{hCmd}</Hints>
+					))}
+				</div>
+			)}
+			<Form onSubmit={handleSubmit}>
+				<label htmlFor="terminal-input">
+					<TerminalInfo /> <MobileBr />
+					<MobileSpan>&#62;</MobileSpan>
+				</label>
+				<Input
+					title="terminal-input"
+					type="text"
+					id="terminal-input"
+					autoComplete="off"
+					spellCheck="false"
+					autoFocus
+					autoCapitalize="off"
+					ref={inputRef}
+					value={inputVal}
+					onKeyDown={handleKeyDown}
+					onChange={handleChange}
+				/>
+			</Form>
 
-    if (e.key === "ArrowUp") {
-      if (pointer >= cmdHistory.length) {
-        return;
-      }
-
-      if (pointer + 1 === cmdHistory.length) {
-        return;
-      }
-
-      setInputVal(cmdHistory[pointer + 1]);
-      setPointer((prevState) => prevState + 1);
-      inputRef?.current?.blur();
-    }
-
-    if (e.key === "ArrowDown") {
-      if (pointer < 0) {
-        return;
-      }
-
-      if (pointer === 0) {
-        setInputVal("");
-        setPointer(-1);
-        return;
-      }
-
-      setInputVal(cmdHistory[pointer - 1]);
-      setPointer((prevState) => prevState - 1);
-      inputRef?.current?.blur();
-    }
-  };
-
-  useEffect(() => {
-    document.addEventListener("click", handleDivClick);
-    return () => {
-      document.removeEventListener("click", handleDivClick);
-    };
-  }, [containerRef]);
-
-  useEffect(() => {
-    if (searchParams.joinCode) {
-      setJoinCode(searchParams.joinCode);
-    }
-    if (searchParams.secureCode) {
-      setSecureCode(searchParams.secureCode);
-    }
-  }, [
-    searchParams.joinCode,
-    searchParams.secureCode,
-    setJoinCode,
-    setSecureCode,
-  ]);
-
-  return (
-    <Wrapper data-test-id="terminal-wrapper" ref={containerRef}>
-      {hints.length > 1 && (
-        <div>
-          {hints.map((hCmd) => (
-            <Hints key={hCmd}>{hCmd}</Hints>
-          ))}
-        </div>
-      )}
-      <Form onSubmit={handleSubmit}>
-        <label htmlFor="terminal-input">
-          <TerminalInfo /> <MobileBr />
-          <MobileSpan>&#62;</MobileSpan>
-        </label>
-        <Input
-          title="terminal-input"
-          type="text"
-          id="terminal-input"
-          autoComplete="off"
-          spellCheck="false"
-          autoFocus
-          autoCapitalize="off"
-          ref={inputRef}
-          value={inputVal}
-          onKeyDown={handleKeyDown}
-          onChange={handleChange}
-        />
-      </Form>
-
-      {cmdHistory.map((cmdH, index) => {
-        const commandArray = lodash.split(lodash.trim(cmdH), " ");
-        const validCommand = lodash.find(commands, { cmd: commandArray[0] });
-
-        return (
-          <HistoryItem
-            key={`${cmdH}_${index}`}
-            cmdH={cmdH}
-            index={index}
-            validCommand={validCommand}
-            commandArray={commandArray}
-            cmdHistory={cmdHistory}
-            rerender={rerender}
-            clearHistory={clearHistory}
-          />
-        );
-      })}
-    </Wrapper>
-  );
+			{entries.map(({ id, input }, index) => (
+				<HistoryItem
+					key={id}
+					input={input}
+					index={index}
+					cmdHistory={cmdHistory}
+					rerender={rerender}
+					clearHistory={clearHistory}
+				/>
+			))}
+		</Wrapper>
+	);
 };

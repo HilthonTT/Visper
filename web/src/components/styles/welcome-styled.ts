@@ -43,7 +43,7 @@ export const PreImg = styled.pre`
   }
 `;
 
-export const Seperator = styled.div`
+export const Separator = styled.div`
   margin-top: 0.75rem;
   margin-bottom: 0.75rem;
 `;

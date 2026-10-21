@@ -1,20 +1,20 @@
 import {
-  Cmd,
-  HeroContainer,
-  Link,
-  PreImg,
-  PreName,
-  PreNameMobile,
-  PreWrapper,
-  Seperator,
+	Cmd,
+	HeroContainer,
+	Link,
+	PreImg,
+	PreName,
+	PreNameMobile,
+	PreWrapper,
+	Separator,
 } from "../styles/welcome-styled";
 
-export const Welcome: React.FC = () => {
-  return (
-    <HeroContainer data-testid="welcome">
-      <div className="info-section">
-        <PreName>
-          {`        
+export const Welcome = () => {
+	return (
+		<HeroContainer data-testid="welcome">
+			<div className="info-section">
+				<PreName>
+					{`        
   _    ___                     
  | |  / (_)________  ___  _____
  | | / / / ___/ __ \\/ _ \\/ ___/
@@ -22,10 +22,10 @@ export const Welcome: React.FC = () => {
  |___/_/____/ .___/\\___/_/     
            /_/                 
           `}
-        </PreName>
-        <PreWrapper>
-          <PreNameMobile>
-            {`
+				</PreName>
+				<PreWrapper>
+					<PreNameMobile>
+						{`
   _    ___                
  | |  / (_)__ ___  ___ ____
  | | / / (_-</ _ \\/ -_) __/
@@ -33,23 +33,29 @@ export const Welcome: React.FC = () => {
           /_/             
  
           `}
-          </PreNameMobile>
-        </PreWrapper>
-        <div>Welcome to Visper - Anonymous Real-Time Chat (Version 1.0.0)</div>
-        <Seperator>----</Seperator>
-        <div>
-          Chat freely without registration. Your privacy is our priority.{" "}
-          <Link href="https://github.com/yourusername/visper">View source</Link>
-          .
-        </div>
-        <Seperator>----</Seperator>
-        <div>
-          For a list of available commands, type `<Cmd>help</Cmd>`.
-        </div>
-      </div>
-      <div className="illu-section">
-        <PreImg>
-          {`
+					</PreNameMobile>
+				</PreWrapper>
+				<div>Welcome to Visper - Anonymous Real-Time Chat (Version 1.0.0)</div>
+				<Separator>----</Separator>
+				<div>
+					Chat freely without registration. Your privacy is our priority.{" "}
+					<Link
+						href="https://github.com/HilthonTT/Visper"
+						target="_blank"
+						rel="noopener noreferrer"
+					>
+						View source
+					</Link>
+					.
+				</div>
+				<Separator>----</Separator>
+				<div>
+					For a list of available commands, type `<Cmd>help</Cmd>`.
+				</div>
+			</div>
+			<div className="illu-section">
+				<PreImg>
+					{`
                =====                
             ===========             
           =====     ====            
@@ -70,8 +76,8 @@ export const Welcome: React.FC = () => {
       +++++++++++++++++++++++       
        +++++++++++++++++++++                          
          `}
-        </PreImg>
-      </div>
-    </HeroContainer>
-  );
+				</PreImg>
+			</div>
+		</HeroContainer>
+	);
 };

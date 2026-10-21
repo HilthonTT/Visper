@@ -1,26 +1,31 @@
-import themes from "@/components/styles/themes";
-import { createContext, useEffect, useState } from "react";
-import { setToLS, getFromLS } from "@/lib/storage";
+import { createContext, useCallback, useEffect, useState } from "react";
 import type { DefaultTheme } from "styled-components";
+import { getFromLS, setToLS } from "@/lib/storage";
+import themes, { DEFAULT_THEME_NAME, getTheme } from "@/lib/themes";
+
+const THEME_STORAGE_KEY = "visper-theme";
 
 export const useTheme = () => {
-  const [theme, setTheme] = useState<DefaultTheme>(themes.dark);
-  const [themeLoaded, setThemeLoaded] = useState(false);
+	const [theme, setTheme] = useState<DefaultTheme>(themes[DEFAULT_THEME_NAME]);
+	const [themeLoaded, setThemeLoaded] = useState(false);
 
-  const setMode = (mode: DefaultTheme) => {
-    setToLS("tsn-theme", mode.name);
-    setTheme(mode);
-  };
+	const setMode = useCallback((mode: DefaultTheme) => {
+		setToLS(THEME_STORAGE_KEY, mode.name);
+		setTheme(mode);
+	}, []);
 
-  useEffect(() => {
-    const localThemeName = getFromLS("tsn-theme");
-    localThemeName ? setTheme(themes[localThemeName]) : setTheme(themes.dark);
-    setThemeLoaded(true);
-  }, []);
+	useEffect(() => {
+		// Stored value may be stale or tampered with: fall back to the default.
+		const stored = getTheme(getFromLS(THEME_STORAGE_KEY));
+		if (stored) {
+			setTheme(stored);
+		}
+		setThemeLoaded(true);
+	}, []);
 
-  return { theme, themeLoaded, setMode };
+	return { theme, themeLoaded, setMode };
 };
 
 export const themeContext = createContext<
-  ((switchTheme: DefaultTheme) => void) | null
+	((switchTheme: DefaultTheme) => void) | null
 >(null);

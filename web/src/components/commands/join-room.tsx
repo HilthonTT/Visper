@@ -1,133 +1,75 @@
+import { useEffect, useRef, useState } from "react";
 import { useUser } from "@/contexts/user-context";
+import { notifySelfRoomInvite } from "@/lib/api";
 import { Wrapper } from "../styles/output-styled";
-import { useEffect, useState, useMemo } from "react";
 
-type Status = "loading" | "success" | "error" | "idle";
+type Status = "loading" | "success" | "error";
 
-type RoomInfo = {
-  roomId?: string;
-  roomName?: string;
+const statusColors: Record<Status, string> = {
+	loading: "#FFD700",
+	error: "#FF6B6B",
+	success: "#51CF66",
 };
 
 export const JoinRoom = () => {
-  const { userId, joinCode, secureCode } = useUser();
+	const user = useUser();
+	// Snapshot the credentials at the time the command was run, so later
+	// `set*` commands don't retroactively change this entry.
+	const credentials = useRef(user).current;
 
-  const initialValues = useMemo(
-    () => ({
-      userId,
-      joinCode,
-      secureCode,
-    }),
-    [],
-  );
+	const [status, setStatus] = useState<Status>("loading");
+	const [message, setMessage] = useState("");
 
-  const [status, setStatus] = useState<Status>("idle");
-  const [message, setMessage] = useState("");
-  const [_, setRoomInfo] = useState<RoomInfo>({});
+	useEffect(() => {
+		const { userId, joinCode, secureCode } = credentials;
 
-  useEffect(() => {
-    const sendNotification = async () => {
-      if (!initialValues.userId) {
-        setStatus("error");
-        setMessage("Error: User ID not set. Use 'setuserid <your-id>' first.");
-        return;
-      }
+		const missing = !userId
+			? "User ID not set. Use 'setuserid <your-id>' first."
+			: !joinCode
+				? "Join code not set. Use 'setjoincode <code>' first."
+				: !secureCode
+					? "Secure code not set. Use 'setsecurecode <code>' first."
+					: null;
 
-      if (!initialValues.joinCode) {
-        setStatus("error");
-        setMessage("Error: Join code not set. Use 'setjoincode <code>' first.");
-        return;
-      }
+		if (missing) {
+			setStatus("error");
+			setMessage(`Error: ${missing}`);
+			return;
+		}
 
-      if (!initialValues.secureCode) {
-        setStatus("error");
-        setMessage(
-          "Error: Secure code not set. Use 'setsecurecode <code>' first.",
-        );
-        return;
-      }
+		const controller = new AbortController();
+		setStatus("loading");
+		setMessage("Sending notification to your devices...");
 
-      setStatus("loading");
-      setMessage("Sending notification to your devices...");
+		notifySelfRoomInvite({ userId, joinCode, secureCode }, controller.signal)
+			.then((data) => {
+				setStatus("success");
+				setMessage(
+					data.already_joined
+						? `You are already a member of room ${data.room_id}`
+						: `Notification sent successfully!\nRoom: ${data.room_id}\nUser: ${data.username}\n\nCheck your CLI for the room invite notification.`,
+				);
+			})
+			.catch((error: unknown) => {
+				if (controller.signal.aborted) {
+					return;
+				}
+				setStatus("error");
+				setMessage(
+					`Error: ${error instanceof Error ? error.message : "Unknown error"}`,
+				);
+			});
 
-      try {
-        const backendURL = import.meta.env.VITE_BACKEND_API_URL as string;
-        const finalURL = `${backendURL}/api/v1/users/notifications/self-room-invite?join_code=${encodeURIComponent(initialValues.joinCode)}&secure_code=${encodeURIComponent(initialValues.secureCode)}`;
-        const response = await fetch(finalURL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            user_id: initialValues.userId,
-          }),
-        });
+		// Abort on unmount (e.g. `clear`) so we never set state afterwards.
+		return () => controller.abort();
+	}, [credentials]);
 
-        if (!response.ok) {
-          const contentType = response.headers.get("content-type");
-          if (contentType && contentType.includes("application/json")) {
-            const data = await response.json();
-            setStatus("error");
-            setMessage(
-              `Error: ${data.message || "Failed to send notification"}`,
-            );
-          } else {
-            setStatus("error");
-            setMessage(
-              `Error: Server returned ${response.status} - ${response.statusText}`,
-            );
-          }
-          return;
-        }
-
-        const data = await response.json();
-
-        if (data.already_joined) {
-          setStatus("success");
-          setMessage(`You are already a member of "${data.room_name}"`);
-          setRoomInfo({
-            roomId: data.room_id,
-            roomName: data.room_name,
-          });
-          return;
-        }
-
-        setStatus("success");
-        setMessage(
-          `Notification sent successfully!\n` +
-            `Room: ${data.room_name}\n` +
-            `User: ${data.username}\n\n` +
-            `Check your CLI for the room invite notification.`,
-        );
-
-        setRoomInfo({
-          roomId: data.room_id,
-          roomName: data.room_name,
-        });
-      } catch (error) {
-        setStatus("error");
-        setMessage(
-          `Error: Failed to connect to server.\n${error instanceof Error ? error.message : "Unknown error"}`,
-        );
-      }
-    };
-
-    sendNotification();
-  }, []);
-
-  return (
-    <Wrapper>
-      {status === "loading" && (
-        <div style={{ color: "#FFD700" }}>{message}</div>
-      )}
-      {status === "error" && <div style={{ color: "#FF6B6B" }}>{message}</div>}
-      {status === "success" && (
-        <div style={{ color: "#51CF66" }}>
-          {message.split("\n").map((line, i) => (
-            <div key={i}>{line || "\u00A0"}</div>
-          ))}
-        </div>
-      )}
-    </Wrapper>
-  );
+	return (
+		<Wrapper style={{ color: statusColors[status] }}>
+			{message.split("\n").map((line, i) => (
+				// biome-ignore lint/suspicious/noArrayIndexKey: static lines
+				<div key={i}>{line || " "}</div>
+			))}
+		</Wrapper>
+	);
 };
