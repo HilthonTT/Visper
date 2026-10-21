@@ -1,0 +1,39 @@
+package tui
+
+import (
+	"time"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+type cursorState struct {
+	visible bool
+}
+
+type CursorTickMsg struct{}
+
+func (m model) CursorInit() tea.Cmd {
+	return tea.Every(time.Millisecond*700, func(t time.Time) tea.Msg {
+		return CursorTickMsg{}
+	})
+}
+
+func (m model) CursorUpdate(msg tea.Msg) (model, tea.Cmd) {
+	switch msg.(type) {
+	case CursorTickMsg:
+		m.state.cursor.visible = !m.state.cursor.visible
+		return m, tea.Every(time.Millisecond*700, func(t time.Time) tea.Msg {
+			return CursorTickMsg{}
+		})
+
+	}
+	return m, nil
+}
+
+func (m model) CursorView() string {
+	if m.state.cursor.visible {
+		return m.theme.Base().Background(m.theme.Brand()).Render(" ")
+	} else {
+		return m.theme.Base().Render(" ")
+	}
+}
