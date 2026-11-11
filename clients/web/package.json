@@ -23,8 +23,8 @@
     "@tanstack/react-start": "^1.169.5",
     "@tanstack/router-plugin": "^1.169.0",
     "clsx": "^2.1.1",
-    "nitro": "3.0.260903-beta",
-    "nuqs": "^2.10.2",
+    "nitro": "3.0.261103-rc",
+    "nuqs": "^2.10.3",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "styled-components": "^6.6.0",
@@ -38,9 +38,9 @@
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.2.1",
+    "@vitejs/plugin-react": "^6.3.0",
     "typescript": "^7.0.2",
-    "vite": "^8.3.6",
+    "vite": "^8.3.8",
     "vitest": "^5.1.0"
   }
 }

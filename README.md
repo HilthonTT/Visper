@@ -7,7 +7,7 @@
 **Anonymous, end-to-end encrypted chat rooms — right from your terminal.**
 
 [![CI](https://github.com/HilthonTT/Visper/actions/workflows/ci.yml/badge.svg)](https://github.com/HilthonTT/Visper/actions/workflows/ci.yml)
-[![Go](https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white)](go.work)
+[![Go](https://img.shields.io/badge/go-1.27-00ADD8?logo=go&logoColor=white)](go.work)
 [![License: MIT](https://img.shields.io/badge/license-MIT-10B981)](LICENSE)
 
 </div>
@@ -72,7 +72,7 @@ always builds against the local `sdk/go`.
 
 ### Prerequisites
 
-- [Go 1.26+](https://go.dev/dl/)
+- [Go 1.27+](https://go.dev/dl/)
 - [Docker](https://docs.docker.com/get-docker/) with Compose
 - Optional: Python 3.12+ (AI service), Node.js 22+ and pnpm (web client),
   [air](https://github.com/air-verse/air) (live reload), [golangci-lint](https://golangci-lint.run/) v2
