@@ -132,7 +132,9 @@ func (e *encoder) newStructTypeEncoder(t reflect.Type) encoderFunc {
 	var collectEncoderFields func(r reflect.Type, index []int)
 	collectEncoderFields = func(r reflect.Type, index []int) {
 		for i := 0; i < r.NumField(); i++ {
-			idx := append(index, i)
+			// Clip index so sibling fields never share (and overwrite) the
+			// backing array of their stored idx once embedding is 3+ deep.
+			idx := append(index[:len(index):len(index)], i)
 			field := t.FieldByIndex(idx)
 			if !field.IsExported() {
 				continue
@@ -275,23 +277,23 @@ func (e *encoder) newPrimitiveTypeEncoder(t reflect.Type) encoderFunc {
 			}
 			return []Pair{{key, "false"}}
 		}
-	case reflect.Int, reflect.Int16, reflect.Int32, reflect.Int64:
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return func(key string, v reflect.Value) []Pair {
 			return []Pair{{key, strconv.FormatInt(v.Int(), 10)}}
 		}
-	case reflect.Uint, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return func(key string, v reflect.Value) []Pair {
 			return []Pair{{key, strconv.FormatUint(v.Uint(), 10)}}
 		}
 	case reflect.Float32, reflect.Float64:
+		// Format float32 at 32 bits: float32(0.1) must encode as "0.1", not
+		// "0.10000000149011612".
+		bitSize := t.Bits()
 		return func(key string, v reflect.Value) []Pair {
-			return []Pair{{key, strconv.FormatFloat(v.Float(), 'f', -1, 64)}}
+			return []Pair{{key, strconv.FormatFloat(v.Float(), 'f', -1, bitSize)}}
 		}
 	case reflect.Complex64, reflect.Complex128:
-		bitSize := 64
-		if t.Kind() == reflect.Complex128 {
-			bitSize = 128
-		}
+		bitSize := t.Bits()
 		return func(key string, v reflect.Value) []Pair {
 			return []Pair{{key, strconv.FormatComplex(v.Complex(), 'f', -1, bitSize)}}
 		}

@@ -1,6 +1,7 @@
 package requestconfig
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -125,5 +126,36 @@ func TestExecuteRetryWaitHonoursContext(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("Execute slept %v through a cancelled context", elapsed)
+	}
+}
+
+func TestExecuteRetryResendsBytesReaderBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if r.Header.Get("X-Stainless-Retry-Count") == "0" {
+			w.Header().Set("Retry-After-Ms", "1")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write(b)
+	}))
+	t.Cleanup(srv.Close)
+	u, _ := url.Parse(srv.URL + "/")
+
+	body := bytes.NewReader([]byte("skip:payload"))
+	if _, err := body.Seek(int64(len("skip:")), io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	err := ExecuteNewRequest(context.Background(), http.MethodPost, "thing", body, &got,
+		RequestOptionFunc(func(rc *RequestConfig) error { rc.BaseURL = u; return nil }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Previously GetBody rewound to offset 0, so the retry sent
+	// "skip:payload" against a ContentLength of len("payload").
+	if got != "payload" {
+		t.Fatalf("retried body = %q, want %q", got, "payload")
 	}
 }

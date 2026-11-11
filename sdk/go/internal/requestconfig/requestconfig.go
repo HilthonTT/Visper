@@ -413,10 +413,15 @@ func (cfg *RequestConfig) Execute() error {
 			}
 			cfg.Request.Body, _ = cfg.Request.GetBody()
 		case *bytes.Reader:
-			cfg.Request.ContentLength = int64(body.Len())
+			// Each attempt gets its own SectionReader (ReadAt is safe for
+			// concurrent use). Seeking the shared reader back to 0 instead
+			// raced with the transport, which may still be reading the
+			// previous attempt's body after RoundTrip returns, and rewound
+			// past the caller's starting offset.
+			off, n := body.Size()-int64(body.Len()), int64(body.Len())
+			cfg.Request.ContentLength = n
 			cfg.Request.GetBody = func() (io.ReadCloser, error) {
-				_, err := body.Seek(0, 0)
-				return io.NopCloser(body), err
+				return io.NopCloser(io.NewSectionReader(body, off, n)), nil
 			}
 			cfg.Request.Body, _ = cfg.Request.GetBody()
 		default:
@@ -607,33 +612,6 @@ func ExecuteNewRequest(ctx context.Context, method, u string, body, dst any, opt
 	}
 
 	return cfg.Execute()
-}
-
-func (cfg *RequestConfig) Clone(ctx context.Context) *RequestConfig {
-	if cfg == nil {
-		return nil
-	}
-	req := cfg.Request.Clone(ctx)
-	var err error
-	if req.Body != nil {
-		req.Body, err = req.GetBody()
-	}
-	if err != nil {
-		return nil
-	}
-	new := &RequestConfig{
-		MaxRetries:     cfg.MaxRetries,
-		RequestTimeout: cfg.RequestTimeout,
-		Context:        ctx,
-		Request:        req,
-		BaseURL:        cfg.BaseURL,
-		HTTPClient:     cfg.HTTPClient,
-		Middlewares:    cfg.Middlewares,
-		BearerToken:    cfg.BearerToken,
-		AppID:          cfg.AppID,
-	}
-
-	return new
 }
 
 func (cfg *RequestConfig) Apply(opts ...RequestOption) error {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"sort"
 	"strconv"
@@ -155,21 +156,24 @@ func (e *encoder) newPrimitiveTypeEncoder(t reflect.Type) encoderFunc {
 			}
 			return []byte("false"), nil
 		}
-	case reflect.Int, reflect.Int16, reflect.Int32, reflect.Int64:
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return func(v reflect.Value) ([]byte, error) {
 			return []byte(strconv.FormatInt(v.Int(), 10)), nil
 		}
-	case reflect.Uint, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return func(v reflect.Value) ([]byte, error) {
 			return []byte(strconv.FormatUint(v.Uint(), 10)), nil
 		}
-	case reflect.Float32:
+	case reflect.Float32, reflect.Float64:
+		bitSize := t.Bits()
 		return func(v reflect.Value) ([]byte, error) {
-			return []byte(strconv.FormatFloat(v.Float(), 'f', -1, 32)), nil
-		}
-	case reflect.Float64:
-		return func(v reflect.Value) ([]byte, error) {
-			return []byte(strconv.FormatFloat(v.Float(), 'f', -1, 64)), nil
+			f := v.Float()
+			// NaN and ±Inf have no JSON representation; FormatFloat would
+			// emit "NaN"/"+Inf" and produce an invalid request body.
+			if math.IsNaN(f) || math.IsInf(f, 0) {
+				return nil, &json.UnsupportedValueError{Value: v, Str: strconv.FormatFloat(f, 'g', -1, bitSize)}
+			}
+			return []byte(strconv.FormatFloat(f, 'f', -1, bitSize)), nil
 		}
 	default:
 		return func(v reflect.Value) ([]byte, error) {
@@ -218,7 +222,9 @@ func (e *encoder) newStructTypeEncoder(t reflect.Type) encoderFunc {
 	var collectEncoderFields func(r reflect.Type, index []int)
 	collectEncoderFields = func(r reflect.Type, index []int) {
 		for i := 0; i < r.NumField(); i++ {
-			idx := append(index, i)
+			// Clip index so sibling fields never share (and overwrite) the
+			// backing array of their stored idx once embedding is 3+ deep.
+			idx := append(index[:len(index):len(index)], i)
 			field := t.FieldByIndex(idx)
 			if !field.IsExported() {
 				continue
