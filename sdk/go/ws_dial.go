@@ -97,13 +97,15 @@ func newWSConn(conn *websocket.Conn) *wsConn {
 func (c *wsConn) Close() error {
 	c.closeOnce.Do(func() {
 		close(c.closed)
-		c.writeMu.Lock()
+		// WriteControl may run concurrently with WriteMessage, so writeMu is
+		// deliberately not taken: a writer blocked on a stalled peer would
+		// otherwise hold it forever and Close (and ctx cancellation) would
+		// hang. Closing the conn below unblocks that writer.
 		_ = c.conn.WriteControl(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 			time.Now().Add(time.Second),
 		)
-		c.writeMu.Unlock()
 		c.closeErr = c.conn.Close()
 	})
 	return c.closeErr

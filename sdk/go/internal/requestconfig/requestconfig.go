@@ -493,7 +493,15 @@ func (cfg *RequestConfig) Execute() error {
 			cancel = nil
 		}
 
-		time.Sleep(retryDelay(res, retryCount))
+		// Wait for the retry delay, but give up as soon as the caller's
+		// context is done instead of sleeping through it.
+		timer := time.NewTimer(retryDelay(res, retryCount))
+		select {
+		case <-cfg.Request.Context().Done():
+			timer.Stop()
+			return cfg.Request.Context().Err()
+		case <-timer.C:
+		}
 	}
 
 	// Save *http.Response if it is requested to, even if there was an error making the request. This is

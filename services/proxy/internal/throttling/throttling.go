@@ -46,6 +46,11 @@ type Throttler struct {
 	nodes             float64
 	previousSpanTotal int
 	currentSpanTotal  int
+	// Routes seen locally during the current and previous interval; the
+	// global total is summed over exactly the routes previousSpanTotal
+	// counted, otherwise the node estimate is skewed.
+	currentRoutes  map[string]struct{}
+	previousRoutes map[string]struct{}
 }
 
 // NewThrottler creates a throttler. client may be nil, in which case limits
@@ -77,6 +82,7 @@ func NewThrottler(config ThrottleConfig, client redis.UniversalClient) *Throttle
 		localCounts:   make(map[string]int),
 		blockedRoutes: make(map[string]time.Time),
 		nodes:         1, // assume single node until we learn otherwise
+		currentRoutes: make(map[string]struct{}),
 	}
 }
 
@@ -186,30 +192,46 @@ func (t *Throttler) updateNodeEstimation(ctx context.Context, localCounts map[st
 
 	t.nodesMu.Lock()
 	t.currentSpanTotal += spanTotal
-	t.nodesMu.Unlock()
+	for route := range localCounts {
+		t.currentRoutes[route] = struct{}{}
+	}
 
 	// Only recalculate at the last span of each interval.
 	if spanInInterval != int64(t.config.Spans-1) {
+		t.nodesMu.Unlock()
 		return
 	}
 
+	prevRoutes, prevTotal := t.previousRoutes, t.previousSpanTotal
+	t.previousRoutes, t.previousSpanTotal = t.currentRoutes, t.currentSpanTotal
+	t.currentRoutes, t.currentSpanTotal = make(map[string]struct{}), 0
+	t.nodesMu.Unlock()
+
+	if t.client == nil || len(prevRoutes) == 0 || prevTotal == 0 {
+		return
+	}
+
+	// Sum the global counts of the previous interval over the same routes
+	// this node served then (not just the routes seen in the last span).
+	prevIntervalNum := intervalNum - 1
+	pipe := t.client.Pipeline()
+	cmds := make([]*redis.StringCmd, 0, len(prevRoutes))
+	for route := range prevRoutes {
+		cmds = append(cmds, pipe.Get(ctx, t.redisKey(route, prevIntervalNum)))
+	}
+	_, _ = pipe.Exec(ctx) // redis.Nil for missing keys; checked per command
 	var globalTotal int64
-	if t.client != nil {
-		prevIntervalNum := intervalNum - 1
-		for route := range localCounts {
-			if val, err := t.client.Get(ctx, t.redisKey(route, prevIntervalNum)).Int64(); err == nil {
-				globalTotal += val
-			}
+	for _, cmd := range cmds {
+		if val, err := cmd.Int64(); err == nil {
+			globalTotal += val
 		}
 	}
 
-	t.nodesMu.Lock()
-	defer t.nodesMu.Unlock()
-	if globalTotal > 0 && t.previousSpanTotal > 0 {
-		t.nodes = float64(globalTotal) / float64(t.previousSpanTotal)
+	if globalTotal > 0 {
+		t.nodesMu.Lock()
+		t.nodes = float64(globalTotal) / float64(prevTotal)
+		t.nodesMu.Unlock()
 	}
-	t.previousSpanTotal = t.currentSpanTotal
-	t.currentSpanTotal = 0
 }
 
 // IncrementAndCheck increments by weight (use 1 for normal requests).

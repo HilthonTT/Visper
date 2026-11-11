@@ -60,7 +60,7 @@ func (m *MessageService) Send(ctx context.Context, roomID string, body SendMessa
 		body.Encrypted = true
 	}
 
-	path := fmt.Sprintf("api/v1/rooms/%s/messages", roomID)
+	path := fmt.Sprintf("api/v1/rooms/%s/messages", url.PathEscape(roomID))
 	res := &MessageResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, &res, opts...)
 	if err != nil {
@@ -98,7 +98,7 @@ func (m *MessageService) Update(ctx context.Context, roomID, messageID string, b
 		body.Encrypted = true
 	}
 
-	path := fmt.Sprintf("api/v1/rooms/%s/messages/%s", roomID, messageID)
+	path := fmt.Sprintf("api/v1/rooms/%s/messages/%s", url.PathEscape(roomID), url.PathEscape(messageID))
 	res := &MessageUpdatedResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPut, path, body, &res, opts...)
 	if err != nil {
@@ -165,7 +165,9 @@ func (m *MessageService) ListAfter(ctx context.Context, roomID string, query Mes
 	}
 
 	// RFC3339 offsets contain "+", which must be escaped in a query string.
-	q := url.Values{"timestamp": {query.Timestamp.Format(time.RFC3339)}}
+	// RFC3339Nano keeps sub-second precision (the server parses it as RFC3339);
+	// truncating to seconds made ListAfter(lastMsg.CreatedAt) return lastMsg again.
+	q := url.Values{"timestamp": {query.Timestamp.Format(time.RFC3339Nano)}}
 	if query.Limit > 0 {
 		q.Set("limit", strconv.FormatInt(query.Limit, 10))
 	}
@@ -200,7 +202,7 @@ func (m *MessageService) Delete(ctx context.Context, roomID, messageID string, o
 		return nil, ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("api/v1/rooms/%s/messages/%s", roomID, messageID)
+	path := fmt.Sprintf("api/v1/rooms/%s/messages/%s", url.PathEscape(roomID), url.PathEscape(messageID))
 	res := &MessageDeletedResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodDelete, path, nil, &res, opts...)
 
@@ -213,7 +215,7 @@ func (m *MessageService) Count(ctx context.Context, roomID string, opts ...optio
 		return nil, ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("api/v1/rooms/%s/messages/count", roomID)
+	path := fmt.Sprintf("api/v1/rooms/%s/messages/count", url.PathEscape(roomID))
 	res := &MessageCountResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
 

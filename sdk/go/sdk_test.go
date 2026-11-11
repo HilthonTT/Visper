@@ -231,3 +231,83 @@ func TestRoomWebSocketListenStopsOnCancel(t *testing.T) {
 		t.Fatalf("second Close = %v", err)
 	}
 }
+
+func TestMessageListAfterKeepsSubSecondPrecision(t *testing.T) {
+	var gotQuery string
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.Query().Get("timestamp")
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"messages":[],"count":0,"room_id":"r1"}`)
+	}))
+
+	ts := time.Date(2026, 1, 2, 3, 4, 5, 500_000_000, time.UTC)
+	if _, err := client.Message.ListAfter(context.Background(), "r1", MessageListAfterParams{Timestamp: ts}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "2026-01-02T03:04:05.5Z"; gotQuery != want {
+		t.Fatalf("timestamp query = %q, want %q", gotQuery, want)
+	}
+}
+
+func TestPathIDsAreEscaped(t *testing.T) {
+	var gotPath string
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{}`)
+	}))
+
+	if _, err := client.Room.Get(context.Background(), "a/b?c"); err != nil {
+		t.Fatal(err)
+	}
+	if want := "/api/v1/rooms/a%2Fb%3Fc"; gotPath != want {
+		t.Fatalf("path = %q, want %q", gotPath, want)
+	}
+	if _, err := client.Message.Delete(context.Background(), "r1", "../x"); err != nil {
+		t.Fatal(err)
+	}
+	if want := "/api/v1/rooms/r1/messages/..%2Fx"; gotPath != want {
+		t.Fatalf("path = %q, want %q", gotPath, want)
+	}
+}
+
+func TestWebSocketCloseDoesNotWaitForBlockedWriter(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	upgrader := websocket.Upgrader{}
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		<-release // never read: the client's writes eventually block
+	}))
+
+	ws, err := client.Room.ConnectWebSocket(context.Background(), "r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		payload := strings.Repeat("x", 1<<20)
+		for ws.SendMessage(payload) == nil {
+		}
+	}()
+	time.Sleep(500 * time.Millisecond) // let the writer fill the socket buffers and block
+
+	closed := make(chan struct{})
+	go func() { ws.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close blocked behind a stalled writer")
+	}
+	select {
+	case <-writerDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked writer not released by Close")
+	}
+}

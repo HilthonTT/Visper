@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
 	"time"
 
@@ -39,7 +40,7 @@ func (r *RoomService) Get(ctx context.Context, id string, opts ...option.Request
 		return nil, ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("api/v1/rooms/%s", id)
+	path := fmt.Sprintf("api/v1/rooms/%s", url.PathEscape(id))
 	res := &RoomResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
 
@@ -53,7 +54,7 @@ func (r *RoomService) GenerateNewJoinCode(ctx context.Context, id string, opts .
 		return ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("api/v1/rooms/%s/join-code", id)
+	path := fmt.Sprintf("api/v1/rooms/%s/join-code", url.PathEscape(id))
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPut, path, nil, nil, opts...)
 
 	return err
@@ -66,7 +67,7 @@ func (r *RoomService) Delete(ctx context.Context, id string, opts ...option.Requ
 		return ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("api/v1/rooms/%s", id)
+	path := fmt.Sprintf("api/v1/rooms/%s", url.PathEscape(id))
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodDelete, path, nil, nil, opts...)
 
 	return err
@@ -111,7 +112,7 @@ func (r *RoomService) Join(ctx context.Context, id string, body JoinRoomParams, 
 		return nil, ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("api/v1/rooms/%s/join", id)
+	path := fmt.Sprintf("api/v1/rooms/%s/join", url.PathEscape(id))
 	res := &SuccessResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, &res, opts...)
 
@@ -125,7 +126,7 @@ func (r *RoomService) Leave(ctx context.Context, id string, opts ...option.Reque
 		return nil, ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("api/v1/rooms/%s/leave", id)
+	path := fmt.Sprintf("api/v1/rooms/%s/leave", url.PathEscape(id))
 	res := &SuccessResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, &res, opts...)
 
@@ -139,7 +140,7 @@ func (r *RoomService) CheckMembership(ctx context.Context, id string, opts ...op
 		return nil, ErrMissingIDParameter
 	}
 
-	path := fmt.Sprintf("api/v1/rooms/%s/membership", id)
+	path := fmt.Sprintf("api/v1/rooms/%s/membership", url.PathEscape(id))
 	res := &MembershipResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
 
@@ -156,7 +157,7 @@ func (r *RoomService) KickMember(ctx context.Context, roomID, userID string, opt
 		return nil, fmt.Errorf("user ID is required")
 	}
 
-	path := fmt.Sprintf("api/v1/rooms/%s/membership/%s", roomID, userID)
+	path := fmt.Sprintf("api/v1/rooms/%s/membership/%s", url.PathEscape(roomID), url.PathEscape(userID))
 	res := &SuccessResponse{}
 	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, &res, opts...)
 

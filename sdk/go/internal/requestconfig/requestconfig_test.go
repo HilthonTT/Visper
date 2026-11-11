@@ -104,3 +104,26 @@ func TestExecuteNonJSONIntoString(t *testing.T) {
 		t.Fatalf("s = %q, err = %v", s, err)
 	}
 }
+
+func TestExecuteRetryWaitHonoursContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(srv.Close)
+	u, _ := url.Parse(srv.URL + "/")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := ExecuteNewRequest(ctx, http.MethodGet, "thing", nil, nil, RequestOptionFunc(func(rc *RequestConfig) error {
+		rc.BaseURL = u
+		return nil
+	}))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want deadline exceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("Execute slept %v through a cancelled context", elapsed)
+	}
+}
