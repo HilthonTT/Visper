@@ -2,12 +2,10 @@
 import { describe, expect, it } from "vitest";
 import {
 	autocomplete,
-	expandEchoArg,
+	expandEchoArgs,
 	expandVariables,
-	generateTabs,
 	isArgInvalid,
 	parseCommand,
-	stripQuotes,
 } from "./funcs";
 
 const commands = ["echo", "env", "help", "history", "themes", "setuserid"];
@@ -53,25 +51,6 @@ describe("expandVariables", () => {
 	});
 });
 
-describe("stripQuotes", () => {
-	it("strips one layer of matching quotes", () => {
-		expect(stripQuotes(`"hello"`)).toBe("hello");
-		expect(stripQuotes("'a b'")).toBe("a b");
-		expect(stripQuotes("`x`")).toBe("x");
-	});
-
-	it("keeps unbalanced quotes", () => {
-		expect(stripQuotes(`"hello'`)).toBe(`"hello'`);
-	});
-});
-
-describe("generateTabs", () => {
-	it("pads with non-breaking spaces", () => {
-		expect(generateTabs()).toBe("\xA0\xA0");
-		expect(generateTabs(3)).toHaveLength(5);
-	});
-});
-
 describe("autocomplete", () => {
 	it("completes a unique command prefix", () => {
 		expect(autocomplete("ech", commands, themes)).toEqual({
@@ -101,15 +80,38 @@ describe("autocomplete", () => {
 	});
 });
 
-describe("expandEchoArg", () => {
-	const vars = { USER: "alice" };
+describe("expandEchoArgs", () => {
+	const vars = { USER: "alice", HOME: "/home/visper" };
 
 	it("expands unquoted and double-quoted variables", () => {
-		expect(expandEchoArg("hi $USER", vars)).toBe("hi alice");
-		expect(expandEchoArg(`"hi $USER"`, vars)).toBe("hi alice");
+		expect(expandEchoArgs("hi $USER", vars)).toBe("hi alice");
+		expect(expandEchoArgs(`"hi $USER"`, vars)).toBe("hi alice");
+		expect(expandEchoArgs("`$HOME`", vars)).toBe("/home/visper");
 	});
 
 	it("keeps single-quoted text literal", () => {
-		expect(expandEchoArg("'$USER'", vars)).toBe("$USER");
+		expect(expandEchoArgs("'$USER'", vars)).toBe("$USER");
+	});
+
+	it("handles several quoted words independently", () => {
+		// Previously treated as one '...'-wrapped string: printed `a' 'b`.
+		expect(expandEchoArgs("'a' 'b'", vars)).toBe("a b");
+		// Previously printed the quotes and expanded the single-quoted $HOME.
+		expect(expandEchoArgs(`"$USER" '$HOME'`, vars)).toBe("alice $HOME");
+		expect(expandEchoArgs(`pre"$USER"post`, vars)).toBe("prealicepost");
+	});
+
+	it("preserves whitespace inside quotes and collapses it outside", () => {
+		expect(expandEchoArgs(`  a   "b   c"   d  `, vars)).toBe("a b   c d");
+	});
+
+	it("keeps unmatched quotes literally", () => {
+		expect(expandEchoArgs(`it's $USER`, vars)).toBe("it's alice");
+		expect(expandEchoArgs(`"open`, vars)).toBe(`"open`);
+	});
+
+	it("returns an empty string for no arguments", () => {
+		expect(expandEchoArgs("", vars)).toBe("");
+		expect(expandEchoArgs("   ", vars)).toBe("");
 	});
 });

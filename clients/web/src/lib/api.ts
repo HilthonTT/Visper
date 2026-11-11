@@ -73,3 +73,13 @@ export async function notifySelfRoomInvite(
 	}
 	return data as SelfRoomInviteResponse;
 }
+
+/** True when the API answers `GET /health` with a 2xx; false on any failure. */
+export async function checkHealth(signal?: AbortSignal): Promise<boolean> {
+	try {
+		const response = await fetch(`${getBackendUrl()}/health`, { signal });
+		return response.ok;
+	} catch {
+		return false;
+	}
+}

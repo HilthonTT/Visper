@@ -1,15 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useUser } from "@/contexts/user-context";
 import { notifySelfRoomInvite } from "@/lib/api";
-import { Wrapper } from "../styles/output-styled";
-
-type Status = "loading" | "success" | "error";
-
-const statusColors: Record<Status, string> = {
-	loading: "#FFD700",
-	error: "#FF6B6B",
-	success: "#51CF66",
-};
+import { type Status, StatusLine } from "../styles/output-styled";
 
 export const JoinRoom = () => {
 	const user = useUser();
@@ -65,11 +57,13 @@ export const JoinRoom = () => {
 	}, [credentials]);
 
 	return (
-		<Wrapper style={{ color: statusColors[status] }}>
-			{message.split("\n").map((line, i) => (
-				// biome-ignore lint/suspicious/noArrayIndexKey: static lines
-				<div key={i}>{line || " "}</div>
-			))}
-		</Wrapper>
+		<StatusLine $status={status}>
+			<div>
+				{message.split("\n").map((line, i) => (
+					// biome-ignore lint/suspicious/noArrayIndexKey: static lines
+					<div key={i}>{line || " "}</div>
+				))}
+			</div>
+		</StatusLine>
 	);
 };

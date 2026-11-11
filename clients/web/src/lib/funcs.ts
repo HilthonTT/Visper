@@ -1,12 +1,4 @@
 /**
- * Non-breaking spaces used to align help output columns.
- * Always yields at least two spaces.
- */
-export function generateTabs(num = 0): string {
-	return "\xA0".repeat(2 + Math.max(0, num));
-}
-
-/**
  * Split a raw terminal line into `[command, ...args]`, collapsing runs of
  * whitespace. An empty/blank line yields `[""]`.
  */
@@ -42,26 +34,68 @@ export function expandVariables(
 	);
 }
 
+const QUOTES = `'"\``;
+
 /**
- * Expand an `echo` argument like a shell would: single-quoted text is literal,
- * anything else has its `$VAR` references expanded. Quotes are stripped after
- * deciding, so `'$HOME'` prints `$HOME` rather than the variable's value.
+ * Expand the raw argument string of `echo` like a shell would, word by word:
+ * single-quoted text is literal, double-quoted/backticked text keeps its
+ * whitespace and has `$VAR` references expanded, and unquoted text is split
+ * on whitespace (words are re-joined with a single space). An unmatched quote
+ * is kept as a literal character.
+ *
+ * e.g. `'a' "$USER"   b` -> `a alice b`, `"x   y"` -> `x   y`.
  */
-export function expandEchoArg(
+export function expandEchoArgs(
 	input: string,
 	variables: Record<string, string>,
 ): string {
-	const isSingleQuoted = /^'[\s\S]*'$/.test(input);
-	const unquoted = stripQuotes(input);
-	return isSingleQuoted ? unquoted : expandVariables(unquoted, variables);
-}
+	const words: string[] = [];
+	let word = "";
+	let inWord = false;
+	let i = 0;
 
-/**
- * Strip one layer of matching surrounding quotes or backticks.
- */
-export function stripQuotes(input: string): string {
-	const match = /^(['"`])([\s\S]*)\1$/.exec(input);
-	return match ? match[2] : input;
+	while (i < input.length) {
+		const ch = input[i];
+
+		if (/\s/.test(ch)) {
+			if (inWord) {
+				words.push(word);
+				word = "";
+				inWord = false;
+			}
+			i++;
+			continue;
+		}
+
+		inWord = true;
+
+		if (QUOTES.includes(ch)) {
+			const end = input.indexOf(ch, i + 1);
+			if (end !== -1) {
+				const inner = input.slice(i + 1, end);
+				word += ch === "'" ? inner : expandVariables(inner, variables);
+				i = end + 1;
+				continue;
+			}
+		}
+
+		// Unquoted run (an unmatched quote at `i` is included literally).
+		let j = i + 1;
+		while (
+			j < input.length &&
+			!/\s/.test(input[j]) &&
+			!QUOTES.includes(input[j])
+		) {
+			j++;
+		}
+		word += expandVariables(input.slice(i, j), variables);
+		i = j;
+	}
+
+	if (inWord) {
+		words.push(word);
+	}
+	return words.join(" ");
 }
 
 export type Completion = {

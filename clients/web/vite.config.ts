@@ -10,5 +10,10 @@ export default defineConfig({
 		// Resolves the `@/*` alias declared in tsconfig.json.
 		tsconfigPaths: true,
 	},
+	ssr: {
+		// Bundle the ESM build: the CJS entry breaks the `styled.x` default
+		// import during dev SSR ("styled.button is not a function").
+		noExternal: ["styled-components"],
+	},
 	plugins: [devtools(), nitro(), tailwindcss(), tanstackStart(), viteReact()],
 });

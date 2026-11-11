@@ -5,6 +5,7 @@ const GlobalStyle = createGlobalStyle`
   ${normalize}
 
   *, ::before, ::after {
+    box-sizing: border-box;
     border-width: 0;
     border-style: solid;
     border-color: currentColor;
@@ -20,43 +21,83 @@ const GlobalStyle = createGlobalStyle`
     font-weight: inherit;
   }
 
-  img, svg, video, canvas, audio, 
+  img, svg, video, canvas, audio,
   iframe, embed, object {
     display: block;
   }
 
-  body {
-    font-family: 'IBM Plex Mono', monospace;
-    font-weight: 500;
-    background-color: ${({ theme }) => theme.colors?.body};
-    color: ${({ theme }) => theme.colors?.text[100]};
+  html, body {
+    height: 100%;
   }
 
-  /* ===== Custom Scroll Bar ===== */
-  /* width */
+  body {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 14px;
+    font-weight: 400;
+    line-height: 1.65;
+    font-variant-ligatures: none;
+    background-color: ${({ theme }) => theme.colors.body};
+    color: ${({ theme }) => theme.colors.text[100]};
+    overflow: hidden;
+    transition: background-color 200ms ease, color 200ms ease;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, ${({ theme }) => theme.colors.primary} 30%, transparent);
+  }
+
+  /* ===== Scrollbar ===== */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: ${({ theme }) => theme.colors.scrollHandle} transparent;
+  }
   ::-webkit-scrollbar {
-    width: 15px;
+    width: 10px;
+    height: 10px;
   }
-  /* Track */
   ::-webkit-scrollbar-track {
-    background: ${({ theme }) => theme.colors?.body};
+    background: transparent;
   }
-  /* Handle */
   ::-webkit-scrollbar-thumb {
-    background: ${({ theme }) => theme.colors?.scrollHandle};
+    background: ${({ theme }) => theme.colors.scrollHandle};
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
   }
-  /* Handle on hover */
   ::-webkit-scrollbar-thumb:hover {
-    background: ${({ theme }) => theme.colors?.scrollHandleHover};
+    background-color: ${({ theme }) => theme.colors.scrollHandleHover};
   }
 
   input[type=text] {
-    background-color: ${({ theme }) => theme.colors?.body};
-    color: ${({ theme }) => theme.colors?.text[100]};
-    caret-color: ${({ theme }) => theme.colors?.primary};
+    font: inherit;
+    background: transparent;
+    color: ${({ theme }) => theme.colors.text[100]};
+    caret-color: ${({ theme }) => theme.colors.primary};
+  }
+  input[type=text]::placeholder {
+    color: ${({ theme }) => theme.colors.text[300]};
   }
   input[type=text]:focus-visible {
     outline: none;
+  }
+
+  button {
+    font: inherit;
+    color: inherit;
+    background: none;
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    outline: 2px solid ${({ theme }) => theme.colors.primary};
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, ::before, ::after {
+      transition: none !important;
+      animation: none !important;
+    }
   }
 
   .sr-only {

@@ -3,12 +3,8 @@ import { TerminalProvider } from "@/contexts/terminal-context";
 import { isValidCommand } from "@/lib/commands";
 import { parseCommand } from "@/lib/funcs";
 import { Output } from "./output";
-import {
-	CmdNotFound,
-	Empty,
-	MobileBr,
-	MobileSpan,
-} from "./styles/terminal-styled";
+import { CmdNotFound, Empty, InputLine } from "./styles/terminal-styled";
+import { Muted } from "./styles/ui";
 import { TerminalInfo } from "./terminal-info";
 
 interface HistoryItemProps {
@@ -17,30 +13,45 @@ interface HistoryItemProps {
 	cmdHistory: string[];
 	rerender: boolean;
 	clearHistory: () => void;
+	runCommand: (input: string) => void;
 }
 
 export const HistoryItem = memo(
-	({ input, index, cmdHistory, rerender, clearHistory }: HistoryItemProps) => {
+	({
+		input,
+		index,
+		cmdHistory,
+		rerender,
+		clearHistory,
+		runCommand,
+	}: HistoryItemProps) => {
 		// Memoised so `arg` keeps its identity and command effects don't re-run
 		// every time the terminal re-renders.
-		const { cmd, arg } = useMemo(() => {
+		const { cmd, arg, rawArg } = useMemo(() => {
 			const [name, ...rest] = parseCommand(input);
-			return { cmd: name, arg: rest };
+			const raw = input.trimStart().slice(name.length);
+			return { cmd: name, arg: rest, rawArg: raw };
 		}, [input]);
 
 		const contextValue = useMemo(
-			() => ({ arg, history: cmdHistory, rerender, index, clearHistory }),
-			[arg, cmdHistory, rerender, index, clearHistory],
+			() => ({
+				arg,
+				rawArg,
+				history: cmdHistory,
+				rerender,
+				index,
+				clearHistory,
+				runCommand,
+			}),
+			[arg, rawArg, cmdHistory, rerender, index, clearHistory, runCommand],
 		);
 
 		return (
 			<div>
-				<div>
+				<InputLine>
 					<TerminalInfo />
-					<MobileBr />
-					<MobileSpan>&#62;</MobileSpan>
 					<span data-testid="input-command">{input}</span>
-				</div>
+				</InputLine>
 				{isValidCommand(cmd) ? (
 					<TerminalProvider value={contextValue}>
 						<Output index={index} cmd={cmd} />
@@ -49,7 +60,8 @@ export const HistoryItem = memo(
 					<Empty />
 				) : (
 					<CmdNotFound data-testid={`not-found-${index}`}>
-						command not found: {cmd}
+						command not found: {cmd}{" "}
+						<Muted>— type `help` for a list of commands</Muted>
 					</CmdNotFound>
 				)}
 			</div>
