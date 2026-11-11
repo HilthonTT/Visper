@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"log"
+	"net/url"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -16,7 +17,6 @@ import (
 	"github.com/hilthontt/visper/clients/cli/internal/utils"
 	apisdk "github.com/hilthontt/visper/sdk/go"
 	"github.com/hilthontt/visper/sdk/go/option"
-	"github.com/reinhrst/fzf-lib"
 )
 
 // The API rejects message content longer than maxMessageLen characters. For
@@ -95,8 +95,11 @@ type chatState struct {
 	imageFetching map[string]bool   // messageID -> currently fetching
 }
 
+// participantSearchResultMsg lists the IDs of the members matching query,
+// best match first.
 type participantSearchResultMsg struct {
-	results []fzf.MatchResult
+	query string
+	ids   []string
 }
 
 type messageEditSubmittedMsg struct {
@@ -123,7 +126,7 @@ type roomExpiredMsg struct {
 
 type roomExpirationDismissedMsg struct{}
 
-type roomExpirationRedirectMsg struct{}
+type roomExpirationRedirectMsg struct{ ctx context.Context }
 
 type imageFetchedMsg struct {
 	messageID string
@@ -155,18 +158,25 @@ func (m model) newChatInput(placeholder string) textinput.Model {
 }
 
 func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
+	if m.page == chatPage && m.state.chat.room != nil {
+		// A second create/join finished while we are already in a room (e.g.
+		// enter on the join page, tab to New room, enter again). Swapping
+		// only the room pointer would send to one room while listening to
+		// another, so stay put and leave the extra room on the server.
+		isOwner := newRoom.CurrentUser.ID != "" && newRoom.CurrentUser.ID == newRoom.Owner.ID
+		leave := leaveRoomFunc(m.client, newRoom.ID, isOwner, m.requestOpts())
+		return m, func() tea.Msg { leave(); return nil }
+	}
+
 	m = m.stopNotificationWebSocket()
+	// Never let a previous room's listener or countdown outlive it.
+	m.clearChatState()
 
 	m = m.SwitchPage(chatPage)
-	m.state.chat.room = newRoom
 	m.state.menu = menuState{}
 
 	// Always reset the key so a previous room's key is never reused.
 	m.client.Message.SetEncryptionKey(newRoom.EncryptionKey)
-
-	if m.state.chat.roomCode != "" {
-		return m, nil
-	}
 
 	msgInput := m.newChatInput("Write a message…")
 	msgInput.Focus()
@@ -244,6 +254,11 @@ func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 
 func (m model) startExpirationCountdown() tea.Cmd {
 	ctx, expiresAt := m.state.chat.expirationCtx, m.state.chat.expiresAt
+	if expiresAt.IsZero() {
+		// The API sends a zero expires_at for rooms that never expire;
+		// counting down to it would "expire" the room after one second.
+		return nil
+	}
 	return func() tea.Msg {
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
@@ -305,6 +320,9 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case aiEnhanceResultMsg:
+		if msg.session != m.state.chat.wsCtx {
+			return m, nil // started in a room we already left
+		}
 		m.state.chat.aiEnhancing = false
 		if msg.err != nil {
 			return m.toast(theme.ToneDanger, "AI rewrite failed. Your draft is unchanged.")
@@ -336,6 +354,9 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		}
 		return m, nil
 	case fileUploadResultMsg:
+		if msg.session != m.state.chat.wsCtx {
+			return m, nil // started in a room we already left
+		}
 		m.state.chat.uploading = false
 		if msg.err != nil {
 			return m.toast(theme.ToneDanger, fmt.Sprintf("Upload failed: %v", msg.err))
@@ -386,8 +407,9 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 			content:       "Its messages are gone. Taking you back to the start…",
 			confirmAction: RoomExpiredAction,
 		}
+		wsCtx := m.state.chat.wsCtx
 		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
-			return roomExpirationRedirectMsg{}
+			return roomExpirationRedirectMsg{ctx: wsCtx}
 		})
 
 	case kickMemberSubmittedMsg:
@@ -428,9 +450,19 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		m.state.chat.wsConn = msg.conn
 		return m, m.listenWebSocket()
 
+	case wsConnectFailedMsg:
+		if msg.ctx != m.state.chat.wsCtx || msg.ctx.Err() != nil {
+			return m, nil // we already left this room
+		}
+		// Messages only arrive over the WebSocket, so without it the room
+		// would just look silent.
+		return m.alert(theme.ToneDanger, "Couldn't connect",
+			"Live updates for this room are unavailable, so new messages won't show up. Press ctrl+b to leave and try again."), nil
+
 	case wsRoomUpdatedMsg:
 		changed := m.state.chat.roomCode != "" && m.state.chat.roomCode != msg.joinCode
 		m.state.chat.roomCode = msg.joinCode
+		m = m.withJoinCodeInQRURL(msg.joinCode)
 		if changed {
 			m, cmd = m.toast(theme.ToneSuccess, "New join code: "+msg.joinCode)
 			return m, tea.Batch(cmd, m.waitWS())
@@ -496,6 +528,8 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 					m.state.chat.selectedMessageIndex = -1
 					if m.state.chat.editMode {
 						m.state.chat.selectedMessageIndex = m.getLastOwnMessageIndex()
+						// Nothing of ours is left to select.
+						m.state.chat.editMode = m.state.chat.selectedMessageIndex >= 0
 					}
 				}
 				break
@@ -532,13 +566,7 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		if name == "" {
 			name = m.participantName(msg.userID)
 		}
-		for i, p := range m.state.chat.participants {
-			if p.ID == msg.userID {
-				m.state.chat.participants = append(m.state.chat.participants[:i], m.state.chat.participants[i+1:]...)
-				break
-			}
-		}
-		m = m.resetMemberFilter()
+		m = m.removeParticipant(msg.userID)
 		if name == "" {
 			return m, m.waitWS()
 		}
@@ -549,12 +577,20 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 	case wsMemberListMsg:
 		m.state.chat.participants = msg.members
 		m = m.resetMemberFilter()
+		// Keep an active member search applied to the new list.
+		if q := m.state.chat.searchInput.Value(); m.state.chat.searchActive && q != "" {
+			return m, tea.Batch(m.searchParticipants(q), m.waitWS())
+		}
 		return m, m.waitWS()
 
-	case roomExpirationRedirectMsg, roomExpirationDismissedMsg, wsKickTimeoutMsg, wsRoomDeletedTimeoutMsg:
-		m = m.closeModal()
-		m.clearChatState()
-		return m.NewRoomSwitch()
+	case roomExpirationRedirectMsg:
+		return m.leaveChatAfter(msg.ctx)
+	case wsKickTimeoutMsg:
+		return m.leaveChatAfter(msg.ctx)
+	case wsRoomDeletedTimeoutMsg:
+		return m.leaveChatAfter(msg.ctx)
+	case roomExpirationDismissedMsg:
+		return m.leaveChatAfter(m.state.chat.wsCtx)
 
 	case wsKickedMsg:
 		// Check if I'm the one being kicked
@@ -564,19 +600,14 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 				content += "\nReason: " + msg.reason
 			}
 			m = m.alert(theme.ToneDanger, "You were kicked", content)
+			wsCtx := m.state.chat.wsCtx
 			return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
-				return wsKickTimeoutMsg{}
+				return wsKickTimeoutMsg{ctx: wsCtx}
 			})
 		}
 
 		name := m.participantName(msg.userID)
-		for i, p := range m.state.chat.participants {
-			if p.ID == msg.userID {
-				m.state.chat.participants = append(m.state.chat.participants[:i], m.state.chat.participants[i+1:]...)
-				break
-			}
-		}
-		m = m.resetMemberFilter()
+		m = m.removeParticipant(msg.userID)
 		if name == "" {
 			return m, m.waitWS()
 		}
@@ -584,8 +615,9 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		return m, tea.Batch(cmd, m.waitWS())
 	case wsRoomDeletedMsg:
 		m = m.alert(theme.ToneDanger, "Room deleted", "The owner deleted this room. Taking you back to the start…")
+		wsCtx := m.state.chat.wsCtx
 		return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
-			return wsRoomDeletedTimeoutMsg{}
+			return wsRoomDeletedTimeoutMsg{ctx: wsCtx}
 		})
 
 	case wsErrorMsg:
@@ -602,12 +634,26 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		return m.alert(theme.ToneDanger, "Disconnected", "Lost the connection to this room. Press ctrl+b to leave."), nil
 
 	case participantSearchResultMsg:
-		if len(msg.results) == 0 && m.state.chat.searchInput.Value() == "" {
+		if !m.state.chat.searchActive || msg.query != m.state.chat.searchInput.Value() {
+			// Superseded by later typing, or the search was closed meanwhile;
+			// applying it would leave the list filtered by an old query.
+			return m, nil
+		}
+		if msg.query == "" {
 			m = m.resetMemberFilter()
 		} else {
-			m.state.chat.filteredIndices = make([]int, len(msg.results))
-			for i, result := range msg.results {
-				m.state.chat.filteredIndices[i] = int(result.HayIndex)
+			// Map matches back by ID: the list may have changed since the
+			// search snapshot, and stale indices would select (and kick) the
+			// wrong member.
+			pos := make(map[string]int, len(m.state.chat.participants))
+			for i, p := range m.state.chat.participants {
+				pos[p.ID] = i
+			}
+			m.state.chat.filteredIndices = make([]int, 0, len(msg.ids))
+			for _, id := range msg.ids {
+				if i, ok := pos[id]; ok {
+					m.state.chat.filteredIndices = append(m.state.chat.filteredIndices, i)
+				}
 			}
 		}
 		m.state.chat.memberCursor = 0
@@ -970,23 +1016,97 @@ func (m model) getMessageContent(messageID string) string {
 }
 
 func (m model) searchParticipants(query string) tea.Cmd {
-	// Snapshot the usernames now; the command runs on another goroutine.
-	source := make([]string, len(m.state.chat.participants))
+	// Snapshot the members now; the command runs on another goroutine.
+	names := make([]string, len(m.state.chat.participants))
+	ids := make([]string, len(m.state.chat.participants))
 	for i, p := range m.state.chat.participants {
-		source[i] = p.Username
+		names[i], ids[i] = p.Username, p.ID
 	}
 	return func() tea.Msg {
 		if query == "" {
-			return participantSearchResultMsg{results: nil}
+			return participantSearchResultMsg{query: query}
 		}
 
-		results, err := utils.FzfSearch(query, source, 500*time.Millisecond)
+		results, err := utils.FzfSearch(query, names, 500*time.Millisecond)
 		if err != nil {
-			return participantSearchResultMsg{results: nil}
+			return participantSearchResultMsg{query: query}
 		}
 
-		return participantSearchResultMsg{results: results}
+		matched := make([]string, 0, len(results))
+		for _, r := range results {
+			if i := int(r.HayIndex); i >= 0 && i < len(ids) {
+				matched = append(matched, ids[i])
+			}
+		}
+		return participantSearchResultMsg{query: query, ids: matched}
 	}
+}
+
+// removeParticipant drops a member from the list, keeping an active search
+// filter (and its highlighted row) pointing at the same people.
+func (m model) removeParticipant(userID string) model {
+	c := &m.state.chat
+	idx := -1
+	for i, p := range c.participants {
+		if p.ID == userID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return m
+	}
+	c.participants = append(c.participants[:idx:idx], c.participants[idx+1:]...)
+
+	filtered := make([]int, 0, len(c.filteredIndices))
+	for _, i := range c.filteredIndices {
+		switch {
+		case i == idx:
+			continue
+		case i > idx:
+			i--
+		}
+		filtered = append(filtered, i)
+	}
+	c.filteredIndices = filtered
+	c.memberCursor = min(c.memberCursor, max(len(filtered)-1, 0))
+	return m
+}
+
+// leaveChatAfter returns to the start page once a room has gone (expired,
+// deleted, or we were kicked). ctx is the wsCtx of the room the timer was set
+// for; a timer from a room we already left is ignored.
+func (m model) leaveChatAfter(ctx context.Context) (model, tea.Cmd) {
+	if ctx != m.state.chat.wsCtx {
+		return m, nil
+	}
+	m = m.closeModal()
+	m.clearChatState()
+	return m.NewRoomSwitch()
+}
+
+// withJoinCodeInQRURL points the room's invite QR code at a new join code;
+// the URL embeds the code, so after a code change the old QR stops working.
+func (m model) withJoinCodeInQRURL(joinCode string) model {
+	if m.state.chat.room == nil || m.state.chat.room.QRCodeURL == "" {
+		return m
+	}
+	u, err := url.Parse(m.state.chat.room.QRCodeURL)
+	if err != nil {
+		return m
+	}
+	q := u.Query()
+	if !q.Has("joinCode") {
+		return m
+	}
+	q.Set("joinCode", joinCode)
+	u.RawQuery = q.Encode()
+
+	room := *m.state.chat.room // copy: the pointer may be shared with pending commands
+	room.QRCodeURL = u.String()
+	room.JoinCode = joinCode
+	m.state.chat.room = &room
+	return m
 }
 
 func (m *model) clearChatState() {

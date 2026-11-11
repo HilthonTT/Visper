@@ -8,7 +8,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	apisdk "github.com/hilthontt/visper/sdk/go"
-	"github.com/hilthontt/visper/sdk/go/option"
 )
 
 type wsConnectedMsg struct {
@@ -66,9 +65,17 @@ type wsErrorMsg struct {
 
 type wsDisconnectedMsg struct{}
 
-type wsKickTimeoutMsg struct{}
+// The timeout messages carry the wsCtx of the room they were scheduled in, so
+// one that fires after the user already left (and maybe joined another room)
+// doesn't throw them out of the new room.
+type wsKickTimeoutMsg struct{ ctx context.Context }
 
-type wsRoomDeletedTimeoutMsg struct{}
+type wsRoomDeletedTimeoutMsg struct{ ctx context.Context }
+
+type wsConnectFailedMsg struct {
+	ctx context.Context
+	err error
+}
 
 func getStringField(data map[string]any, keys ...string) (string, bool) {
 	for _, key := range keys {
@@ -80,25 +87,12 @@ func getStringField(data map[string]any, keys ...string) (string, bool) {
 }
 
 func (m model) connectWebSocket(roomID string) tea.Cmd {
-	ctx := m.state.chat.wsCtx
+	ctx, client, opts := m.state.chat.wsCtx, m.client, m.requestOpts()
 	return func() tea.Msg {
-		var userID string
-		if m.userID != nil {
-			userID = *m.userID
-		}
-
-		opts := []option.RequestOption{}
-		if userID != "" {
-			opts = append(opts, option.WithHeader("X-User-ID", userID))
-		}
-
-		ws, err := m.client.Room.ConnectWebSocket(ctx, roomID, opts...)
+		ws, err := client.Room.ConnectWebSocket(ctx, roomID, opts...)
 		if err != nil {
 			log.Printf("Failed to connect WebSocket: %v", err)
-			return wsErrorMsg{
-				code:    "CONNECTION_FAILED",
-				message: "Failed to connect to chat room",
-			}
+			return wsConnectFailedMsg{ctx: ctx, err: err}
 		}
 
 		return wsConnectedMsg{conn: ws, ctx: ctx}

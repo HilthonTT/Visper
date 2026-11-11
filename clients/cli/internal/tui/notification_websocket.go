@@ -22,6 +22,7 @@ type notificationWSConnectFailedMsg struct {
 
 type notificationWSChannelReadyMsg struct {
 	msgChan chan tea.Msg
+	ctx     context.Context
 }
 
 type notificationWSRoomInviteMsg struct {
@@ -177,7 +178,7 @@ func (m model) listenNotificationWebSocket() tea.Cmd {
 			}
 		}()
 
-		return notificationWSChannelReadyMsg{msgChan: msgChan}
+		return notificationWSChannelReadyMsg{msgChan: msgChan, ctx: m.state.notification.wsCtx}
 	}
 }
 
