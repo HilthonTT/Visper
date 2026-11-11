@@ -10,8 +10,9 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/hilthontt/visper/services/api/application/usecases/file"
+	"github.com/hilthontt/visper/services/api/domain/model"
 	"github.com/hilthontt/visper/services/api/infrastructure/storage"
-	"github.com/hilthontt/visper/services/api/presentation/middlewares"
+	"github.com/hilthontt/visper/services/api/presentation/httpx"
 )
 
 // maxUploadRequestSize is the largest accepted upload request: the file limit
@@ -20,10 +21,12 @@ const maxUploadRequestSize = storage.MaxFileSize + 1<<20
 
 type FilesController interface {
 	Upload(ctx *gin.Context)
-	Down(ctx *gin.Context)
-	Proxy(ctx *gin.Context)
 	GetRoomFiles(ctx *gin.Context)
 	DeleteFile(ctx *gin.Context)
+	// Down serves a stored file as a download.
+	Down(ctx *gin.Context)
+	// Proxy serves a stored file inline, with caching headers.
+	Proxy(ctx *gin.Context)
 }
 
 type filesController struct {
@@ -39,21 +42,12 @@ func NewFilesController(fileUseCase file.FileUseCase, localStorage *storage.Loca
 }
 
 func (c *filesController) Upload(ctx *gin.Context) {
-	roomID := ctx.Param("id")
-	if roomID == "" {
-		ctx.JSON(http.StatusBadRequest, ErrorResponse{
-			Error:   "invalid_request",
-			Message: "room ID is required",
-		})
+	roomID, ok := httpx.RoomID(ctx)
+	if !ok {
 		return
 	}
-
-	user, exists := middlewares.GetUserFromContext(ctx)
-	if !exists {
-		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
-			Error:   "unauthorized",
-			Message: "user not found in context",
-		})
+	user, ok := httpx.RequireUser(ctx)
+	if !ok {
 		return
 	}
 
@@ -63,120 +57,99 @@ func (c *filesController) Upload(ctx *gin.Context) {
 
 	fileHeader, err := ctx.FormFile("file")
 	if err != nil {
-		var maxBytesErr *http.MaxBytesError
-		if errors.As(err, &maxBytesErr) {
-			ctx.JSON(http.StatusRequestEntityTooLarge, ErrorResponse{
-				Error:   "file_too_large",
-				Message: storage.ErrFileTooLarge.Error(),
-			})
+		if _, tooLarge := errors.AsType[*http.MaxBytesError](err); tooLarge {
+			httpx.Fail(ctx, http.StatusRequestEntityTooLarge, httpx.CodeTooLarge, storage.ErrFileTooLarge.Error())
 			return
 		}
-		ctx.JSON(http.StatusBadRequest, ErrorResponse{
-			Error:   "invalid_request",
-			Message: "file is required",
-		})
+		httpx.BadRequest(ctx, "file is required")
 		return
 	}
 
-	file, err := c.fileUseCase.UploadFile(ctx.Request.Context(), fileHeader, roomID, user.ID)
+	uploaded, err := c.fileUseCase.UploadFile(ctx.Request.Context(), fileHeader, roomID, user.ID)
 	if err != nil {
-		status := http.StatusInternalServerError
-		errorCode := "upload_failed"
-
-		switch {
-		case err.Error() == "room not found":
-			status = http.StatusNotFound
-			errorCode = "not_found"
-		case err.Error() == "room has expired":
-			status = http.StatusGone
-			errorCode = "expired"
-		case err.Error() == "user is not a member of this room":
-			status = http.StatusForbidden
-			errorCode = "forbidden"
-		case errors.Is(err, storage.ErrFileTooLarge):
-			status = http.StatusRequestEntityTooLarge
-			errorCode = "file_too_large"
-		case errors.Is(err, storage.ErrInvalidFileType), errors.Is(err, storage.ErrInvalidPath):
-			status = http.StatusBadRequest
-			errorCode = "invalid_file_type"
-		}
-
-		ctx.JSON(status, ErrorResponse{
-			Error:   errorCode,
-			Message: err.Error(),
-		})
+		httpx.Error(ctx, err)
 		return
 	}
 
-	ctx.JSON(http.StatusCreated, FileResponse{
-		ID:        file.ID,
-		Filename:  file.Filename,
-		MimeType:  file.MimeType,
-		Size:      file.Size,
-		URL:       file.URL,
-		CreatedAt: file.CreatedAt,
-		Uploader: UserResponse{
-			ID:       user.ID,
-			Username: user.Username,
-		},
-	})
+	ctx.JSON(http.StatusCreated, toFileResponse(uploaded, user.Username))
 }
 
-// resolveFile maps the "*path" wildcard to a file inside the uploads
-// directory. It writes the error response and returns ok=false on failure.
-func (c *filesController) resolveFile(ctx *gin.Context) (relativePath, fullPath string, ok bool) {
-	relativePath = strings.TrimPrefix(ctx.Param("path"), "/")
-	if relativePath == "" {
-		ctx.JSON(http.StatusBadRequest, ErrorResponse{
-			Error:   "invalid_request",
-			Message: "file path is required",
-		})
-		return "", "", false
+func (c *filesController) GetRoomFiles(ctx *gin.Context) {
+	roomID, ok := httpx.RoomID(ctx)
+	if !ok {
+		return
 	}
-
-	fullPath, err := c.localStorage.GetFilePath(relativePath)
-	if err != nil || !c.localStorage.FileExists(relativePath) {
-		// Paths escaping the uploads directory are reported as not found.
-		ctx.JSON(http.StatusNotFound, ErrorResponse{
-			Error:   "not_found",
-			Message: "file not found",
-		})
-		return "", "", false
-	}
-
-	return relativePath, fullPath, true
-}
-
-func (c *filesController) Proxy(ctx *gin.Context) {
-	filePath, fullPath, ok := c.resolveFile(ctx)
+	user, ok := httpx.RequireUser(ctx)
 	if !ok {
 		return
 	}
 
-	mimeType := storage.MIMETypeFromExtension(filepath.Ext(filePath))
+	files, err := c.fileUseCase.GetRoomFiles(ctx.Request.Context(), roomID, user.ID)
+	if err != nil {
+		httpx.Error(ctx, err)
+		return
+	}
+
+	response := make([]FileResponse, len(files))
+	for i, f := range files {
+		response[i] = toFileResponse(f, "") // TODO: add usernames
+	}
+	ctx.JSON(http.StatusOK, response)
+}
+
+func (c *filesController) DeleteFile(ctx *gin.Context) {
+	fileID, ok := httpx.RequireParam(ctx, "fileId", "file ID")
+	if !ok {
+		return
+	}
+	user, ok := httpx.RequireUser(ctx)
+	if !ok {
+		return
+	}
+
+	if err := c.fileUseCase.DeleteFile(ctx.Request.Context(), fileID, user.ID); err != nil {
+		httpx.Error(ctx, err)
+		return
+	}
+
+	ctx.JSON(http.StatusOK, httpx.SuccessResponse{Message: "file deleted successfully"})
+}
+
+func (c *filesController) Down(ctx *gin.Context) {
+	_, fullPath, ok := c.resolveFile(ctx)
+	if !ok {
+		return
+	}
+
+	ctx.Header("X-Content-Type-Options", "nosniff")
+	ctx.File(fullPath)
+}
+
+func (c *filesController) Proxy(ctx *gin.Context) {
+	relativePath, fullPath, ok := c.resolveFile(ctx)
+	if !ok {
+		return
+	}
+
+	mimeType := storage.MIMETypeFromExtension(filepath.Ext(relativePath))
 	if mimeType == "" {
 		mimeType = "application/octet-stream"
 	}
 
 	f, err := os.Open(fullPath)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, ErrorResponse{
-			Error:   "read_error",
-			Message: "failed to open file",
-		})
+		readError(ctx, err, "failed to open file")
 		return
 	}
 	defer f.Close()
 
 	info, err := f.Stat()
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, ErrorResponse{
-			Error:   "read_error",
-			Message: "failed to stat file",
-		})
+		readError(ctx, err, "failed to stat file")
 		return
 	}
 
+	// Stored file names are unique, so the name is a stable ETag.
 	filename := filepath.Base(fullPath)
 	etag := fmt.Sprintf(`"%s"`, filename)
 
@@ -193,113 +166,38 @@ func (c *filesController) Proxy(ctx *gin.Context) {
 	ctx.DataFromReader(http.StatusOK, info.Size(), mimeType, f, nil)
 }
 
-func (c *filesController) Down(ctx *gin.Context) {
-	_, fullPath, ok := c.resolveFile(ctx)
-	if !ok {
-		return
+// resolveFile maps the "*path" wildcard to a file inside the uploads
+// directory. It writes the error response and returns ok=false on failure.
+func (c *filesController) resolveFile(ctx *gin.Context) (relativePath, fullPath string, ok bool) {
+	relativePath = strings.TrimPrefix(ctx.Param("path"), "/")
+	if relativePath == "" {
+		httpx.BadRequest(ctx, "file path is required")
+		return "", "", false
 	}
 
-	ctx.Header("X-Content-Type-Options", "nosniff")
-	ctx.File(fullPath)
+	fullPath, err := c.localStorage.GetFilePath(relativePath)
+	if err != nil || !c.localStorage.FileExists(relativePath) {
+		// Paths escaping the uploads directory are reported as not found.
+		httpx.Fail(ctx, http.StatusNotFound, httpx.CodeNotFound, "file not found")
+		return "", "", false
+	}
+
+	return relativePath, fullPath, true
 }
 
-func (c *filesController) DeleteFile(ctx *gin.Context) {
-	fileID := ctx.Param("fileId")
-	if fileID == "" {
-		ctx.JSON(http.StatusBadRequest, ErrorResponse{
-			Error:   "invalid_request",
-			Message: "file ID is required",
-		})
-		return
-	}
-
-	user, exists := middlewares.GetUserFromContext(ctx)
-	if !exists {
-		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
-			Error:   "unauthorized",
-			Message: "user not found in context",
-		})
-		return
-	}
-
-	if err := c.fileUseCase.DeleteFile(ctx.Request.Context(), fileID, user.ID); err != nil {
-		status := http.StatusInternalServerError
-		errorCode := "delete_failed"
-
-		switch err.Error() {
-		case "file not found":
-			status = http.StatusNotFound
-			errorCode = "not_found"
-		case "room not found":
-			status = http.StatusNotFound
-			errorCode = "not_found"
-		case "only the file uploader or room owner can delete files":
-			status = http.StatusForbidden
-			errorCode = "forbidden"
-		}
-
-		ctx.JSON(status, ErrorResponse{
-			Error:   errorCode,
-			Message: err.Error(),
-		})
-		return
-	}
-
-	ctx.JSON(http.StatusOK, SuccessResponse{
-		Message: "file deleted successfully",
-	})
+func readError(ctx *gin.Context, err error, message string) {
+	_ = ctx.Error(err)
+	httpx.Fail(ctx, http.StatusInternalServerError, httpx.CodeInternal, message)
 }
 
-func (c *filesController) GetRoomFiles(ctx *gin.Context) {
-	roomID := ctx.Param("id")
-	if roomID == "" {
-		ctx.JSON(http.StatusBadRequest, ErrorResponse{
-			Error:   "invalid_request",
-			Message: "room ID is required",
-		})
-		return
+func toFileResponse(f *model.File, uploaderName string) FileResponse {
+	return FileResponse{
+		ID:        f.ID,
+		Filename:  f.Filename,
+		MimeType:  f.MimeType,
+		Size:      f.Size,
+		URL:       f.URL,
+		CreatedAt: f.CreatedAt,
+		Uploader:  UserResponse{ID: f.UserID, Username: uploaderName},
 	}
-
-	user, exists := middlewares.GetUserFromContext(ctx)
-	if !exists {
-		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
-			Error:   "unauthorized",
-			Message: "user not found in context",
-		})
-		return
-	}
-
-	files, err := c.fileUseCase.GetRoomFiles(ctx.Request.Context(), roomID, user.ID)
-	if err != nil {
-		status := http.StatusInternalServerError
-		switch err.Error() {
-		case "room not found":
-			status = http.StatusNotFound
-		case "user is not a member of this room":
-			status = http.StatusForbidden
-		}
-		ctx.JSON(status, ErrorResponse{
-			Error:   "fetch_failed",
-			Message: err.Error(),
-		})
-		return
-	}
-
-	response := make([]FileResponse, len(files))
-	for i, file := range files {
-		response[i] = FileResponse{
-			ID:        file.ID,
-			Filename:  file.Filename,
-			MimeType:  file.MimeType,
-			Size:      file.Size,
-			URL:       file.URL,
-			CreatedAt: file.CreatedAt,
-			Uploader: UserResponse{
-				ID:       file.UserID,
-				Username: "", // TODO: add usernames
-			},
-		}
-	}
-
-	ctx.JSON(http.StatusOK, response)
 }

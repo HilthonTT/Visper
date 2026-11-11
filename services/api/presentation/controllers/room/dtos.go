@@ -40,12 +40,8 @@ type UserResponse struct {
 	Username string `json:"username"`
 }
 
-type ErrorResponse struct {
-	Error   string `json:"error"`
-	Message string `json:"message,omitempty"`
-}
-
-type SuccessResponse struct {
-	Message string `json:"message"`
-	Data    any    `json:"data,omitempty"`
+type MembershipResponse struct {
+	IsMember bool   `json:"is_member"`
+	RoomID   string `json:"room_id"`
+	UserID   string `json:"user_id"`
 }

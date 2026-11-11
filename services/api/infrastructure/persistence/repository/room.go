@@ -8,7 +8,6 @@ import (
 	"github.com/hilthontt/visper/services/api/domain/model"
 	"github.com/hilthontt/visper/services/api/domain/repository"
 	"github.com/hilthontt/visper/services/api/infrastructure/cache"
-	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -214,7 +213,7 @@ func (r *roomRepository) GetByID(ctx context.Context, id string) (*model.Room, e
 	if !found {
 		span.SetAttributes(attribute.Bool("room.found", false))
 		span.SetStatus(codes.Error, "room not found")
-		return nil, redis.Nil
+		return nil, repository.ErrNotFound
 	}
 
 	span.SetAttributes(

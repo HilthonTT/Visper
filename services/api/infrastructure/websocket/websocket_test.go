@@ -114,11 +114,10 @@ type stubMessageRepo struct {
 func (s *stubMessageRepo) GetByID(context.Context, string, string) (*model.Message, error) {
 	return nil, nil
 }
-func (s *stubMessageRepo) Update(context.Context, *model.Message) error               { return nil }
-func (s *stubMessageRepo) Delete(context.Context, string, string) error               { return nil }
-func (s *stubMessageRepo) Create(context.Context, *model.Message) error               { return nil }
-func (s *stubMessageRepo) Count(context.Context, string) (int64, error)               { return 0, nil }
-func (s *stubMessageRepo) DeleteOldMessages(context.Context, string, time.Time) error { return nil }
+func (s *stubMessageRepo) Update(context.Context, *model.Message) error { return nil }
+func (s *stubMessageRepo) Delete(context.Context, string, string) error { return nil }
+func (s *stubMessageRepo) Create(context.Context, *model.Message) error { return nil }
+func (s *stubMessageRepo) Count(context.Context, string) (int64, error) { return 0, nil }
 func (s *stubMessageRepo) GetByRoom(context.Context, string, int64) ([]*model.Message, error) {
 	return s.history, nil
 }

@@ -6,12 +6,12 @@ import (
 	"time"
 
 	"github.com/hilthontt/visper/services/api/domain/model"
+	"github.com/hilthontt/visper/services/api/domain/repository"
 	"github.com/hilthontt/visper/services/api/infrastructure/logger"
-	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
-// fakeRoomRepo mimics the Redis repository: a missing room is redis.Nil.
+// fakeRoomRepo mimics the Redis repository.
 type fakeRoomRepo struct {
 	rooms   map[string]*model.Room
 	removed []string
@@ -24,7 +24,7 @@ func (f *fakeRoomRepo) GetByID(_ context.Context, id string) (*model.Room, error
 	if r, ok := f.rooms[id]; ok {
 		return r, nil
 	}
-	return nil, redis.Nil
+	return nil, repository.ErrNotFound
 }
 func (f *fakeRoomRepo) GetAll(context.Context) ([]*model.Room, error) {
 	out := make([]*model.Room, 0, len(f.rooms))

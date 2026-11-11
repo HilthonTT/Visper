@@ -47,6 +47,9 @@ func (r *fileRepository) Create(ctx context.Context, file *model.File) error {
 func (r *fileRepository) GetByID(ctx context.Context, id string) (*model.File, error) {
 	key := fmt.Sprintf("file:%s", id)
 	data, err := r.client.Get(ctx, key).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return nil, repository.ErrNotFound
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -97,21 +100,6 @@ func (r *fileRepository) Delete(ctx context.Context, id string) error {
 	return r.client.Del(ctx, key).Err()
 }
 
-func (r *fileRepository) DeleteByRoomID(ctx context.Context, roomID string) error {
-	roomFileKey := fmt.Sprintf("room:%s:files", roomID)
-	fileIDs, err := r.client.SMembers(ctx, roomFileKey).Result()
-	if err != nil {
-		return err
-	}
-
-	for _, id := range fileIDs {
-		// Best effort: a missing file record must not stop the cleanup.
-		_ = r.Delete(ctx, id)
-	}
-
-	return r.client.Del(ctx, roomFileKey).Err()
-}
-
 func (r *fileRepository) GetOrphanedFiles(ctx context.Context) ([]*model.File, error) {
 	fileIDs, err := r.client.SMembers(ctx, "files").Result()
 	if err != nil {
@@ -128,7 +116,7 @@ func (r *fileRepository) GetOrphanedFiles(ctx context.Context) ([]*model.File, e
 		// The file is orphaned only if the room definitely no longer exists;
 		// transient errors must not cause files to be deleted.
 		_, err = r.roomRepository.GetByID(ctx, file.RoomID)
-		if errors.Is(err, redis.Nil) {
+		if errors.Is(err, repository.ErrNotFound) {
 			orphanedFiles = append(orphanedFiles, file)
 		}
 	}
