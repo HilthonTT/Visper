@@ -7,89 +7,87 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-// The menu is a command palette drawn over the current page, and the help
-// screen is an overlay listing every shortcut.
+// The menu is a command palette drawn over the current page.
 
 type menuState struct {
 	open   bool
 	cursor int
-	help   bool
+	// help is the shortcut overlay (see help.go), opened from the menu or "?".
+	help bool
 }
 
+// menuItem is a palette entry; page is the page it opens, or noPage.
 type menuItem struct {
 	key   string
 	label string
 	desc  string
+	page  page
 }
+
+// noPage marks a menu item that runs an action instead of opening a page.
+const noPage page = -1
 
 var menuItems = []menuItem{
-	{"n", "New room", "start an encrypted room"},
-	{"j", "Join room", "use a shared code"},
-	{"f", "FAQ", "how Visper works"},
-	{"s", "Settings", "pick your companion"},
-	{"?", "Help", "all shortcuts"},
-	{"q", "Quit", "leave Visper"},
+	{"n", "New room", "start an encrypted room", newRoomPage},
+	{"j", "Join room", "use a shared code", joinRoomPage},
+	{"f", "FAQ", "how Visper works", faqPage},
+	{"s", "Settings", "pick your companion", settingsPage},
+	{"?", "Help", "all shortcuts", noPage},
+	{"q", "Quit", "leave Visper", noPage},
 }
 
-func (m model) MenuSwitch() (model, tea.Cmd) {
+// openMenu opens the palette with the current page highlighted.
+func (m model) openMenu() (model, tea.Cmd) {
 	m.state.menu.open = true
 	m.state.menu.cursor = 0
 	for i, it := range menuItems {
-		if (it.key == "n" && m.page == newRoomPage) || (it.key == "j" && m.page == joinRoomPage) ||
-			(it.key == "f" && m.page == faqPage) || (it.key == "s" && m.page == settingsPage) {
+		if it.page == m.page {
 			m.state.menu.cursor = i
 		}
 	}
 	return m, nil
 }
 
-func (m model) MenuUpdate(msg tea.KeyPressMsg) (model, tea.Cmd) {
+func (m model) menuUpdate(msg tea.KeyPressMsg) (model, tea.Cmd) {
+	n := len(menuItems)
 	switch msg.String() {
 	case "esc", "m":
 		m.state.menu.open = false
 		return m, nil
 	case "up", "k", "shift+tab":
-		m.state.menu.cursor = (m.state.menu.cursor - 1 + len(menuItems)) % len(menuItems)
+		m.state.menu.cursor = (m.state.menu.cursor - 1 + n) % n
 		return m, nil
 	case "down", "tab":
-		m.state.menu.cursor = (m.state.menu.cursor + 1) % len(menuItems)
+		m.state.menu.cursor = (m.state.menu.cursor + 1) % n
 		return m, nil
 	case "enter", "space":
-		return m.runMenuItem(menuItems[m.state.menu.cursor].key)
+		return m.runMenuItem(menuItems[m.state.menu.cursor])
 	}
 	for _, it := range menuItems {
 		if msg.String() == it.key {
-			return m.runMenuItem(it.key)
+			return m.runMenuItem(it)
 		}
 	}
 	return m, nil
 }
 
-func (m model) runMenuItem(k string) (model, tea.Cmd) {
+func (m model) runMenuItem(it menuItem) (model, tea.Cmd) {
 	m.state.menu.open = false
-	switch k {
-	case "n":
-		return m.NewRoomSwitch()
-	case "j":
-		return m.JoinRoomSwitch()
-	case "f":
-		return m.FaqSwitch()
-	case "s":
-		return m.SettingsSwitch()
+	switch it.key {
 	case "?":
 		m.state.menu.help = true
 		return m, nil
 	case "q":
-		return m, tea.Sequence(m.cleanupCmd, tea.Quit)
+		return m, m.quit()
 	}
-	return m, nil
+	return m.gotoPage(it.page)
 }
 
-func (m model) MenuView() string {
+func (m model) menuView() string {
 	width := min(44, m.viewportWidth-4)
 	inner := width - 4
 
-	var rows []string
+	rows := make([]string, 0, len(menuItems))
 	for i, it := range menuItems {
 		k := m.theme.Key().Width(2).Render(it.key)
 		label := m.theme.TextAccent().Render(it.label)
@@ -107,8 +105,8 @@ func (m model) MenuView() string {
 		}
 	}
 
-	title := m.LogoView() + m.theme.TextSubtle().Render("  menu")
-	hints := m.keyHints([]footerCommand{{"↑↓", "move"}, {"enter", "open"}, {"esc", "close"}}, inner)
+	title := m.logoView() + m.theme.TextSubtle().Render("  menu")
+	hints := m.keyHints([]keyHint{{"↑↓", "move"}, {"enter", "open"}, {"esc", "close"}}, inner)
 
 	return m.theme.Base().
 		Border(lipgloss.RoundedBorder()).
@@ -116,69 +114,4 @@ func (m model) MenuView() string {
 		Padding(1, 1).
 		Width(width).
 		Render(lipgloss.JoinVertical(lipgloss.Left, title, "", strings.Join(rows, "\n"), "", hints))
-}
-
-type helpSection struct {
-	title string
-	keys  []footerCommand
-}
-
-var helpSections = []helpSection{
-	{"Anywhere", []footerCommand{
-		{"tab / ←→", "switch page"},
-		{"n j f s", "new · join · faq · settings"},
-		{"m", "menu"},
-		{"?", "this help"},
-		{"ctrl+c", "quit"},
-	}},
-	{"In a room", []footerCommand{
-		{"enter", "send message"},
-		{"pgup/pgdn", "scroll history"},
-		{"ctrl+e", "edit / delete your messages"},
-		{"ctrl+u", "share an image"},
-		{"ctrl+a", "rewrite draft with AI"},
-		{"ctrl+s", "search members"},
-		{"ctrl+p", "QR invite"},
-		{"ctrl+n", "new join code (owner)"},
-		{"ctrl+w", "show / hide companion"},
-		{"ctrl+b", "leave room"},
-	}},
-}
-
-func (m model) HelpView() string {
-	width := min(56, m.viewportWidth-4)
-	inner := width - 4
-
-	keyWidth := 0
-	for _, s := range helpSections {
-		for _, k := range s.keys {
-			keyWidth = max(keyWidth, lipgloss.Width(k.key))
-		}
-	}
-
-	var parts []string
-	for i, s := range helpSections {
-		if i > 0 {
-			parts = append(parts, "")
-		}
-		parts = append(parts, m.theme.TextSecondary().Bold(true).Render(s.title))
-		for _, k := range s.keys {
-			parts = append(parts,
-				m.theme.Key().Width(keyWidth+2).Render(k.key)+m.theme.TextBody().Render(k.value))
-		}
-	}
-	parts = append(parts, "", m.theme.TextSubtle().Render("press any key to close"))
-
-	// Drop lines that don't fit on short terminals.
-	maxLines := max(m.viewportHeight-6, 3)
-	if len(parts) > maxLines {
-		parts = parts[:maxLines]
-	}
-
-	return m.theme.Base().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.theme.Brand()).
-		Padding(1, 1).
-		Width(width).
-		Render(m.theme.Base().Width(inner).Render(strings.Join(parts, "\n")))
 }

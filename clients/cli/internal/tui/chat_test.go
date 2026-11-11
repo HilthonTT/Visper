@@ -19,8 +19,8 @@ func newChatModel(t *testing.T) model {
 	}
 	m := tm.(model)
 	m.client = apisdk.NewClient()
-	m, _ = m.ChatSwitch(&apisdk.RoomResponse{ID: "r", JoinCode: "ABC", ExpiresAt: time.Now().Add(time.Hour)})
-	t.Cleanup(m.clearChatState)
+	m, _ = m.enterChat(&apisdk.RoomResponse{ID: "r", JoinCode: "ABC", ExpiresAt: time.Now().Add(time.Hour)})
+	t.Cleanup(func() { m.clearChat() })
 	return m
 }
 
@@ -32,24 +32,24 @@ func TestChatViewDoesNotPanicAtAnySize(t *testing.T) {
 		tm, _ := m.Update(tea.WindowSizeMsg{Width: sz[0], Height: sz[1]})
 		mm := tm.(model)
 		_ = mm.render()
-		_ = mm.openWarnModalForLeaveRoom().render()
+		_ = mm.openLeaveRoomDialog().render()
 	}
 }
 
 func TestStaleRoomWebSocketMessagesAreDropped(t *testing.T) {
 	m := newChatModel(t)
-	m.state.chat.wsMsgChan = make(chan tea.Msg, 1)
+	m.state.chat.events = make(chan tea.Msg, 1)
 	stale := make(chan tea.Msg)
 
-	tm, _ := m.Update(wsChanMsg{ch: stale, msg: wsDisconnectedMsg{}})
-	if tm.(model).state.notify.open {
+	tm, _ := m.Update(roomEventMsg{ch: stale, msg: roomDisconnectedMsg{}})
+	if tm.(model).state.dialog.open {
 		t.Fatal("disconnect of a previous room's channel opened a modal")
 	}
-	tm, _ = m.Update(wsChanMsg{ch: stale, msg: wsMessageReceivedMsg{message: apisdk.MessageResponse{ID: "x"}}})
+	tm, _ = m.Update(roomEventMsg{ch: stale, msg: messageReceivedMsg{message: apisdk.MessageResponse{ID: "x"}}})
 	if n := len(tm.(model).state.chat.messages); n != 0 {
 		t.Fatalf("message from a previous room was appended (%d messages)", n)
 	}
-	tm, _ = m.Update(wsChanMsg{ch: m.state.chat.wsMsgChan, msg: wsMessageReceivedMsg{message: apisdk.MessageResponse{ID: "y"}}})
+	tm, _ = m.Update(roomEventMsg{ch: m.state.chat.events, msg: messageReceivedMsg{message: apisdk.MessageResponse{ID: "y"}}})
 	if n := len(tm.(model).state.chat.messages); n != 1 {
 		t.Fatalf("current room message not applied (%d messages)", n)
 	}
@@ -57,22 +57,22 @@ func TestStaleRoomWebSocketMessagesAreDropped(t *testing.T) {
 
 func TestEditSelectionSurvivesDeletions(t *testing.T) {
 	m := newChatModel(t)
-	me := *m.userID
+	me := m.userID
 	for _, id := range []string{"a", "b", "c", "d"} {
 		m.state.chat.messages = append(m.state.chat.messages, apisdk.MessageResponse{ID: id, UserID: me})
 	}
-	m.state.chat.editMode = true
-	m.state.chat.selectedMessageIndex = 3 // "d"
+	m.state.chat.edit.active = true
+	m.state.chat.edit.selected = 3 // "d"
 
-	m, _ = m.ChatUpdate(wsMessageDeletedMsg{messageID: "a"})
-	if got := m.state.chat.messages[m.state.chat.selectedMessageIndex].ID; got != "d" {
+	m, _ = m.chatUpdate(messageDeletedMsg{messageID: "a"})
+	if got := m.state.chat.messages[m.state.chat.edit.selected].ID; got != "d" {
 		t.Fatalf("selection moved to %q, want d", got)
 	}
 
 	// An out-of-range selection must not panic when moving up.
-	m.state.chat.selectedMessageIndex = 10
-	if got := m.getPreviousOwnMessageIndex(10); got != 2 {
-		t.Fatalf("getPreviousOwnMessageIndex(10) = %d, want 2", got)
+	m.state.chat.edit.selected = 10
+	if got := m.prevOwnMessage(10); got != 2 {
+		t.Fatalf("prevOwnMessage(10) = %d, want 2", got)
 	}
 }
 
@@ -84,7 +84,7 @@ func TestLongMessagesWrapToViewportWidth(t *testing.T) {
 	long := strings.Repeat("end-to-end encrypted words ", 12)
 	m.state.chat.messages = []apisdk.MessageResponse{{ID: "1", Username: "friend", Content: long}}
 
-	width := m.state.chat.messagesViewport.Width()
+	width := m.state.chat.viewport.Width()
 	out := m.renderMessages()
 	for line := range strings.SplitSeq(out, "\n") {
 		if w := lipgloss.Width(line); w > width {
@@ -108,10 +108,10 @@ func TestChatViewportIsSizedWhenRoomOpens(t *testing.T) {
 	tm, _ = m.Update(tea.WindowSizeMsg{Width: 131, Height: 33})
 	m = tm.(model)
 
-	m, _ = m.ChatSwitch(&apisdk.RoomResponse{ID: "r", JoinCode: "ABC", ExpiresAt: time.Now().Add(time.Hour)})
-	t.Cleanup(m.clearChatState)
+	m, _ = m.enterChat(&apisdk.RoomResponse{ID: "r", JoinCode: "ABC", ExpiresAt: time.Now().Add(time.Hour)})
+	t.Cleanup(func() { m.clearChat() })
 
-	vp := m.state.chat.messagesViewport
+	vp := m.state.chat.viewport
 	if vp.Width() != m.chatCenterWidth() || vp.Height() != m.chatColumnHeight()-4 {
 		t.Fatalf("viewport is %dx%d, want %dx%d", vp.Width(), vp.Height(), m.chatCenterWidth(), m.chatColumnHeight()-4)
 	}
@@ -121,18 +121,16 @@ func TestChatViewportIsSizedWhenRoomOpens(t *testing.T) {
 // already left and joined another, throwing them out of the new room.
 func TestStaleLeaveTimerDoesNotEjectFromNewRoom(t *testing.T) {
 	m := newChatModel(t)
-	old := m.state.chat.wsCtx
-	m.clearChatState()
+	old := m.state.chat.session
+	m = m.clearChat()
 	m.page = newRoomPage
-	m, _ = m.ChatSwitch(&apisdk.RoomResponse{ID: "r2", JoinCode: "DEF", ExpiresAt: time.Now().Add(time.Hour)})
+	m, _ = m.enterChat(&apisdk.RoomResponse{ID: "r2", JoinCode: "DEF", ExpiresAt: time.Now().Add(time.Hour)})
 
-	for _, msg := range []tea.Msg{wsKickTimeoutMsg{ctx: old}, wsRoomDeletedTimeoutMsg{ctx: old}, roomExpirationRedirectMsg{ctx: old}} {
-		tm, _ := m.Update(msg)
-		if mm := tm.(model); mm.page != chatPage || mm.state.chat.roomCode != "DEF" {
-			t.Fatalf("%T from the previous room left the new one", msg)
-		}
+	tm, _ := m.Update(roomClosedMsg{session: old})
+	if mm := tm.(model); mm.page != chatPage || mm.state.chat.roomCode != "DEF" {
+		t.Fatal("a close timer from the previous room left the new one")
 	}
-	tm, _ := m.Update(wsKickTimeoutMsg{ctx: m.state.chat.wsCtx})
+	tm, _ = m.Update(roomClosedMsg{session: m.state.chat.session})
 	if tm.(model).page == chatPage {
 		t.Fatal("kick timeout of the current room was ignored")
 	}
@@ -142,7 +140,7 @@ func TestStaleLeaveTimerDoesNotEjectFromNewRoom(t *testing.T) {
 func TestUploadFromPreviousRoomIsIgnored(t *testing.T) {
 	m := newChatModel(t)
 	m.state.chat.uploading = true
-	m, cmd := m.ChatUpdate(fileUploadResultMsg{fileURL: "https://x/a.png", session: context.Background()})
+	m, cmd := m.chatUpdate(uploadResultMsg{fileURL: "https://x/a.png", session: context.Background()})
 	if cmd != nil || !m.state.chat.uploading {
 		t.Fatal("upload result from another session was applied")
 	}
@@ -151,7 +149,7 @@ func TestUploadFromPreviousRoomIsIgnored(t *testing.T) {
 // Rooms without an expiry (zero expires_at) used to "expire" after a second.
 func TestRoomWithoutExpiryHasNoCountdown(t *testing.T) {
 	m := newChatModel(t)
-	m.state.chat.expiresAt = time.Time{}
+	m.state.chat.expiry.expiresAt = time.Time{}
 	if m.startExpirationCountdown() != nil {
 		t.Fatal("countdown started for a room that never expires")
 	}
@@ -159,29 +157,29 @@ func TestRoomWithoutExpiryHasNoCountdown(t *testing.T) {
 
 func TestMemberSearchSurvivesMembershipChanges(t *testing.T) {
 	m := newChatModel(t)
-	m.state.chat.participants = []apisdk.UserResponse{
+	m.state.chat.members.list = []apisdk.UserResponse{
 		{ID: "1", Username: "alice"}, {ID: "2", Username: "carol"}, {ID: "3", Username: "bob"}, {ID: "4", Username: "dave"},
 	}
-	m.state.chat.searchActive = true
-	m.state.chat.searchInput.SetValue("bob")
+	m.state.chat.members.searching = true
+	m.state.chat.members.search.SetValue("bob")
 
 	// Search ran on the 4-member snapshot; carol leaves before it returns.
-	res := m.searchParticipants("bob")()
-	m, _ = m.ChatUpdate(wsMemberLeftMsg{userID: "2", username: "carol"})
-	m, _ = m.ChatUpdate(res)
-	if f := m.state.chat.filteredIndices; len(f) != 1 || m.state.chat.participants[f[0]].ID != "3" {
+	res := m.searchMembers("bob")()
+	m, _ = m.chatUpdate(memberLeftMsg{userID: "2", username: "carol"})
+	m, _ = m.chatUpdate(res)
+	if f := m.state.chat.members.filtered; len(f) != 1 || m.state.chat.members.list[f[0]].ID != "3" {
 		t.Fatalf("filter = %v, want only bob", f)
 	}
 
 	// Another member leaving keeps the filter on bob.
-	m, _ = m.ChatUpdate(wsMemberLeftMsg{userID: "1", username: "alice"})
-	if f := m.state.chat.filteredIndices; len(f) != 1 || m.state.chat.participants[f[0]].ID != "3" {
+	m, _ = m.chatUpdate(memberLeftMsg{userID: "1", username: "alice"})
+	if f := m.state.chat.members.filtered; len(f) != 1 || m.state.chat.members.list[f[0]].ID != "3" {
 		t.Fatalf("filter after leave = %v, want only bob", f)
 	}
 
 	// A result for an outdated query is dropped.
-	m, _ = m.ChatUpdate(participantSearchResultMsg{query: "da", ids: []string{"4"}})
-	if f := m.state.chat.filteredIndices; len(f) != 1 || m.state.chat.participants[f[0]].ID != "3" {
+	m, _ = m.chatUpdate(memberSearchResultMsg{query: "da", ids: []string{"4"}})
+	if f := m.state.chat.members.filtered; len(f) != 1 || m.state.chat.members.list[f[0]].ID != "3" {
 		t.Fatalf("stale result applied: %v", f)
 	}
 }
@@ -203,7 +201,7 @@ func TestQRCodeFollowsNewJoinCode(t *testing.T) {
 	room := *m.state.chat.room
 	room.QRCodeURL = "https://visper.example/?joinCode=ABC&secureCode=s3"
 	m.state.chat.room = &room
-	m, _ = m.ChatUpdate(wsRoomUpdatedMsg{joinCode: "NEW"})
+	m, _ = m.chatUpdate(roomUpdatedMsg{joinCode: "NEW"})
 	if got := m.state.chat.room.QRCodeURL; !strings.Contains(got, "joinCode=NEW") || !strings.Contains(got, "secureCode=s3") {
 		t.Fatalf("QR URL = %q", got)
 	}

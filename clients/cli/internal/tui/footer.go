@@ -1,26 +1,28 @@
 package tui
 
-import (
-	"charm.land/lipgloss/v2"
-)
+import "charm.land/lipgloss/v2"
 
-type footerCommand struct {
-	key   string
-	value string
-}
+// The footer shows the error banner, if any, and the key hints of the
+// tabbed pages.
 
 type footerState struct {
-	commands []footerCommand
+	// hints are the current page's own hints, shown before the global ones.
+	hints []keyHint
 }
 
-// globalCommands are the hints shown after the page's own ones.
-var globalCommands = []footerCommand{
+// globalHints are the hints shown after the page's own ones.
+var globalHints = []keyHint{
 	{"tab", "next page"},
 	{"m", "menu"},
 	{"?", "help"},
 }
 
-func (m model) FooterView() string {
+func (m model) setFooterHints(hints ...keyHint) model {
+	m.state.footer.hints = hints
+	return m
+}
+
+func (m model) footerView() string {
 	width := m.widthContainer
 
 	var errorBanner string
@@ -35,18 +37,17 @@ func (m model) FooterView() string {
 			Render(text+"\n"+dismiss) + "\n"
 	}
 
-	badge := m.theme.TextSuccess().Render("●") + m.theme.TextSubtle().Render(" e2e encrypted")
-	if m.size != large {
-		badge = ""
+	var badge string
+	if m.size == large {
+		badge = m.theme.TextSuccess().Render("●") + m.theme.TextSubtle().Render(" e2e encrypted")
 	}
 
-	global := globalCommands
+	global := globalHints
 	if m.page == joinRoomPage {
 		// Letters go to the code field here.
-		global = []footerCommand{{"tab", "next page"}}
+		global = []keyHint{{"tab", "next page"}}
 	}
-	cmds := append(append([]footerCommand{}, m.state.footer.commands...), global...)
-	hints := m.keyHints(cmds, width-lipgloss.Width(badge)-2)
+	hints := m.keyHints(append(append([]keyHint{}, m.state.footer.hints...), global...), width-lipgloss.Width(badge)-2)
 
 	return errorBanner + lipgloss.JoinVertical(
 		lipgloss.Left,

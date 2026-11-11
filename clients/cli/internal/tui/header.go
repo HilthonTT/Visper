@@ -1,92 +1,91 @@
 package tui
 
 import (
-	"errors"
+	"slices"
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 )
 
+// The header is the logo and the page tabs above the tabbed pages.
+
 type tab struct {
 	page  page
-	key   string
+	key   key.Binding
 	label string
 }
 
 var tabs = []tab{
-	{newRoomPage, "n", "New room"},
-	{joinRoomPage, "j", "Join room"},
-	{faqPage, "f", "FAQ"},
-	{settingsPage, "s", "Settings"},
+	{newRoomPage, keys.NewRoomPage, "New room"},
+	{joinRoomPage, keys.JoinRoomPage, "Join room"},
+	{faqPage, keys.FaqPage, "FAQ"},
+	{settingsPage, keys.SettingsPage, "Settings"},
 }
 
-func (m model) HeaderUpdate(msg tea.Msg) (model, tea.Cmd) {
+// headerUpdate handles the page navigation keys of the tabbed pages.
+func (m model) headerUpdate(msg tea.Msg) (model, tea.Cmd) {
 	if m.page == chatPage || m.page == splashPage {
 		return m, nil
 	}
-
-	msg2, ok := msg.(tea.KeyPressMsg)
+	k, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
 	}
 
 	// tab / shift+tab cycle the pages everywhere, including the join page.
-	switch msg2.String() {
-	case "tab":
-		return m.navigateToPage(1)
-	case "shift+tab":
-		return m.navigateToPage(-1)
+	switch {
+	case key.Matches(k, keys.NextTab):
+		return m.cyclePage(1)
+	case key.Matches(k, keys.PrevTab):
+		return m.cyclePage(-1)
 	}
 
 	// The join page has a focused text input: letters and arrows belong to
 	// it, not to the page shortcuts.
-	if m.page == joinRoomPage && (len(msg2.Text) > 0 || msg2.Code == tea.KeyLeft || msg2.Code == tea.KeyRight) {
+	if m.page == joinRoomPage && (len(k.Text) > 0 || k.Code == tea.KeyLeft || k.Code == tea.KeyRight) {
 		return m, nil
 	}
 
 	switch {
-	case key.Matches(msg2, keys.Left):
-		return m.navigateToPage(-1)
-	case key.Matches(msg2, keys.Right):
-		return m.navigateToPage(1)
-	case key.Matches(msg2, keys.NewRoomPage):
-		if m.page != newRoomPage {
-			return m.NewRoomSwitch()
-		}
-	case key.Matches(msg2, keys.JoinRoomPage):
-		if m.page != joinRoomPage {
-			return m.JoinRoomSwitch()
-		}
-	case key.Matches(msg2, keys.FaqPage):
-		if m.page != faqPage {
-			return m.FaqSwitch()
-		}
-	case key.Matches(msg2, keys.SettingsPage):
-		if m.page != settingsPage {
-			return m.SettingsSwitch()
+	case key.Matches(k, keys.PrevPage):
+		return m.cyclePage(-1)
+	case key.Matches(k, keys.NextPage):
+		return m.cyclePage(1)
+	}
+	for _, t := range tabs {
+		if key.Matches(k, t.key) && m.page != t.page {
+			return m.gotoPage(t.page)
 		}
 	}
-
 	return m, nil
 }
 
-func (m model) HeaderView() string {
+// cyclePage moves direction tabs from the current page, wrapping around.
+func (m model) cyclePage(direction int) (model, tea.Cmd) {
+	i := slices.IndexFunc(tabs, func(t tab) bool { return t.page == m.page })
+	if i < 0 {
+		return m, nil
+	}
+	next := (i + direction + len(tabs)) % len(tabs)
+	return m.gotoPage(tabs[next].page)
+}
+
+func (m model) headerView() string {
 	width := m.widthContainer
 
 	var items []string
 	for _, t := range tabs {
-		if !m.tabVisible(t.page) {
-			continue
+		if m.tabVisible(t.page) {
+			items = append(items, m.tabView(t, m.page == t.page))
 		}
-		items = append(items, m.renderTab(t, m.page == t.page))
 	}
-	left := m.LogoView() + "  " + lipgloss.JoinHorizontal(lipgloss.Top, items...)
+	left := m.logoView() + "  " + lipgloss.JoinHorizontal(lipgloss.Top, items...)
 
 	var right string
 	switch m.size {
 	case large:
-		if m.state.notification.wsConn != nil {
+		if m.state.notification.conn != nil {
 			right = m.theme.TextSuccess().Render("●") + m.theme.TextBody().Render(" online")
 		} else {
 			right = m.theme.TextSubtle().Render("○ offline")
@@ -116,56 +115,11 @@ func (m model) tabVisible(p page) bool {
 	}
 }
 
-func (m model) renderTab(t tab, active bool) string {
+func (m model) tabView(t tab, active bool) string {
 	if active {
 		return m.theme.Pill(m.theme.Brand(), m.theme.OnBrand()).Render(t.label)
 	}
 	return m.theme.Base().Padding(0, 1).Render(
-		m.theme.TextSubtle().Render(t.key) + " " + m.theme.TextBody().Render(t.label),
+		m.theme.TextSubtle().Render(t.key.Help().Key) + " " + m.theme.TextBody().Render(t.label),
 	)
-}
-
-func (m model) getNavigablePages() []page {
-	pages := make([]page, len(tabs))
-	for i, t := range tabs {
-		pages[i] = t.page
-	}
-	return pages
-}
-
-func (m model) getCurrentPageIndex() (int, error) {
-	pages := m.getNavigablePages()
-	for i, p := range pages {
-		if p == m.page {
-			return i, nil
-		}
-	}
-	return -1, errors.New("page not found")
-}
-
-func (m model) navigateToPage(direction int) (model, tea.Cmd) {
-	currentIndex, err := m.getCurrentPageIndex()
-	if err != nil {
-		return m, nil
-	}
-
-	pages := m.getNavigablePages()
-	newIndex := (currentIndex + direction + len(pages)) % len(pages)
-	return m.switchTo(pages[newIndex])
-}
-
-// switchTo opens a top-level page.
-func (m model) switchTo(p page) (model, tea.Cmd) {
-	switch p {
-	case newRoomPage:
-		return m.NewRoomSwitch()
-	case joinRoomPage:
-		return m.JoinRoomSwitch()
-	case faqPage:
-		return m.FaqSwitch()
-	case settingsPage:
-		return m.SettingsSwitch()
-	default:
-		return m, nil
-	}
 }

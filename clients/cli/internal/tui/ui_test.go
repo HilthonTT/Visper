@@ -54,9 +54,9 @@ func sized(t *testing.T, w, h int) model {
 func TestTabPagesFitTheWindow(t *testing.T) {
 	for _, sz := range [][2]int{{140, 40}, {100, 30}, {80, 24}, {60, 20}, {40, 14}} {
 		m := sized(t, sz[0], sz[1])
-		m, _ = m.NewRoomSwitch()
+		m, _ = m.gotoNewRoom()
 		for _, p := range []page{newRoomPage, joinRoomPage, faqPage, settingsPage} {
-			m, _ = m.switchTo(p)
+			m, _ = m.gotoPage(p)
 			out := m.render()
 			if h := lipgloss.Height(out); h > sz[1] {
 				t.Errorf("%dx%d page %d: %d lines tall", sz[0], sz[1], p, h)
@@ -73,7 +73,7 @@ func TestTabPagesFitTheWindow(t *testing.T) {
 
 func TestTabAndArrowsCyclePages(t *testing.T) {
 	m := sized(t, 120, 40)
-	m, _ = m.NewRoomSwitch()
+	m, _ = m.gotoNewRoom()
 	m = press(m, "tab")
 	if m.page != joinRoomPage {
 		t.Fatalf("tab went to page %d, want join", m.page)
@@ -101,7 +101,7 @@ func TestTabAndArrowsCyclePages(t *testing.T) {
 
 func TestMenuPalette(t *testing.T) {
 	m := sized(t, 120, 40)
-	m, _ = m.NewRoomSwitch()
+	m, _ = m.gotoNewRoom()
 	m = press(m, "m")
 	if !m.state.menu.open {
 		t.Fatal("m did not open the menu")
@@ -124,7 +124,7 @@ func TestMenuPalette(t *testing.T) {
 
 func TestFaqAccordionWraps(t *testing.T) {
 	m := sized(t, 120, 40)
-	m, _ = m.FaqSwitch()
+	m, _ = m.gotoFaq()
 	m = press(m, "up")
 	if m.state.faq.cursor != len(m.faqs)-1 {
 		t.Fatalf("up from the first question selected %d", m.state.faq.cursor)
@@ -137,22 +137,22 @@ func TestFaqAccordionWraps(t *testing.T) {
 
 func TestConfirmDialogFocus(t *testing.T) {
 	m := newChatModel(t)
-	m = m.openNewJoinCodeModal()
+	m = m.openNewJoinCodeDialog()
 	m.state.chat.isRoomOwner = true
 
 	// ← → move between the buttons; enter on "Cancel" closes without acting.
 	m = press(m, "right")
-	if m.state.notify.focus != 1 {
-		t.Fatalf("focus = %d after toggle, want 1", m.state.notify.focus)
+	if m.state.dialog.focus != 1 {
+		t.Fatalf("focus = %d after toggle, want 1", m.state.dialog.focus)
 	}
 	tm, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
 	m = tm.(model)
-	if m.state.notify.open {
+	if m.state.dialog.open {
 		t.Fatal("enter on cancel left the dialog open")
 	}
 	if cmd != nil {
 		if msg := cmd(); msg != nil {
-			if _, ok := msg.(chatRequestFailedMsg); ok {
+			if _, ok := msg.(requestFailedMsg); ok {
 				t.Fatal("enter on cancel sent the request")
 			}
 		}
@@ -161,15 +161,15 @@ func TestConfirmDialogFocus(t *testing.T) {
 
 func TestChatEventsUseToasts(t *testing.T) {
 	m := newChatModel(t)
-	m, _ = m.ChatUpdate(wsMemberJoinedMsg{member: apisdk.UserResponse{ID: "z", Username: "zesty-lynx"}})
-	if m.state.notify.open {
+	m, _ = m.chatUpdate(memberJoinedMsg{member: apisdk.UserResponse{ID: "z", Username: "zesty-lynx"}})
+	if m.state.dialog.open {
 		t.Fatal("a member joining should not block with a dialog")
 	}
 	if !strings.Contains(m.state.toast.text, "zesty-lynx") {
 		t.Fatalf("toast = %q", m.state.toast.text)
 	}
-	m, _ = m.ChatUpdate(chatRequestFailedMsg{action: "send message", err: errTest})
-	if m.state.notify.open || m.state.toast.tone != theme.ToneDanger {
+	m, _ = m.chatUpdate(requestFailedMsg{action: "send message", err: errTest})
+	if m.state.dialog.open || m.state.toast.tone != theme.ToneDanger {
 		t.Fatal("failed request should raise an error toast")
 	}
 	id := m.state.toast.id
@@ -190,7 +190,7 @@ func TestEditModeScrollsToSelection(t *testing.T) {
 	m := newChatModel(t)
 	tm, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
 	m = tm.(model)
-	me := *m.userID
+	me := m.userID
 	now := time.Now()
 	for i := range 30 {
 		m.state.chat.messages = append(m.state.chat.messages, apisdk.MessageResponse{
@@ -199,19 +199,19 @@ func TestEditModeScrollsToSelection(t *testing.T) {
 		})
 	}
 	m = m.refreshMessages()
-	m.state.chat.messagesViewport.GotoBottom()
+	m.state.chat.viewport.GotoBottom()
 
 	m = press(m, "ctrl+e")
-	if !m.state.chat.editMode {
+	if !m.state.chat.edit.active {
 		t.Fatal("ctrl+e did not enter edit mode")
 	}
 	for range 29 {
-		m, _ = m.chatEditModeUpdate(tea.KeyPressMsg{Code: tea.KeyUp})
+		m, _ = m.editModeUpdate(tea.KeyPressMsg{Code: tea.KeyUp})
 	}
-	if m.state.chat.selectedMessageIndex != 0 {
-		t.Fatalf("selected %d, want 0", m.state.chat.selectedMessageIndex)
+	if m.state.chat.edit.selected != 0 {
+		t.Fatalf("selected %d, want 0", m.state.chat.edit.selected)
 	}
-	if !strings.Contains(m.state.chat.messagesViewport.View(), "editing") {
+	if !strings.Contains(m.state.chat.viewport.View(), "editing") {
 		t.Fatal("selected message is not visible in the viewport")
 	}
 }
@@ -230,11 +230,11 @@ func TestChatSidePanelsCollapse(t *testing.T) {
 	}
 	tm, _ := m.Update(tea.WindowSizeMsg{Width: 140, Height: 30})
 	m = tm.(model)
-	m, _ = m.ChatUpdate(tea.KeyPressMsg{Code: 'w', Mod: tea.ModCtrl})
+	m, _ = m.chatUpdate(tea.KeyPressMsg{Code: 'w', Mod: tea.ModCtrl})
 	if m.chatRightWidth() != 0 {
 		t.Fatal("ctrl+w did not hide the companion panel")
 	}
-	if m.state.chat.messagesViewport.Width() != m.chatCenterWidth() {
+	if m.state.chat.viewport.Width() != m.chatCenterWidth() {
 		t.Fatal("viewport not resized after hiding the panel")
 	}
 }
