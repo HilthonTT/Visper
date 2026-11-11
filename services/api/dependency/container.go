@@ -83,7 +83,9 @@ func NewContainer(ctx context.Context) (*Container, error) {
 	c.Config = config.GetConfig()
 
 	// Secure cookies everywhere except development, which may run over HTTP.
-	security.SetSecureCookies(!c.Config.IsDevelopment())
+	// Secure cookies are only sent over HTTPS; marking them Secure on the
+	// plain-HTTP release/compose setup made browsers drop the user cookie.
+	security.SetSecureCookies(c.Config.RequiresHTTPS())
 
 	loggerInstance, err := logger.NewDevelopmentLogger()
 	if err != nil {

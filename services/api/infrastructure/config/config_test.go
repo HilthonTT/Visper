@@ -80,3 +80,12 @@ func TestValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestRequiresHTTPSOnlyInProduction(t *testing.T) {
+	for mode, want := range map[string]bool{"debug": false, "release": false, "production": true} {
+		cfg := &Config{Server: ServerConfig{RunMode: mode}}
+		if got := cfg.RequiresHTTPS(); got != want {
+			t.Errorf("RequiresHTTPS(%q) = %v, want %v", mode, got, want)
+		}
+	}
+}

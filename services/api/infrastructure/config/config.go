@@ -206,6 +206,13 @@ func (c *Config) IsDevelopment() bool {
 	return c.Server.RunMode == "debug" || c.Server.RunMode == "development"
 }
 
+// RequiresHTTPS reports whether plain-HTTP requests are redirected to HTTPS.
+// Only "production" (deployed behind TLS) does this; "release" is gin's quiet
+// mode and is used over plain HTTP, e.g. by docker-compose.
+func (c *Config) RequiresHTTPS() bool {
+	return c.Server.RunMode == "production"
+}
+
 func (c *Config) IsProduction() bool {
 	return c.Server.RunMode == "release" || c.Server.RunMode == "production"
 }

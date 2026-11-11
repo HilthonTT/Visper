@@ -28,10 +28,13 @@ func (c *Container) getServerURL() string {
 		return fmt.Sprintf("%s:%s", strings.TrimRight(domain, "/"), port)
 	}
 
-	// Development: use http
-	scheme := "https"
-	if c.Config.IsDevelopment() {
-		scheme = "http"
+	// Links must use the scheme the API is actually served on. "release" mode
+	// (docker-compose) serves plain HTTP; only "production" sits behind TLS.
+	// Keying this on debug mode made every file link https:// under compose,
+	// so shared images could not be downloaded or previewed.
+	scheme := "http"
+	if c.Config.RequiresHTTPS() {
+		scheme = "https"
 	}
 
 	return fmt.Sprintf("%s://%s:%s", scheme, domain, port)

@@ -29,7 +29,6 @@ tmp/
 dist/
 
 # ── API runtime data ─────────────────────────────────────────
-services/api/infrastructure/config/config-development.yml
 services/api/data/
 services/api/uploads/
 services/api/cmd/**/data/

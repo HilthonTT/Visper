@@ -63,7 +63,7 @@ func (c *Container) SetupRouter() *gin.Engine {
 		Timeout:         5 * time.Second,
 	}))
 
-	if c.Config.IsProduction() {
+	if c.Config.RequiresHTTPS() {
 		router.Use(middlewares.ForceHttps(c.Config))
 	}
 
