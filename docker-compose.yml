@@ -180,6 +180,8 @@ services:
       VISPER_POSTGRES_DBNAME: ${POSTGRES_DB:-visper_db}
       VISPER_REDIS_HOST: redis-master
       VISPER_REDIS_PASSWORD: ${REDIS_PASSWORD:-password}
+      # Only the proxy container (fixed IP below) may set X-Forwarded-For.
+      VISPER_SERVER_TRUSTEDPROXIES: 172.28.0.10
     ports:
       - "5005:5005"
     volumes:
@@ -211,7 +213,8 @@ services:
       - redis-sentinel-2
       - redis-sentinel-3
     networks:
-      - visper-network
+      visper-network:
+        ipv4_address: 172.28.0.10
 
   ai:
     build: ./services/ai
@@ -264,3 +267,9 @@ volumes:
 networks:
   visper-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+          # Dynamic addresses come from 172.28.1.x, so the proxy's fixed
+          # 172.28.0.10 (trusted by the api) is never handed to another container.
+          ip_range: 172.28.1.0/24

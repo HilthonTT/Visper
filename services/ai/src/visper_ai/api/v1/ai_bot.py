@@ -15,6 +15,7 @@ from ...core.ai.enhancement_service import EnhancementStyle, EnhancementTone, Te
 from ...core.ai.ollama_client import OllamaClient
 from ...core.config import settings
 from ...core.utils.cache import async_get_redis
+from ...core.utils.webhook import WebhookURLError, validate_webhook_url
 from ...schemas.ai_bot import (
     AsyncEnhanceRequest,
     AsyncEnhanceResponse,
@@ -178,8 +179,14 @@ async def _notify_webhook(callback_url: str | None, payload: dict) -> None:
     if not callback_url:
         return
     try:
-        async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT) as client:
+        # Re-check right before sending: the host's DNS may have changed since the
+        # request was accepted (DNS rebinding). Redirects stay disabled so a public
+        # URL cannot bounce the request to an internal one.
+        await validate_webhook_url(callback_url, allow_private=settings.WEBHOOK_ALLOW_PRIVATE_NETWORKS)
+        async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT, follow_redirects=False) as client:
             await client.post(callback_url, json=payload)
+    except WebhookURLError as e:
+        logger.warning(f"Refused to call webhook: {e}")
     except httpx.HTTPError as e:
         logger.warning(f"Failed to call webhook: {e}")
 
@@ -328,6 +335,13 @@ async def enhance_message_async(
     Optional webhook: Provide a callback_url to receive a POST request when enhancement completes.
     """
     user_id = user["id"]
+    callback_url = str(req.callback_url) if req.callback_url else None
+
+    if callback_url:
+        try:
+            await validate_webhook_url(callback_url, allow_private=settings.WEBHOOK_ALLOW_PRIVATE_NETWORKS)
+        except WebhookURLError as e:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(e)) from e
 
     # Generate task ID
     task_id = str(uuid.uuid4())
@@ -351,7 +365,7 @@ async def enhance_message_async(
         message=req.message,
         style=req.style,
         tone=req.tone,
-        callback_url=str(req.callback_url) if req.callback_url else None,
+        callback_url=callback_url,
         created_at=created_at,
     )
 

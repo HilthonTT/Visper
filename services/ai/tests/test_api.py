@@ -158,3 +158,24 @@ async def test_openapi_renders(client):
     response = await client.get("/openapi.json")
     assert response.status_code == 200
     assert "/api/v1/ai/enhance" in response.json()["paths"]
+
+
+@pytest.mark.parametrize(
+    "callback_url",
+    [
+        "http://127.0.0.1:6379/",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://10.0.0.5/hook",
+        "http://[::1]/hook",
+        "http://[::ffff:127.0.0.1]/hook",
+    ],
+)
+async def test_async_enhance_rejects_internal_callback_urls(client, fake_redis, callback_url):
+    await seed_user(fake_redis, USER_ID)
+    response = await client.post(
+        "/api/v1/ai/enhance/async",
+        json={"message": "hello there", "callback_url": callback_url},
+        headers={"X-User-ID": USER_ID},
+    )
+    assert response.status_code == 422
+    assert "public" in response.text

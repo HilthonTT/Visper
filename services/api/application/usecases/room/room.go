@@ -2,6 +2,7 @@ package room
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"log"
@@ -26,9 +27,12 @@ type RoomUseCase interface {
 	GetByJoinCode(ctx context.Context, joinCode string) (*model.Room, error)
 	Delete(ctx context.Context, id string, userID string) error
 	JoinRoom(ctx context.Context, roomID string, user model.User) error
+	JoinRoomWithCodes(ctx context.Context, roomID, joinCode, secureCode string, user model.User) error
 	LeaveRoom(ctx context.Context, roomID string, userID string) error
 	IsUserInRoom(ctx context.Context, roomID string, userID string) (bool, error)
 	KickMember(ctx context.Context, roomID, userID, requesterID string) error
+	// ExpireRooms deletes every room whose expiry has passed and returns how many it removed.
+	ExpireRooms(ctx context.Context) (int, error)
 }
 
 type roomUseCase struct {
@@ -72,7 +76,7 @@ func (uc *roomUseCase) GetByJoinCodeWithSecureToken(ctx context.Context, joinCod
 				return nil, fmt.Errorf("room has expired")
 			}
 
-			if room.SecureCode != secureCode {
+			if !codesEqual(room.SecureCode, secureCode) {
 				uc.logger.Warn("invalid secure token provided", zap.String("joinCode", joinCode))
 				return nil, fmt.Errorf("invalid secure token")
 			}
@@ -341,6 +345,35 @@ func (uc *roomUseCase) JoinRoom(ctx context.Context, roomID string, user model.U
 	return nil
 }
 
+// JoinRoomWithCodes joins a room by ID, but only for callers who know both
+// its join code and its secure code. A room ID alone is not a credential:
+// it appears in URLs, logs and events.
+func (uc *roomUseCase) JoinRoomWithCodes(ctx context.Context, roomID, joinCode, secureCode string, user model.User) error {
+	if joinCode == "" || secureCode == "" {
+		return fmt.Errorf("invalid join code or secure token")
+	}
+
+	room, err := uc.GetByID(ctx, roomID)
+	if err != nil {
+		return err
+	}
+
+	// Check both before failing so the response does not reveal which one was wrong.
+	joinOK := codesEqual(room.JoinCode, joinCode)
+	secureOK := codesEqual(room.SecureCode, secureCode)
+	if !joinOK || !secureOK {
+		uc.logger.Warn("join by room ID with invalid codes", zap.String("roomID", roomID), zap.String("userID", user.ID))
+		return fmt.Errorf("invalid join code or secure token")
+	}
+
+	return uc.JoinRoom(ctx, roomID, user)
+}
+
+// codesEqual compares room secrets in constant time.
+func codesEqual(expected, provided string) bool {
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) == 1
+}
+
 func (uc *roomUseCase) LeaveRoom(ctx context.Context, roomID string, userID string) error {
 	if roomID == "" || userID == "" {
 		return fmt.Errorf("room ID and user ID cannot be empty")
@@ -383,6 +416,26 @@ func (uc *roomUseCase) loadRoom(ctx context.Context, id string) (*model.Room, er
 		return nil, fmt.Errorf("failed to get room: %w", err)
 	}
 	return room, nil
+}
+
+func (uc *roomUseCase) ExpireRooms(ctx context.Context) (int, error) {
+	rooms, err := uc.repository.GetAll(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to list rooms: %w", err)
+	}
+
+	expired := 0
+	for _, room := range rooms {
+		if !uc.isRoomExpired(room) {
+			continue
+		}
+		if err := uc.repository.Delete(ctx, room.ID); err != nil {
+			uc.logger.Error("failed to delete expired room", zap.Error(err), zap.String("roomID", room.ID))
+			continue
+		}
+		expired++
+	}
+	return expired, nil
 }
 
 func (uc *roomUseCase) isRoomExpired(room *model.Room) bool {

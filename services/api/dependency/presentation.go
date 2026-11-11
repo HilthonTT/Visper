@@ -51,6 +51,12 @@ func (c *Container) SetupRouter() *gin.Engine {
 
 	router := gin.Default()
 
+	// gin trusts X-Forwarded-For from every peer by default, which would let
+	// any client pick its own IP and dodge the per-IP rate limiter.
+	if err := router.SetTrustedProxies(c.Config.Server.TrustedProxyList()); err != nil {
+		c.Logger.Fatal("invalid server.trustedProxies", zap.Error(err))
+	}
+
 	router.Use(sentrygin.New(sentrygin.Options{
 		Repanic:         true,
 		WaitForDelivery: false,
@@ -78,8 +84,6 @@ func (c *Container) SetupRouter() *gin.Engine {
 func (c *Container) registerAPIRoutes(router *gin.Engine) {
 	v1 := router.Group("/api/v1")
 	{
-		// The user middleware must run before the rate limiter: the limiter
-		// keys on the user and silently lets requests through without one.
 		v1.Use(middlewares.UserMiddleware(c.UserUC, c.Logger))
 		v1.Use(middlewares.RateLimiterMiddleware(cache.GetRedis(), c.Logger, middlewares.ModerateRateLimiterConfig()))
 		v1.Use(middlewares.ETagMiddleware(c.ETagStore))
@@ -125,6 +129,9 @@ func (c *Container) registerObservabilityRoutes(router *gin.Engine) {
 func (c *Container) Shutdown() error {
 	c.Logger.Info("Shutting down dependencies...")
 
+	if c.RoomExpiryJob != nil {
+		c.RoomExpiryJob.Stop()
+	}
 	if c.FileCleanupJob != nil {
 		c.FileCleanupJob.Stop()
 	}

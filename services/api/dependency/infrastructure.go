@@ -82,6 +82,7 @@ func (c *Container) initInfrastructure() error {
 
 func (c *Container) initBackgroundJobs() {
 	c.FileCleanupJob = jobs.NewFileCleanupJob(c.FileUC, c.Logger, 6*time.Hour)
+	c.RoomExpiryJob = jobs.NewRoomExpiryJob(c.RoomUC, c.FileUC, c.Logger, time.Minute)
 
 	go func() {
 		// Give the server a moment to come up before the first cleanup run.
@@ -91,6 +92,7 @@ func (c *Container) initBackgroundJobs() {
 			return
 		}
 		c.Logger.Info("Starting background jobs...")
+		go c.RoomExpiryJob.Start(c.ctx)
 		c.FileCleanupJob.Start(c.ctx)
 	}()
 

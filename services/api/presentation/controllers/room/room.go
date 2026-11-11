@@ -250,10 +250,13 @@ func (c *roomController) JoinRoom(ctx *gin.Context) {
 		user.Username = req.Username
 	}
 
-	if err := c.usecase.JoinRoom(ctx.Request.Context(), roomID, *user); err != nil {
+	if err := c.usecase.JoinRoomWithCodes(ctx.Request.Context(), roomID, req.JoinCode, req.SecureToken, *user); err != nil {
 		status := http.StatusInternalServerError
-		if err.Error() == "room not found" || err.Error() == "room has expired" {
+		switch err.Error() {
+		case "room not found", "room has expired":
 			status = http.StatusNotFound
+		case "invalid join code or secure token":
+			status = http.StatusForbidden
 		}
 		ctx.JSON(status, ErrorResponse{
 			Error:   "join_failed",

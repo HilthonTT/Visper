@@ -3,6 +3,7 @@ package middlewares
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"time"
 
@@ -13,6 +14,11 @@ import (
 )
 
 type RateLimiterConfig struct {
+	// Name namespaces this limiter's Redis keys. Limiters stacked on the same
+	// route (e.g. the API-wide one and the stricter /files one) must not share
+	// counters: otherwise ordinary requests eat the strict budget, and a
+	// strict block locks the client out of the whole API.
+	Name              string
 	RequestsPerWindow int           // Number of requests allowed
 	Window            time.Duration // Time window
 	BlockDuration     time.Duration // How long to block after exceeding limit
@@ -20,6 +26,7 @@ type RateLimiterConfig struct {
 
 func DefaultRateLimiterConfig() RateLimiterConfig {
 	return RateLimiterConfig{
+		Name:              "default",
 		RequestsPerWindow: 150,             // 150 requests
 		Window:            time.Minute,     // per minute
 		BlockDuration:     time.Minute * 5, // block for 5 minutes if exceeded
@@ -40,8 +47,8 @@ redis.call('ZREMRANGEBYSCORE', key, 0, windowStart)
 -- Count current requests in window
 local currentCount = redis.call('ZCARD', key)
 
--- Add current request
-redis.call('ZADD', key, now, now)
+-- Add current request (ARGV[5] is a unique member, so concurrent requests never collapse)
+redis.call('ZADD', key, now, ARGV[5])
 
 -- Set expiry on the key
 redis.call('EXPIRE', key, expiry)
@@ -67,21 +74,20 @@ local ttl = redis.call('TTL', blockKey)
 return {1, ttl}
 `
 
+// RateLimiterMiddleware limits requests per client IP. It deliberately does
+// not key on the user: user IDs come from the client-controlled X-User-ID
+// header, so a fresh ID per request would bypass the limit. The IP comes from
+// gin's ClientIP, which only honours X-Forwarded-For / X-Real-IP from the
+// proxies listed in server.trustedProxies.
 func RateLimiterMiddleware(redisClient *redis.Client, logger *logger.Logger, config RateLimiterConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		user, exists := GetUserFromContext(c)
-		if !exists {
-			// user_middleware handles this
-			c.Next()
-			return
-		}
-
 		ctx := c.Request.Context()
+		clientKey := config.keyPrefix() + "ip:" + c.ClientIP()
 
-		blockKey := fmt.Sprintf("ratelimit:block:%s", user.ID)
+		blockKey := fmt.Sprintf("ratelimit:block:%s", clientKey)
 		blockResult, err := redisClient.Eval(ctx, checkBlockScript, []string{blockKey}).Result()
 		if err != nil {
-			logger.Error("failed to check if user is blocked", zap.Error(err), zap.String("userID", user.ID))
+			logger.Error("failed to check if client is blocked", zap.Error(err), zap.String("client", clientKey))
 			c.Next()
 			return
 		}
@@ -106,9 +112,9 @@ func RateLimiterMiddleware(redisClient *redis.Client, logger *logger.Logger, con
 			return
 		}
 
-		allowed, remaining, resetTime, err := checkRateLimitAtomic(ctx, redisClient, user.ID, config)
+		allowed, remaining, resetTime, err := checkRateLimitAtomic(ctx, redisClient, clientKey, config)
 		if err != nil {
-			logger.Error("failed to check rate limit", zap.Error(err), zap.String("userID", user.ID))
+			logger.Error("failed to check rate limit", zap.Error(err), zap.String("client", clientKey))
 			c.Next()
 			return
 		}
@@ -118,16 +124,15 @@ func RateLimiterMiddleware(redisClient *redis.Client, logger *logger.Logger, con
 		c.Header("X-RateLimit-Reset", fmt.Sprintf("%d", resetTime.Unix()))
 
 		if !allowed {
-			// Block user
-			if err := blockUser(ctx, redisClient, user.ID, config.BlockDuration); err != nil {
-				logger.Error("failed to block user", zap.Error(err), zap.String("userID", user.ID))
+			if err := blockClient(ctx, redisClient, clientKey, config.BlockDuration); err != nil {
+				logger.Error("failed to block client", zap.Error(err), zap.String("client", clientKey))
 			}
 
-			logger.Warn("rate limit exceeded",
-				zap.String("userID", user.ID),
-				zap.String("username", user.Username),
-				zap.String("path", c.Request.URL.Path),
-			)
+			fields := []zap.Field{zap.String("client", clientKey), zap.String("path", c.Request.URL.Path)}
+			if user, ok := GetUserFromContext(c); ok {
+				fields = append(fields, zap.String("userID", user.ID))
+			}
+			logger.Warn("rate limit exceeded", fields...)
 
 			c.Header("Retry-After", fmt.Sprintf("%d", int(config.BlockDuration.Seconds())))
 			c.JSON(http.StatusTooManyRequests, gin.H{
@@ -143,16 +148,18 @@ func RateLimiterMiddleware(redisClient *redis.Client, logger *logger.Logger, con
 	}
 }
 
-func checkRateLimitAtomic(ctx context.Context, client *redis.Client, userID string, config RateLimiterConfig) (allowed bool, remaining int, resetTime time.Time, err error) {
-	key := fmt.Sprintf("ratelimit:%s", userID)
+func checkRateLimitAtomic(ctx context.Context, client *redis.Client, clientKey string, config RateLimiterConfig) (allowed bool, remaining int, resetTime time.Time, err error) {
+	key := fmt.Sprintf("ratelimit:%s", clientKey)
 	now := time.Now()
 
 	result, err := client.Eval(ctx, rateLimitScript,
 		[]string{key},
-		now.UnixNano(),
-		config.Window.Nanoseconds(),
+		// Microseconds stay exact as Lua doubles; nanoseconds (~1.8e18) do not.
+		now.UnixMicro(),
+		config.Window.Microseconds(),
 		config.RequestsPerWindow,
 		int(config.Window.Seconds())+60, // expiry buffer
+		fmt.Sprintf("%d-%d", now.UnixNano(), rand.Uint64()),
 	).Result()
 
 	if err != nil {
@@ -170,7 +177,15 @@ func checkRateLimitAtomic(ctx context.Context, client *redis.Client, userID stri
 	return allowed, remaining, resetTime, nil
 }
 
-func blockUser(ctx context.Context, client *redis.Client, userID string, duration time.Duration) error {
-	key := fmt.Sprintf("ratelimit:block:%s", userID)
+func blockClient(ctx context.Context, client *redis.Client, clientKey string, duration time.Duration) error {
+	key := fmt.Sprintf("ratelimit:block:%s", clientKey)
 	return client.Set(ctx, key, "1", duration).Err()
+}
+
+// keyPrefix scopes Redis keys to this limiter (see RateLimiterConfig.Name).
+func (c RateLimiterConfig) keyPrefix() string {
+	if c.Name == "" {
+		return "default:"
+	}
+	return c.Name + ":"
 }

@@ -31,6 +31,10 @@ type ServerConfig struct {
 	RunMode      string
 	Domain       string
 	FrontEndURL  string
+	// TrustedProxies is a comma-separated list of IPs/CIDRs whose
+	// X-Forwarded-For / X-Real-IP headers are trusted for the client IP.
+	// Empty means trust none and use the TCP peer address.
+	TrustedProxies string
 }
 
 type LoggerConfig struct {
@@ -236,4 +240,16 @@ func (c *Config) GetServerAddress() string {
 
 func (c *Config) GetFrontEndURL() string {
 	return c.Server.FrontEndURL
+}
+
+// TrustedProxyList parses TrustedProxies. It returns nil (trust no proxy)
+// when the setting is empty.
+func (s ServerConfig) TrustedProxyList() []string {
+	var out []string
+	for _, p := range strings.Split(s.TrustedProxies, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

@@ -143,6 +143,10 @@ class AIEnhancementSettings(BaseSettings):
     # Fallback settings
     ENABLE_RULE_BASED_FALLBACK: bool = True
 
+    # Webhooks (callback_url) may only target public addresses unless this is set.
+    # Enable only for local testing: it allows requests into the private network.
+    WEBHOOK_ALLOW_PRIVATE_NETWORKS: bool = False
+
 
 class Settings(
     AppSettings,

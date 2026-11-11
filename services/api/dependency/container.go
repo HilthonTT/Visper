@@ -60,6 +60,7 @@ type Container struct {
 	Storage   *storage.LocalStorage
 
 	FileCleanupJob   *jobs.FileCleanupJob
+	RoomExpiryJob    *jobs.RoomExpiryJob
 	Profiler         *profiler.AdaptiveProfiler
 	DistributedCache *cache.DistributedCache
 

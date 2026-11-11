@@ -192,8 +192,12 @@ func (r *JoinByCodeWithTokenParams) MarshalJSON() ([]byte, error) {
 	return apijson.MarshalRoot(r)
 }
 
+// JoinRoomParams are required to join by room ID: the room's join code and
+// secure token, as for JoinByCodeWithToken.
 type JoinRoomParams struct {
-	Username string `json:"username,omitempty"`
+	JoinCode    string `json:"join_code"`
+	SecureToken string `json:"secure_token"`
+	Username    string `json:"username,omitempty"`
 }
 
 func (r *JoinRoomParams) MarshalJSON() ([]byte, error) {

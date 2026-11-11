@@ -4,6 +4,9 @@ server:
   runMode: "release"
   domain: "localhost"
   frontEndUrl: "http://localhost:3000"
+  # IPs/CIDRs of reverse proxies whose X-Forwarded-For is trusted for the
+  # client IP (rate limiting). Empty: trust none, use the TCP peer address.
+  trustedProxies: ""
 
 logger:
   filePath: "/app/logs/"
