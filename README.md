@@ -19,6 +19,11 @@ TUI, a terminal-style web client, file and image sharing with inline previews,
 and an optional "enhance my message" feature backed by a local
 [Ollama](https://ollama.com) model.
 
+![Joining a Visper room and chatting](docs/assets/demos/chat.gif)
+
+More demos (QR invites, editing, image sharing, AI rewrite):
+**[docs/demos](docs/demos/README.md)**.
+
 ## Quick start
 
 Requires Docker and Go 1.27+.
@@ -44,7 +49,7 @@ services/
   proxy/      load balancer with hierarchical throttling: Go, Prometheus
   ai/         message-enhancement API + arq worker: Python, FastAPI, Ollama
 sdk/go/       typed Go client for the API (used by the CLI)
-docs/         local-development guide
+docs/         local-development guide, demos (+ the VHS tapes that record them)
 ```
 
 The CLI talks to the API through the SDK and, optionally, through the proxy.

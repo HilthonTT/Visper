@@ -61,3 +61,7 @@ clients/web/.vinxi/
 *.png
 !clients/cli/**/embeds/*.png
 !clients/web/public/*.png
+!docs/assets/demos/*.gif
+
+# ── Demo recording scratch (docs/demos/record.sh) ───────────
+docs/demos/.work/
