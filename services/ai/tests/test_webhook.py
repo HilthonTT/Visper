@@ -1,8 +1,10 @@
 import ipaddress
 
+import httpx
 import pytest
 
-from visper_ai.core.utils.webhook import WebhookURLError, is_public_ip, validate_webhook_url
+from visper_ai.core.utils import webhook
+from visper_ai.core.utils.webhook import WebhookURLError, is_public_ip, post_webhook, validate_webhook_url
 
 
 @pytest.mark.parametrize(
@@ -48,3 +50,40 @@ async def test_validate_webhook_url_accepts_public_ip_literal():
 
 async def test_private_networks_can_be_allowed_explicitly():
     await validate_webhook_url("http://127.0.0.1:9000/hook", allow_private=True)
+
+
+async def test_post_webhook_connects_to_the_validated_ip(monkeypatch):
+    """DNS rebinding: a second resolution answering 127.0.0.1 must never be used."""
+    answers = iter([[ipaddress.ip_address("93.184.216.34")], [ipaddress.ip_address("127.0.0.1")]])
+
+    async def fake_resolve(host, port):
+        return next(answers)
+
+    monkeypatch.setattr(webhook, "_resolve", fake_resolve)
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(204)
+
+    await post_webhook(
+        "https://hooks.example.com:8443/cb?x=1",
+        {"status": "completed"},
+        http_timeout=httpx.Timeout(1.0),
+        transport=httpx.MockTransport(handler),
+    )
+
+    (request,) = seen
+    assert str(request.url) == "https://93.184.216.34:8443/cb?x=1"
+    assert request.headers["host"] == "hooks.example.com:8443"
+    assert request.extensions["sni_hostname"] == "hooks.example.com"
+
+
+async def test_post_webhook_refuses_private_resolution(monkeypatch):
+    async def fake_resolve(host, port):
+        return [ipaddress.ip_address("10.0.0.5")]
+
+    monkeypatch.setattr(webhook, "_resolve", fake_resolve)
+    transport = httpx.MockTransport(lambda request: pytest.fail("must not send"))
+    with pytest.raises(WebhookURLError):
+        await post_webhook("http://evil.example/cb", {}, http_timeout=httpx.Timeout(1.0), transport=transport)

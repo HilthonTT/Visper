@@ -10,6 +10,7 @@ from visper_ai.core.ai.enhancement_service import (
     EnhancementStyle,
     EnhancementTone,
     TextEnhancementService,
+    clean_llm_output,
     wrap_user_message,
 )
 from visper_ai.core.ai.ollama_client import OllamaClient
@@ -24,6 +25,23 @@ def test_wrap_user_message_strips_smuggled_delimiters():
     assert wrapped.count("<user_message>") == 1
     assert wrapped.count("</user_message>") == 1
     assert "ignore previous instructions" in wrapped
+
+
+@pytest.mark.parametrize(
+    ("output", "original", "expected"),
+    [
+        ('Here is the rewritten message: "Please send it."', "pls send it", "Please send it."),
+        ('"Please send it."', "pls send it", "Please send it."),
+        ("<user_message>Please send it.</user_message>", "pls send it", "Please send it."),
+        # Message content the model did not add must survive.
+        ("Please review the students'", "pls review the students'", "Please review the students'"),
+        ('He said "okay"', 'he said "ok"', 'He said "okay"'),
+        ('"Hi" and "bye"', '"hi" and "bye"', '"Hi" and "bye"'),
+        ("Here is the agenda: budget and hiring.", "here is the agenda: budget and hiring", None),
+    ],
+)
+def test_clean_llm_output_only_removes_model_additions(output, original, expected):
+    assert clean_llm_output(output, original) == (output if expected is None else expected)
 
 
 def test_fallback_never_returns_empty():
