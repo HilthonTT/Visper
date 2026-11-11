@@ -6,7 +6,7 @@ up and what a good pull request looks like.
 ## Getting set up
 
 1. Fork and clone the repository.
-2. Install the prerequisites listed in the [README](../README.md#prerequisites).
+2. Install the prerequisites listed in the [local development guide](../docs/local-development.md#prerequisites).
 3. Start the infrastructure with `make up`.
 4. Run `make check` once to make sure everything passes before you change anything.
 
@@ -14,7 +14,7 @@ up and what a good pull request looks like.
 
 This is a monorepo: `clients/`, `services/` and `sdk/` each hold independent
 components with their own dependencies; see the
-[architecture table](../README.md#architecture). The Go modules share a
+[repository layout](../README.md#repository-layout). The Go modules share a
 committed `go.work`, so changes to `sdk/go` are picked up by `clients/cli`
 immediately.
 
