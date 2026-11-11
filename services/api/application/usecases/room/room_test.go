@@ -50,7 +50,7 @@ func (f *fakeRoomRepo) GetUsers(context.Context, string) ([]string, error) { ret
 func (f *fakeRoomRepo) Update(context.Context, *model.Room) error          { return nil }
 
 func newTestUseCase(repo *fakeRoomRepo) RoomUseCase {
-	return NewRoomUseCase(repo, nil, &logger.Logger{Log: zap.NewNop()})
+	return NewRoomUseCase(repo, nil, &logger.Logger{Log: zap.NewNop()}, nil)
 }
 
 func TestMissingRoomIsReportedAsNotFound(t *testing.T) {
@@ -127,7 +127,10 @@ func TestExpireRoomsDeletesOnlyExpiredRooms(t *testing.T) {
 		"live":      {ID: "live", CreatedAt: now, Expiry: time.Hour},
 		"no-expiry": {ID: "no-expiry", CreatedAt: now.Add(-48 * time.Hour)},
 	}}
-	uc := newTestUseCase(repo)
+	var notified []string
+	uc := NewRoomUseCase(repo, nil, &logger.Logger{Log: zap.NewNop()}, func(id string) {
+		notified = append(notified, id)
+	})
 
 	n, err := uc.ExpireRooms(context.Background())
 	if err != nil {
@@ -135,5 +138,27 @@ func TestExpireRoomsDeletesOnlyExpiredRooms(t *testing.T) {
 	}
 	if n != 1 || len(repo.deleted) != 1 || repo.deleted[0] != "expired" {
 		t.Fatalf("expired %d, deleted %v; want only \"expired\"", n, repo.deleted)
+	}
+	if len(notified) != 1 || notified[0] != "expired" {
+		t.Fatalf("onExpired got %v; want [expired]", notified)
+	}
+}
+
+// A room found expired on read must also be reported, so that its websocket
+// clients are disconnected.
+func TestLazyExpiryNotifies(t *testing.T) {
+	repo := &fakeRoomRepo{rooms: map[string]*model.Room{
+		"r1": {ID: "r1", CreatedAt: time.Now().Add(-2 * time.Hour), Expiry: time.Hour},
+	}}
+	var notified []string
+	uc := NewRoomUseCase(repo, nil, &logger.Logger{Log: zap.NewNop()}, func(id string) {
+		notified = append(notified, id)
+	})
+
+	if _, err := uc.GetByID(context.Background(), "r1"); err == nil || err.Error() != "room has expired" {
+		t.Fatalf("GetByID: got %v, want \"room has expired\"", err)
+	}
+	if len(notified) != 1 || notified[0] != "r1" {
+		t.Fatalf("onExpired got %v; want [r1]", notified)
 	}
 }

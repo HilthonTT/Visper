@@ -42,15 +42,8 @@ func (r *roomRepository) AddUser(ctx context.Context, roomID string, user model.
 		attribute.String("user.username", user.Username),
 	)
 
-	// Use cache for set operations
-	userKey := fmt.Sprintf("room:%s:users", roomID)
-	if err := r.cache.SAdd(ctx, userKey, user.ID); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to add user to room set")
-		return err
-	}
-
-	// Get room from cache
+	// Check the room first: SADD on a deleted room would recreate its
+	// membership set, which nothing ever removes again.
 	roomKey := fmt.Sprintf("room:%s", roomID)
 	var room model.Room
 	found, err := r.cache.Get(ctx, roomKey, &room)
@@ -68,6 +61,13 @@ func (r *roomRepository) AddUser(ctx context.Context, roomID string, user model.
 	span.SetAttributes(
 		attribute.Bool("room.found", true),
 	)
+
+	userKey := fmt.Sprintf("room:%s:users", roomID)
+	if err := r.cache.SAdd(ctx, userKey, user.ID); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to add user to room set")
+		return err
+	}
 
 	// Check if user already exists in members
 	if room.IsMember(user.ID) {

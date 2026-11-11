@@ -39,17 +39,22 @@ type roomUseCase struct {
 	repository     repository.RoomRepository
 	eventPublisher *events.EventPublisher
 	logger         *logger.Logger
+	onExpired      func(roomID string)
 }
 
+// NewRoomUseCase creates the room use case. onExpired, if not nil, is called
+// with the ID of every expired room after it has been deleted.
 func NewRoomUseCase(
 	repository repository.RoomRepository,
 	eventPublisher *events.EventPublisher,
 	logger *logger.Logger,
+	onExpired func(roomID string),
 ) RoomUseCase {
 	return &roomUseCase{
 		repository:     repository,
 		eventPublisher: eventPublisher,
 		logger:         logger,
+		onExpired:      onExpired,
 	}
 }
 
@@ -71,8 +76,7 @@ func (uc *roomUseCase) GetByJoinCodeWithSecureToken(ctx context.Context, joinCod
 	for _, room := range rooms {
 		if room.JoinCode == joinCode {
 			if uc.isRoomExpired(room) {
-				uc.logger.Info("room has expired, deleting", zap.String("roomID", room.ID))
-				_ = uc.repository.Delete(ctx, room.ID)
+				_ = uc.deleteExpired(ctx, room)
 				return nil, fmt.Errorf("room has expired")
 			}
 
@@ -222,8 +226,7 @@ func (uc *roomUseCase) GetByID(ctx context.Context, id string) (*model.Room, err
 	}
 
 	if uc.isRoomExpired(room) {
-		uc.logger.Info("room has expired, deleting", zap.String("roomID", room.ID))
-		_ = uc.repository.Delete(ctx, room.ID)
+		_ = uc.deleteExpired(ctx, room)
 		return nil, fmt.Errorf("room has expired")
 	}
 
@@ -281,8 +284,7 @@ func (uc *roomUseCase) GetByJoinCode(ctx context.Context, joinCode string) (*mod
 	for _, room := range rooms {
 		if room.JoinCode == joinCode {
 			if uc.isRoomExpired(room) {
-				uc.logger.Info("room has expired, deleting", zap.String("roomID", room.ID))
-				_ = uc.repository.Delete(ctx, room.ID)
+				_ = uc.deleteExpired(ctx, room)
 				return nil, fmt.Errorf("room has expired")
 			}
 			return room, nil
@@ -429,13 +431,28 @@ func (uc *roomUseCase) ExpireRooms(ctx context.Context) (int, error) {
 		if !uc.isRoomExpired(room) {
 			continue
 		}
-		if err := uc.repository.Delete(ctx, room.ID); err != nil {
-			uc.logger.Error("failed to delete expired room", zap.Error(err), zap.String("roomID", room.ID))
+		if err := uc.deleteExpired(ctx, room); err != nil {
 			continue
 		}
 		expired++
 	}
 	return expired, nil
+}
+
+// deleteExpired deletes an expired room and reports it through onExpired so
+// that its live websocket connections are told and closed. Without that,
+// clients stayed connected to (and kept chatting in) a room that no longer
+// existed.
+func (uc *roomUseCase) deleteExpired(ctx context.Context, room *model.Room) error {
+	uc.logger.Info("room has expired, deleting", zap.String("roomID", room.ID))
+	if err := uc.repository.Delete(ctx, room.ID); err != nil {
+		uc.logger.Error("failed to delete expired room", zap.Error(err), zap.String("roomID", room.ID))
+		return err
+	}
+	if uc.onExpired != nil {
+		uc.onExpired(room.ID)
+	}
+	return nil
 }
 
 func (uc *roomUseCase) isRoomExpired(room *model.Room) bool {

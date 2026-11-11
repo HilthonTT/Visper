@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -149,10 +150,32 @@ func (dc *DistributedCache) ZRangeByScore(ctx context.Context, key string, opt *
 	}).Result()
 }
 
-// ZRem removes members from a sorted set
-func (dc *DistributedCache) ZRem(ctx context.Context, key string, members ...any) error {
+// ZRem removes members from a sorted set and returns how many were removed.
+func (dc *DistributedCache) ZRem(ctx context.Context, key string, members ...any) (int64, error) {
 	redisKey := dc.keyPrefix + key
-	return dc.redis.ZRem(ctx, redisKey, members...).Err()
+	return dc.redis.ZRem(ctx, redisKey, members...).Result()
+}
+
+// zReplaceScript swaps a sorted-set member for another one, but only if the
+// old member is still present.
+var zReplaceScript = redis.NewScript(`
+if redis.call('ZREM', KEYS[1], ARGV[1]) == 1 then
+	redis.call('ZADD', KEYS[1], ARGV[3], ARGV[2])
+	return 1
+end
+return 0
+`)
+
+// ZReplace atomically replaces oldMember with newMember (at score) in a sorted
+// set. It reports false, changing nothing, if oldMember is no longer a member.
+func (dc *DistributedCache) ZReplace(ctx context.Context, key, oldMember, newMember string, score float64) (bool, error) {
+	redisKey := dc.keyPrefix + key
+	n, err := zReplaceScript.Run(ctx, dc.redis, []string{redisKey},
+		oldMember, newMember, strconv.FormatFloat(score, 'f', -1, 64)).Int()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }
 
 // ZRemRangeByScore removes members from a sorted set by score range
@@ -183,27 +206,6 @@ func (dc *DistributedCache) SRem(ctx context.Context, key string, members ...any
 func (dc *DistributedCache) SMembers(ctx context.Context, key string) ([]string, error) {
 	redisKey := dc.keyPrefix + key
 	return dc.redis.SMembers(ctx, redisKey).Result()
-}
-
-// Pipeline returns a Redis pipeline for batch operations
-func (dc *DistributedCache) Pipeline() redis.Pipeliner {
-	return dc.redis.Pipeline()
-}
-
-// TxPipeline returns a Redis pipeline wrapped in MULTI/EXEC.
-func (dc *DistributedCache) TxPipeline() redis.Pipeliner {
-	return dc.redis.TxPipeline()
-}
-
-// ExecPipeline executes a pipeline with key prefix handling
-func (dc *DistributedCache) ExecPipeline(ctx context.Context, pipe redis.Pipeliner) error {
-	_, err := pipe.Exec(ctx)
-	return err
-}
-
-// GetRedisKey returns the prefixed Redis key
-func (dc *DistributedCache) GetRedisKey(key string) string {
-	return dc.keyPrefix + key
 }
 
 // Close stops the local cache. The Redis client is shared and owned by the

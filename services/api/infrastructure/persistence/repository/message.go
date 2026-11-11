@@ -3,7 +3,10 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
+	"strconv"
 	"time"
 
 	"github.com/hilthontt/visper/services/api/domain/model"
@@ -14,6 +17,12 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
+
+// maxMemberRaceRetries bounds how often Update/Delete re-read a message that
+// was changed concurrently between reading and writing it.
+const maxMemberRaceRetries = 3
+
+var errConcurrentModification = errors.New("message was modified concurrently, try again")
 
 type messageRepository struct {
 	cache  *cache.DistributedCache
@@ -127,49 +136,46 @@ func (r *messageRepository) Update(ctx context.Context, message *model.Message) 
 
 	key := fmt.Sprintf("room:%s:messages", message.RoomID)
 
-	oldMessage, oldData, err := r.find(ctx, message.RoomID, message.ID)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to get old message")
-		return err
+	// The stored member is replaced only if it is still the version we read:
+	// otherwise an edit racing with a delete resurrected the deleted message,
+	// and two racing edits left two copies of it.
+	for range maxMemberRaceRetries {
+		oldMessage, oldData, err := r.find(ctx, message.RoomID, message.ID)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to get old message")
+			return err
+		}
+
+		message.UpdatedAt = time.Now()
+		message.CreatedAt = oldMessage.CreatedAt
+
+		newData, err := json.Marshal(message)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to marshal new message")
+			return fmt.Errorf("failed to marshal new message: %w", err)
+		}
+
+		span.SetAttributes(
+			attribute.Int("message.old_size_bytes", len(oldData)),
+			attribute.Int("message.new_size_bytes", len(newData)),
+		)
+
+		replaced, err := r.cache.ZReplace(ctx, key, oldData, string(newData), float64(oldMessage.CreatedAt.Unix()))
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to replace message")
+			return fmt.Errorf("failed to update message: %w", err)
+		}
+		if replaced {
+			span.SetStatus(codes.Ok, "message updated successfully")
+			return nil
+		}
 	}
 
-	message.UpdatedAt = time.Now()
-	message.CreatedAt = oldMessage.CreatedAt
-
-	newData, err := json.Marshal(message)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to marshal new message")
-		return fmt.Errorf("failed to marshal new message: %w", err)
-	}
-
-	span.SetAttributes(
-		attribute.Int("message.old_size_bytes", len(oldData)),
-		attribute.Int("message.new_size_bytes", len(newData)),
-	)
-
-	// Use a MULTI/EXEC pipeline so the remove+add is atomic.
-	pipe := r.cache.TxPipeline()
-
-	redisKey := r.cache.GetRedisKey(key)
-	pipe.ZRem(ctx, redisKey, oldData)
-
-	score := float64(oldMessage.CreatedAt.Unix())
-	pipe.ZAdd(ctx, redisKey, redis.Z{
-		Score:  score,
-		Member: newData,
-	})
-
-	err = r.cache.ExecPipeline(ctx, pipe)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to execute pipeline for update")
-		return fmt.Errorf("failed to update message: %w", err)
-	}
-
-	span.SetStatus(codes.Ok, "message updated successfully")
-	return nil
+	span.SetStatus(codes.Error, "message changed concurrently")
+	return errConcurrentModification
 }
 
 func (r *messageRepository) Delete(ctx context.Context, roomID string, messageID string) error {
@@ -183,21 +189,30 @@ func (r *messageRepository) Delete(ctx context.Context, roomID string, messageID
 
 	key := fmt.Sprintf("room:%s:messages", roomID)
 
-	_, data, err := r.find(ctx, roomID, messageID)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to get message for deletion")
-		return err
+	// If the message was edited between find and ZREM, the old member is gone
+	// and nothing is removed; look it up again instead of reporting success.
+	for range maxMemberRaceRetries {
+		_, data, err := r.find(ctx, roomID, messageID)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to get message for deletion")
+			return err
+		}
+
+		removed, err := r.cache.ZRem(ctx, key, data)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to remove message from sorted set")
+			return fmt.Errorf("failed to delete message: %w", err)
+		}
+		if removed > 0 {
+			span.SetStatus(codes.Ok, "message deleted successfully")
+			return nil
+		}
 	}
 
-	if err := r.cache.ZRem(ctx, key, data); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to remove message from sorted set")
-		return fmt.Errorf("failed to delete message: %w", err)
-	}
-
-	span.SetStatus(codes.Ok, "message deleted successfully")
-	return nil
+	span.SetStatus(codes.Error, "message changed concurrently")
+	return errConcurrentModification
 }
 
 func (r *messageRepository) GetByRoom(ctx context.Context, roomID string, limit int64) ([]*model.Message, error) {
@@ -221,28 +236,16 @@ func (r *messageRepository) GetByRoom(ctx context.Context, roomID string, limit 
 
 	span.SetAttributes(attribute.Int("messages.fetched_count", len(results)))
 
-	messages := make([]*model.Message, 0, len(results))
-	unmarshalErrors := 0
-
-	for _, data := range results {
-		var msg model.Message
-		if err := json.Unmarshal([]byte(data), &msg); err != nil {
-			unmarshalErrors++
-			continue
-		}
-		messages = append(messages, &msg)
-	}
+	messages, unmarshalErrors := decodeMessages(results)
 
 	span.SetAttributes(
 		attribute.Int("messages.parsed_count", len(messages)),
 		attribute.Int("messages.unmarshal_errors", unmarshalErrors),
 	)
 
-	// Reverse to get chronological order
-	for i := len(messages)/2 - 1; i >= 0; i-- {
-		opp := len(messages) - 1 - i
-		messages[i], messages[opp] = messages[opp], messages[i]
-	}
+	// Scores only have one-second resolution and Redis orders equal scores by
+	// member bytes (i.e. by message ID), so sort by the precise timestamp.
+	sortChronologically(messages)
 
 	span.SetStatus(codes.Ok, "messages retrieved successfully")
 	return messages, nil
@@ -259,22 +262,73 @@ func (r *messageRepository) GetByRoomAfter(ctx context.Context, roomID string, a
 	)
 
 	key := fmt.Sprintf("room:%s:messages", roomID)
-	score := float64(after.Unix())
 
-	results, err := r.cache.ZRangeByScore(ctx, key, &redis.ZRangeBy{
-		Min:   fmt.Sprintf("%f", score),
-		Max:   "+inf",
-		Count: limit,
+	// Scores are whole Unix seconds. Messages in after's own second need a
+	// precise timestamp comparison (an inclusive score range returned the
+	// message the caller passed as "after" again); later seconds all qualify.
+	afterSec := strconv.FormatInt(after.Unix(), 10)
+
+	sameSecond, err := r.cache.ZRangeByScore(ctx, key, &redis.ZRangeBy{
+		Min: afterSec,
+		Max: afterSec,
 	})
-
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to get messages by score range")
 		return nil, err
 	}
 
-	span.SetAttributes(attribute.Int("messages.fetched_count", len(results)))
+	later, err := r.cache.ZRangeByScore(ctx, key, &redis.ZRangeBy{
+		Min:   "(" + afterSec,
+		Max:   "+inf",
+		Count: limit,
+	})
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to get messages by score range")
+		return nil, err
+	}
 
+	span.SetAttributes(attribute.Int("messages.fetched_count", len(sameSecond)+len(later)))
+
+	boundary, boundaryErrors := decodeMessages(sameSecond)
+	rest, restErrors := decodeMessages(later)
+
+	messages := messagesAfter(boundary, rest, after, limit)
+
+	span.SetAttributes(
+		attribute.Int("messages.parsed_count", len(messages)),
+		attribute.Int("messages.unmarshal_errors", boundaryErrors+restErrors),
+	)
+
+	span.SetStatus(codes.Ok, "messages retrieved successfully")
+	return messages, nil
+}
+
+// messagesAfter merges the messages stored in after's own second (boundary)
+// with those of later seconds (rest), keeping only messages created strictly
+// after "after", in chronological order and at most limit of them (limit <= 0
+// means no limit).
+func messagesAfter(boundary, rest []*model.Message, after time.Time, limit int64) []*model.Message {
+	messages := make([]*model.Message, 0, len(boundary)+len(rest))
+	for _, msg := range boundary {
+		if msg.CreatedAt.After(after) {
+			messages = append(messages, msg)
+		}
+	}
+	messages = append(messages, rest...)
+
+	sortChronologically(messages)
+
+	if limit > 0 && int64(len(messages)) > limit {
+		messages = messages[:limit]
+	}
+	return messages
+}
+
+// decodeMessages unmarshals sorted-set members, skipping (and counting) the
+// ones that are not valid messages.
+func decodeMessages(results []string) ([]*model.Message, int) {
 	messages := make([]*model.Message, 0, len(results))
 	unmarshalErrors := 0
 
@@ -287,13 +341,13 @@ func (r *messageRepository) GetByRoomAfter(ctx context.Context, roomID string, a
 		messages = append(messages, &msg)
 	}
 
-	span.SetAttributes(
-		attribute.Int("messages.parsed_count", len(messages)),
-		attribute.Int("messages.unmarshal_errors", unmarshalErrors),
-	)
+	return messages, unmarshalErrors
+}
 
-	span.SetStatus(codes.Ok, "messages retrieved successfully")
-	return messages, nil
+func sortChronologically(messages []*model.Message) {
+	sort.SliceStable(messages, func(i, j int) bool {
+		return messages[i].CreatedAt.Before(messages[j].CreatedAt)
+	})
 }
 
 func (r *messageRepository) DeleteOldMessages(ctx context.Context, roomID string, before time.Time) error {

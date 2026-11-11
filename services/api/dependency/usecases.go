@@ -8,11 +8,16 @@ import (
 	messageUseCase "github.com/hilthontt/visper/services/api/application/usecases/message"
 	roomUseCase "github.com/hilthontt/visper/services/api/application/usecases/room"
 	userUseCase "github.com/hilthontt/visper/services/api/application/usecases/user"
+	"github.com/hilthontt/visper/services/api/infrastructure/websocket"
 )
 
 func (c *Container) initUseCases() {
 	c.MessageUC = messageUseCase.NewMessageUseCase(c.MessageRepo, c.EventPublisher, c.Logger)
-	c.RoomUC = roomUseCase.NewRoomUseCase(c.RoomRepo, c.EventPublisher, c.Logger)
+	// An expired room is gone: close its websocket connections the same way
+	// an explicit delete does.
+	c.RoomUC = roomUseCase.NewRoomUseCase(c.RoomRepo, c.EventPublisher, c.Logger, func(roomID string) {
+		c.WSCore.Publish(websocket.NewRoomDeleted(roomID))
+	})
 	c.UserUC = userUseCase.NewUserUseCase(c.UserRepo, c.Logger)
 	c.FileUC = fileUseCase.NewFileUseCase(c.FileRepo, c.RoomRepo, c.Storage, c.getServerURL())
 
