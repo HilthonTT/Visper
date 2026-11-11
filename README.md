@@ -8,7 +8,7 @@
 
 [![CI](https://github.com/HilthonTT/Visper/actions/workflows/ci.yml/badge.svg)](https://github.com/HilthonTT/Visper/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/go-1.27-00ADD8?logo=go&logoColor=white)](go.work)
-[![License: MIT](https://img.shields.io/badge/license-MIT-10B981)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-A78BFA)](LICENSE)
 
 </div>
 

@@ -7,11 +7,11 @@ import (
 	"log/slog"
 	"strings"
 
-	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/hilthontt/visper/clients/cli/internal/settings"
 	"github.com/hilthontt/visper/clients/cli/internal/tui/embeds"
+	"github.com/hilthontt/visper/clients/cli/internal/tui/theme"
 )
 
 const (
@@ -27,6 +27,13 @@ type WaifuOption struct {
 
 type settingsState struct {
 	selectedWaifuID int
+	cursor          int
+
+	// The preview is rendered in Update (View works on a copy of the model,
+	// so a cache filled there would be thrown away every frame).
+	preview     string
+	previewKey  string
+	previewSize [2]int
 }
 
 func LoadWaifus() []WaifuOption {
@@ -44,145 +51,139 @@ func LoadWaifus() []WaifuOption {
 func (m model) SettingsSwitch() (model, tea.Cmd) {
 	userConfig := m.settingsManager.GetUserConfig()
 	m.state.settings.selectedWaifuID = userConfig.SelectedWaifu
+	m.state.settings.cursor = 0
+	for i, w := range m.waifus {
+		if w.ID == userConfig.SelectedWaifu {
+			m.state.settings.cursor = i
+		}
+	}
+	m.state.footer.commands = []footerCommand{
+		{key: "↑↓", value: "browse"},
+		{key: "enter", value: "choose"},
+	}
 
 	m = m.SwitchPage(settingsPage)
-	return m, nil
+	return m.withSettingsPreview(), nil
 }
 
 func (m model) SettingsUpdate(msg tea.Msg) (model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		return m.withSettingsPreview(), nil
 	case tea.KeyPressMsg:
-		switch {
-		case key.Matches(msg, keys.Back):
-			return m.SwitchPage(menuPage), nil
-
-		case len(msg.Text) > 0:
-			if len(msg.String()) == 1 {
-				input := msg.String()
-				for _, option := range m.waifus {
-					if fmt.Sprintf("%d", option.ID) == input {
-						m.state.settings.selectedWaifuID = option.ID
-
-						config := &settings.UserConfig{
-							SelectedWaifu: option.ID,
-						}
-						if err := m.settingsManager.SetUserConfig(config); err != nil {
-							slog.Error("error saving user config", "error", err)
-						}
-
-						return m, nil
-					}
-				}
+		n := len(m.waifus)
+		if n == 0 {
+			return m, nil
+		}
+		switch msg.String() {
+		case "up", "k":
+			m.state.settings.cursor = (m.state.settings.cursor - 1 + n) % n
+			return m.withSettingsPreview(), nil
+		case "down":
+			m.state.settings.cursor = (m.state.settings.cursor + 1) % n
+			return m.withSettingsPreview(), nil
+		case "enter", "space":
+			return m.chooseWaifu(m.waifus[m.state.settings.cursor])
+		}
+		for i, option := range m.waifus {
+			if msg.String() == fmt.Sprintf("%d", option.ID) {
+				m.state.settings.cursor = i
+				return m.chooseWaifu(option)
 			}
 		}
 	}
-
 	return m, nil
 }
 
-func (m model) SettingsView() string {
-	var content strings.Builder
-
-	titleStyle := m.theme.Base().
-		Bold(true).
-		Foreground(m.theme.Brand()).
-		MarginBottom(1).
-		MarginTop(1)
-
-	content.WriteString(titleStyle.Render("Settings"))
-	content.WriteString("\n")
-
-	instructionStyle := m.theme.Base().
-		Foreground(m.theme.Body()).
-		Italic(true).
-		MarginBottom(2)
-
-	content.WriteString(instructionStyle.Render("Press a number to select your chat sidebar image"))
-
-	for _, option := range m.waifus {
-		content.WriteString(m.renderWaifuOption(option))
-		content.WriteString("\n")
+func (m model) chooseWaifu(option WaifuOption) (model, tea.Cmd) {
+	m.state.settings.selectedWaifuID = option.ID
+	m = m.withSettingsPreview()
+	if err := m.settingsManager.SetUserConfig(&settings.UserConfig{SelectedWaifu: option.ID}); err != nil {
+		slog.Error("error saving user config", "error", err)
+		return m.toast(theme.ToneDanger, "Couldn't save your choice")
 	}
-
-	content.WriteString("\n")
-	hintStyle := m.theme.Base().
-		Foreground(m.theme.Body()).
-		Italic(true).
-		MarginTop(1)
-
-	content.WriteString(hintStyle.Render("Press ESC to go back to menu"))
-
-	return content.String()
+	return m.toast(theme.ToneSuccess, option.Title+" will keep you company ♡")
 }
 
-func (m model) renderWaifuOption(option WaifuOption) string {
+// settingsPreviewSize is the size of the companion preview, or 0x0 when the
+// terminal is too narrow to show it next to the list.
+func (m model) settingsPreviewSize() (int, int) {
+	if m.size != large {
+		return 0, 0
+	}
+	return 34, max(min(m.heightContainer-12, 18), 0)
+}
+
+func (m model) withSettingsPreview() model {
+	w, h := m.settingsPreviewSize()
+	if w == 0 || h < 4 || len(m.waifus) == 0 {
+		m.state.settings.preview = ""
+		return m
+	}
+	id := m.waifus[m.state.settings.cursor].ID
+	k := fmt.Sprintf("%d", id)
+	if m.state.settings.previewKey == k && m.state.settings.previewSize == [2]int{w, h} {
+		return m
+	}
+	m.state.settings.preview = m.waifuImage(id, w, h)
+	m.state.settings.previewKey = k
+	m.state.settings.previewSize = [2]int{w, h}
+	return m
+}
+
+func (m model) SettingsView(height int) string {
+	pw, _ := m.settingsPreviewSize()
+	listWidth := min(m.widthContainer-4, 46)
+	if pw > 0 {
+		listWidth = min(m.widthContainer-pw-8, 42)
+	}
+
+	title := m.theme.TextAccent().Bold(true).Render("Chat companion")
+	lead := m.theme.TextBody().Width(listWidth).Render("Who keeps you company in the room's side panel.")
+
+	var options []string
+	for i, option := range m.waifus {
+		options = append(options, m.renderWaifuOption(option, i == m.state.settings.cursor, listWidth))
+	}
+
+	left := lipgloss.JoinVertical(lipgloss.Left, title, lead, "", strings.Join(options, "\n"))
+
+	content := left
+	if m.state.settings.preview != "" {
+		preview := m.theme.Base().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(m.theme.Secondary()).
+			Render(m.state.settings.preview)
+		content = lipgloss.JoinHorizontal(lipgloss.Top, left, "    ", preview)
+	}
+
+	return m.pageContent(height, content)
+}
+
+func (m model) renderWaifuOption(option WaifuOption, focused bool, width int) string {
 	isSelected := option.ID == m.state.settings.selectedWaifuID
 
-	var containerStyle lipgloss.Style
+	radio := m.theme.TextSubtle().Render("○")
 	if isSelected {
-		containerStyle = m.theme.Base().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(m.theme.Highlight()).
-			Padding(0, 1).
-			MarginBottom(1).
-			Width(m.widthContent - 4)
-	} else {
-		containerStyle = m.theme.Base().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(m.theme.Border()).
-			Padding(0, 1).
-			MarginBottom(1).
-			Width(m.widthContent - 4)
+		radio = m.theme.TextSecondary().Render("●")
 	}
 
-	titleStyle := m.theme.Base().Bold(true)
-	if isSelected {
-		titleStyle = titleStyle.Foreground(m.theme.Highlight())
+	titleStyle := m.theme.TextAccent()
+	if focused {
+		titleStyle = titleStyle.Bold(true)
 	}
+	num := m.theme.TextSubtle().Render(fmt.Sprintf("%d", option.ID))
+	head := spread(width-4, radio+" "+titleStyle.Render(option.Title), num)
+	desc := m.theme.TextBody().PaddingLeft(2).Width(width - 4).Render(option.Description)
 
-	descStyle := m.theme.Base().
-		Foreground(m.theme.Body()).
-		Italic(true)
-
-	var badgeStyle lipgloss.Style
-	if isSelected {
-		badgeStyle = m.theme.Base().
-			Bold(true).
-			Foreground(m.theme.Accent()).
-			Background(m.theme.Highlight()).
-			Padding(0, 1).
-			MarginLeft(1)
-	} else {
-		badgeStyle = m.theme.Base().
-			Bold(true).
-			Foreground(m.theme.Accent()).
-			Padding(0, 0).
-			MarginLeft(1)
+	border := m.theme.Border()
+	if focused {
+		border = m.theme.Brand()
 	}
-
-	var contentBuilder strings.Builder
-
-	titleText := titleStyle.Render(option.Title)
-	badgeText := badgeStyle.Render(fmt.Sprintf("%d", option.ID))
-
-	availableWidth := m.widthContent - 8
-	titleWidth := lipgloss.Width(titleText)
-	badgeWidth := lipgloss.Width(badgeText)
-	spacing := max(availableWidth-titleWidth-badgeWidth, 1)
-
-	firstLine := titleText + strings.Repeat(" ", spacing) + badgeText
-	contentBuilder.WriteString(firstLine)
-	contentBuilder.WriteString("\n")
-
-	contentBuilder.WriteString(descStyle.Render(option.Description))
-
-	if isSelected {
-		contentBuilder.WriteString("\n")
-		selectedIndicator := m.theme.Base().
-			Foreground(m.theme.Highlight()).
-			Render("✓ Currently selected")
-		contentBuilder.WriteString(selectedIndicator)
-	}
-
-	return containerStyle.Render(contentBuilder.String())
+	return m.theme.Base().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(border).
+		Padding(0, 1).
+		Width(width).
+		Render(head + "\n" + desc)
 }

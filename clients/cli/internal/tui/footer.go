@@ -1,6 +1,8 @@
 package tui
 
-import "charm.land/lipgloss/v2"
+import (
+	"charm.land/lipgloss/v2"
+)
 
 type footerCommand struct {
 	key   string
@@ -11,79 +13,44 @@ type footerState struct {
 	commands []footerCommand
 }
 
+// globalCommands are the hints shown after the page's own ones.
+var globalCommands = []footerCommand{
+	{"tab", "next page"},
+	{"m", "menu"},
+	{"?", "help"},
+}
+
 func (m model) FooterView() string {
-	bold := m.theme.TextAccent().Bold(true).Render
-	base := m.theme.Base().Render
+	width := m.widthContainer
 
-	table := m.theme.Base().
-		Width(m.widthContent).
-		BorderTop(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(m.theme.Border()).
-		PaddingBottom(1).
-		Align(lipgloss.Center)
-
-	if m.size == small {
-		return table.Render(bold("m") + base(" menu"))
-	}
-
-	// Add other commands
-	commands := []string{}
-	for _, cmd := range m.state.footer.commands {
-		commands = append(commands, bold(" "+cmd.key+" ")+base(cmd.value+"  "))
-	}
-
-	lines := []string{}
-	lines = append(lines, commands...)
-
-	var content string
+	var errorBanner string
 	if m.error != nil {
-		hint := "esc"
-
-		// Calculate maximum width for error message to ensure it fits
-		maxErrorWidth := m.widthContent - lipgloss.Width(hint) - 6
-
-		// Handle wrapping for long error messages
-		errorMsg := m.error.message
-		if lipgloss.Width(errorMsg) > maxErrorWidth {
-			// Split into multiple lines
-			errorMsg = wordWrap(errorMsg, maxErrorWidth)
-		}
-
-		msg := m.theme.PanelError().Padding(0, 1).Render(errorMsg)
-
-		// Calculate remaining space after rendering the message
-		space := max(m.widthContent-lipgloss.Width(msg)-lipgloss.Width(hint)-2, 0)
-
-		height := lipgloss.Height(msg)
-
-		content = lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			msg,
-			m.theme.PanelError().Width(space).Height(height).Render(),
-			m.theme.PanelError().Bold(true).Padding(0, 1).Height(height).Render(hint),
-		)
-	} else {
-		content = m.theme.Base().Faint(true).Render("end-to-end encrypted • anonymous • ephemeral")
+		text := m.theme.TextError().Width(width - 4).Render("✕ " + m.error.message)
+		dismiss := m.theme.TextSubtle().Render("esc to dismiss")
+		errorBanner = m.theme.Base().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(m.theme.Error()).
+			Padding(0, 1).
+			Width(width).
+			Render(text+"\n"+dismiss) + "\n"
 	}
 
-	footer := lipgloss.JoinVertical(
-		lipgloss.Center,
-		"",
-		content,
-		table.Render(
-			lipgloss.JoinHorizontal(
-				lipgloss.Center,
-				lines...,
-			),
-		))
+	badge := m.theme.TextSuccess().Render("●") + m.theme.TextSubtle().Render(" e2e encrypted")
+	if m.size != large {
+		badge = ""
+	}
 
-	// Add the region selector and the rest of the commands
-	return lipgloss.Place(
-		m.widthContainer,
-		lipgloss.Height(footer),
-		lipgloss.Center,
-		lipgloss.Center,
-		footer,
+	global := globalCommands
+	if m.page == joinRoomPage {
+		// Letters go to the code field here.
+		global = []footerCommand{{"tab", "next page"}}
+	}
+	cmds := append(append([]footerCommand{}, m.state.footer.commands...), global...)
+	hints := m.keyHints(cmds, width-lipgloss.Width(badge)-2)
+
+	return errorBanner + lipgloss.JoinVertical(
+		lipgloss.Left,
+		m.rule(width),
+		spread(width, hints, badge),
 	)
 }

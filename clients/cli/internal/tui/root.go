@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math"
-	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -14,7 +12,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/hilthontt/visper/clients/cli/internal/preview"
 	"github.com/hilthontt/visper/clients/cli/internal/settings"
-	"github.com/hilthontt/visper/clients/cli/internal/strfn"
 	"github.com/hilthontt/visper/clients/cli/internal/tui/theme"
 	apisdk "github.com/hilthontt/visper/sdk/go"
 	"github.com/hilthontt/visper/sdk/go/option"
@@ -29,7 +26,6 @@ const (
 	newRoomPage
 	joinRoomPage
 	chatPage
-	menuPage
 	settingsPage
 )
 
@@ -49,8 +45,10 @@ type state struct {
 	newRoom      newRoomState
 	chat         chatState
 	settings     settingsState
+	faq          faqState
 	notify       notifyState
 	notification notificationListenerState
+	toast        toastState
 }
 
 type notificationListenerState struct {
@@ -140,6 +138,7 @@ func (m model) Init() tea.Cmd {
 }
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds := []tea.Cmd{}
+	m.switched = false
 
 	if env, ok := msg.(wsChanMsg); ok {
 		if m.page != chatPage || env.ch != m.state.chat.wsMsgChan {
@@ -225,62 +224,82 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case visibleError:
 		m.error = &msg
+	case toastExpiredMsg:
+		if msg.id == m.state.toast.id {
+			m.state.toast = toastState{}
+		}
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.viewportWidth = msg.Width
 		m.viewportHeight = msg.Height
 
 		switch {
-		case m.viewportWidth < 20 || m.viewportHeight < 10:
+		case m.viewportWidth < 30 || m.viewportHeight < 12:
 			m.size = undersized
 			m.widthContainer = m.viewportWidth
 			m.heightContainer = m.viewportHeight
-		case m.viewportWidth < 50:
+		case m.viewportWidth < 60:
 			m.size = small
-			m.widthContainer = m.viewportWidth
+			m.widthContainer = m.viewportWidth - 2
 			m.heightContainer = m.viewportHeight
-		case m.viewportWidth < 80:
+		case m.viewportWidth < 90:
 			m.size = medium
-			m.widthContainer = 50
-			m.heightContainer = int(math.Min(float64(msg.Height), 30))
+			m.widthContainer = m.viewportWidth - 4
+			m.heightContainer = min(msg.Height, 32)
 		default:
 			m.size = large
-			m.widthContainer = 80
-			m.heightContainer = int(math.Min(float64(msg.Height), 30))
+			m.widthContainer = 84
+			m.heightContainer = min(msg.Height, 32)
 		}
 
-		m.widthContent = m.widthContainer - 2
+		m.widthContent = m.widthContainer
 		m.heightContent = m.heightContainer
 	case tea.KeyPressMsg:
-		if m.state.notify.open && m.state.notify.confirmAction == RoomInviteAction {
-			switch msg.String() {
-			case "y", "Y", "enter":
-				return m, func() tea.Msg {
-					return roomInviteAcceptedMsg{}
-				}
-			case "n", "N", "esc":
-				return m, func() tea.Msg {
-					return roomInviteDeclinedMsg{}
-				}
-			}
+		if key.Matches(msg, keys.Quit) {
+			return m, tea.Sequence(m.cleanupCmd, tea.Quit)
 		}
 
-		switch {
-		case key.Matches(msg, keys.Back):
-			if m.error != nil {
-				if m.page == splashPage {
-					return m, tea.Sequence(
-						m.cleanupCmd,
-						tea.Quit,
-					)
-				}
-				m.error = nil
-				return m, nil
+		// Overlays take every key while they are open.
+		if m.state.menu.help {
+			m.state.menu.help = false
+			return m, nil
+		}
+		if m.state.notify.open && m.state.notify.confirmAction == RoomInviteAction {
+			switch m.modalAnswer(msg) {
+			case answerYes:
+				return m, func() tea.Msg { return roomInviteAcceptedMsg{} }
+			case answerNo:
+				return m, func() tea.Msg { return roomInviteDeclinedMsg{} }
+			case answerToggle:
+				m.state.notify.focus = 1 - m.state.notify.focus
 			}
-		case key.Matches(msg, keys.Quit):
-			return m, tea.Sequence(
-				m.cleanupCmd,
-				tea.Quit,
-			)
+			return m, nil
+		}
+		if m.state.menu.open {
+			return m.MenuUpdate(msg)
+		}
+
+		if m.error != nil && key.Matches(msg, keys.Back) {
+			if m.page == splashPage {
+				return m, tea.Sequence(m.cleanupCmd, tea.Quit)
+			}
+			m.error = nil
+			return m, nil
+		}
+
+		if m.wantsHelp(msg) {
+			m.state.menu.help = true
+			return m, nil
+		}
+
+		switch m.page {
+		case newRoomPage, faqPage, settingsPage:
+			switch msg.String() {
+			case "m":
+				return m.MenuSwitch()
+			case "q":
+				return m, tea.Sequence(m.cleanupCmd, tea.Quit)
+			}
 		}
 	case CursorTickMsg:
 		m, cmd := m.CursorUpdate(msg)
@@ -292,8 +311,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	switch m.page {
-	case menuPage:
-		m, cmd = m.MenuUpdate(msg)
 	case splashPage:
 		m, cmd = m.SplashUpdate(msg)
 	case joinRoomPage:
@@ -304,11 +321,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m, cmd = m.ChatUpdate(msg)
 	case settingsPage:
 		m, cmd = m.SettingsUpdate(msg)
+	case faqPage:
+		m, cmd = m.FaqUpdate(msg)
 	}
 
-	var headerCmd tea.Cmd
-	m, headerCmd = m.HeaderUpdate(msg)
-	cmds = append(cmds, headerCmd)
+	// A key that just switched pages must not also act on the new page.
+	if !m.switched {
+		var headerCmd tea.Cmd
+		m, headerCmd = m.HeaderUpdate(msg)
+		cmds = append(cmds, headerCmd)
+	}
 
 	if cmd != nil {
 		cmds = append(cmds, cmd)
@@ -333,63 +355,67 @@ func (m model) render() string {
 		return m.ResizeView()
 	}
 
-	var baseView string
-
+	var view string
 	switch m.page {
 	case splashPage:
-		baseView = m.SplashView()
+		return m.SplashView()
 	case chatPage:
-		baseView = m.ChatView()
-	case menuPage:
-		baseView = m.MenuView()
+		// ChatView draws its own modals.
+		// Over the message column, just above the input box.
+		return m.withToastAt(m.ChatView(), m.chatLeftWidth()+m.chatCenterWidth()-1, chatInputHeight+chatStatusHeight)
 	default:
 		header := m.HeaderView()
 		footer := m.FooterView()
 
-		// Get content based on current page
-		content := m.getContent()
+		height := m.heightContainer - lipgloss.Height(header) - lipgloss.Height(footer)
+		body := m.theme.Base().
+			Width(m.widthContainer).
+			Height(max(height, 1)).
+			MaxHeight(max(height, 1)).
+			Render(m.getContent(max(height, 1)))
 
-		height := m.heightContainer
-		height -= lipgloss.Height(header)
-		height -= lipgloss.Height(footer)
-
-		body := m.theme.Base().Width(m.widthContainer).Height(height).Render(content)
-
-		sb := strings.Builder{}
-		sb.WriteString(header)
-		sb.WriteString(body)
-		sb.WriteString(footer)
-
-		child := lipgloss.JoinVertical(
-			lipgloss.Left,
-			sb.String(),
-		)
-
-		baseView = lipgloss.Place(
+		view = lipgloss.Place(
 			m.viewportWidth,
 			m.viewportHeight,
 			lipgloss.Center,
 			lipgloss.Center,
-			m.theme.Base().
-				MaxWidth(m.widthContainer).
-				MaxHeight(m.heightContainer).
-				Render(child),
+			lipgloss.JoinVertical(lipgloss.Left, header, body, footer),
 		)
 	}
 
-	if m.state.notify.open && m.page != chatPage {
-		var notifyModal string
-		if m.state.notify.confirmAction == EditMessageAction {
-			notifyModal = m.RenderEditModal()
-		} else {
-			notifyModal = m.RenderWarnModal()
-		}
-		overlayX := (m.viewportWidth - ModalWidth) / 2
-		overlayY := (m.viewportHeight - ModalHeight) / 2
-		return strfn.PlaceOverlay(overlayX, overlayY, notifyModal, baseView)
+	// Bottom-right of the centred layout, just above the status bar.
+	right := (m.viewportWidth + m.widthContainer) / 2
+	bottom := (m.viewportHeight-m.heightContainer)/2 + 3
+	view = m.withToastAt(view, right, bottom)
+
+	switch {
+	case m.state.menu.help:
+		view = m.overlay(m.HelpView(), view)
+	case m.state.menu.open:
+		view = m.overlay(m.MenuView(), view)
+	case m.state.notify.open:
+		view = m.overlay(m.RenderWarnModal(), view)
 	}
 
-	return baseView
+	return view
+}
+
+// wantsHelp reports whether a key press should open the help overlay: "?"
+// wherever it can't be text the user is typing.
+func (m model) wantsHelp(msg tea.KeyPressMsg) bool {
+	if msg.String() != "?" || m.state.notify.open {
+		return false
+	}
+	switch m.page {
+	case newRoomPage, faqPage, settingsPage:
+		return true
+	case joinRoomPage:
+		return m.state.joinRoom.input.Value() == ""
+	case chatPage:
+		c := m.state.chat
+		return !c.editMode && c.focusedInput == focusMessage && c.messageInput.Value() == ""
+	}
+	return false
 }
 
 func (m model) SwitchPage(page page) model {
@@ -398,19 +424,18 @@ func (m model) SwitchPage(page page) model {
 	return m
 }
 
-func (m model) getContent() string {
-	page := "unknown"
+func (m model) getContent(height int) string {
 	switch m.page {
 	case newRoomPage:
-		page = m.NewRoomView()
+		return m.NewRoomView(height)
 	case joinRoomPage:
-		page = m.JoinRoomView()
+		return m.JoinRoomView(height)
 	case faqPage:
-		page = m.FaqView()
+		return m.FaqView(height)
 	case settingsPage:
-		page = m.SettingsView()
+		return m.SettingsView(height)
 	}
-	return page
+	return ""
 }
 
 func (m model) Cleanup() {

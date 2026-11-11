@@ -5,16 +5,13 @@ import (
 	_ "embed"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
-	"github.com/hilthontt/visper/clients/cli/internal/strfn"
-	"github.com/hilthontt/visper/clients/cli/internal/tui/embeds"
+	"github.com/hilthontt/visper/clients/cli/internal/tui/theme"
 	"github.com/hilthontt/visper/clients/cli/internal/tui/validate"
 	"github.com/hilthontt/visper/clients/cli/internal/utils"
 	apisdk "github.com/hilthontt/visper/sdk/go"
@@ -50,6 +47,7 @@ type chatState struct {
 	messagesViewport viewport.Model
 	focusedInput     chatFocus
 	searchActive     bool
+	memberCursor     int // highlighted row of the member search results
 
 	// Message editing
 	editMode             bool
@@ -59,7 +57,12 @@ type chatState struct {
 	// Member kicking
 	selectedKickUserID string
 
-	// Cache for the sidebar image
+	// Unread messages that arrived while scrolled up.
+	unread int
+
+	// The companion panel on the right.
+	hideWaifu          bool
+	waifuMood          string
 	cachedImageContent string
 	cachedImageWidth   int
 	cachedImageHeight  int
@@ -79,8 +82,9 @@ type chatState struct {
 
 	fileExplorer fileExplorerState
 
-	// AI enhancement
+	// Background work shown in the status line.
 	aiEnhancing    bool
+	uploading      bool
 	aiEnhanceStyle string
 	aiEnhanceTone  string
 
@@ -89,7 +93,6 @@ type chatState struct {
 
 	imagePreviews map[string]string // messageID+dimensions -> rendered preview string
 	imageFetching map[string]bool   // messageID -> currently fetching
-
 }
 
 type participantSearchResultMsg struct {
@@ -129,96 +132,114 @@ type imageFetchedMsg struct {
 	err       error
 }
 
+var sentMoods = []string{
+	"nice one~",
+	"they'll love that ♡",
+	"keep it up!",
+	"ooh, spicy",
+	"so eloquent ✧",
+}
+
+func (m model) newChatInput(placeholder string) textinput.Model {
+	ti := textinput.New()
+	ti.Prompt = "› "
+	ti.Placeholder = placeholder
+	styles := ti.Styles()
+	for _, s := range []*textinput.StyleState{&styles.Focused, &styles.Blurred} {
+		s.Prompt = m.theme.TextBrand().Bold(true)
+		s.Text = m.theme.TextAccent()
+		s.Placeholder = m.theme.TextSubtle()
+	}
+	ti.SetStyles(styles)
+	return ti
+}
+
 func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 	m = m.stopNotificationWebSocket()
 
 	m = m.SwitchPage(chatPage)
 	m.state.chat.room = newRoom
+	m.state.menu = menuState{}
 
 	// Always reset the key so a previous room's key is never reused.
 	m.client.Message.SetEncryptionKey(newRoom.EncryptionKey)
 
-	if m.state.chat.roomCode == "" {
-		msgInput := textinput.New()
-		msgInput.Placeholder = "Type a message..."
-		msgInput.Focus()
-		msgInput.SetWidth(50)
-
-		searchInput := textinput.New()
-		searchInput.Placeholder = "Search participants..."
-		searchInput.SetWidth(20)
-
-		editInput := textinput.New()
-		editInput.Placeholder = "Edit your message..."
-		editInput.SetWidth(50)
-
-		vp := viewport.New(viewport.WithWidth(50), viewport.WithHeight(20))
-		// The message input has focus, so the viewport must only react to
-		// non-printing keys; the defaults (j/k/f/b/u/d/h/l/space, ctrl+u/d)
-		// would scroll while typing and clash with chat shortcuts.
-		disabled := key.NewBinding(key.WithDisabled())
-		vp.KeyMap = viewport.KeyMap{
-			PageDown:     key.NewBinding(key.WithKeys("pgdown")),
-			PageUp:       key.NewBinding(key.WithKeys("pgup")),
-			Up:           key.NewBinding(key.WithKeys("up")),
-			Down:         key.NewBinding(key.WithKeys("down")),
-			HalfPageUp:   disabled,
-			HalfPageDown: disabled,
-			Left:         disabled,
-			Right:        disabled,
-		}
-
-		participants := newRoom.Members
-		filteredIndices := make([]int, len(participants))
-		for i := range filteredIndices {
-			filteredIndices[i] = i
-		}
-
-		wsCtx, wsCancel := context.WithCancel(context.Background())
-		expirationCtx, expirationCancel := context.WithCancel(context.Background())
-
-		if newRoom.CurrentUser.ID != "" {
-			userID := newRoom.CurrentUser.ID
-			m.userID = &userID
-		}
-
-		m.state.chat = chatState{
-			roomCode:             newRoom.JoinCode,
-			participants:         participants,
-			filteredIndices:      filteredIndices,
-			messages:             []apisdk.MessageResponse{},
-			messageInput:         msgInput,
-			searchInput:          searchInput,
-			editInput:            editInput,
-			messagesViewport:     vp,
-			focusedInput:         focusMessage,
-			searchActive:         false,
-			editMode:             false,
-			selectedMessageIndex: -1,
-			wsCtx:                wsCtx,
-			wsCancel:             wsCancel,
-			expirationCtx:        expirationCtx,
-			expirationCancel:     expirationCancel,
-			expiresAt:            newRoom.ExpiresAt,
-			room:                 newRoom,
-			isRoomOwner:          newRoom.CurrentUser.ID == newRoom.Owner.ID,
-			fileExplorer:         fileExplorerState{},
-			imageFetched:         make(map[string][]byte),
-			imageFailed:          make(map[string]bool),
-			imagePreviews:        make(map[string]string),
-			imageFetching:        make(map[string]bool),
-		}
-
-		m = m.syncChatLayout()
-		m = m.withSidebarImage()
-
-		return m, tea.Batch(
-			m.connectWebSocket(newRoom.ID),
-			m.startExpirationCountdown(),
-		)
+	if m.state.chat.roomCode != "" {
+		return m, nil
 	}
 
-	return m, nil
+	msgInput := m.newChatInput("Write a message…")
+	msgInput.Focus()
+
+	searchInput := m.newChatInput("search")
+	searchInput.Prompt = "/ "
+
+	editInput := m.newChatInput("Edit your message…")
+
+	vp := viewport.New(viewport.WithWidth(50), viewport.WithHeight(20))
+	// The message input has focus, so the viewport must only react to
+	// non-printing keys; the defaults (j/k/f/b/u/d/h/l/space, ctrl+u/d)
+	// would scroll while typing and clash with chat shortcuts.
+	disabled := key.NewBinding(key.WithDisabled())
+	vp.KeyMap = viewport.KeyMap{
+		PageDown:     key.NewBinding(key.WithKeys("pgdown")),
+		PageUp:       key.NewBinding(key.WithKeys("pgup")),
+		Up:           key.NewBinding(key.WithKeys("up")),
+		Down:         key.NewBinding(key.WithKeys("down")),
+		HalfPageUp:   disabled,
+		HalfPageDown: disabled,
+		Left:         disabled,
+		Right:        disabled,
+	}
+
+	participants := newRoom.Members
+	filteredIndices := make([]int, len(participants))
+	for i := range filteredIndices {
+		filteredIndices[i] = i
+	}
+
+	wsCtx, wsCancel := context.WithCancel(context.Background())
+	expirationCtx, expirationCancel := context.WithCancel(context.Background())
+
+	if newRoom.CurrentUser.ID != "" {
+		userID := newRoom.CurrentUser.ID
+		m.userID = &userID
+	}
+
+	m.state.chat = chatState{
+		roomCode:             newRoom.JoinCode,
+		participants:         participants,
+		filteredIndices:      filteredIndices,
+		messages:             []apisdk.MessageResponse{},
+		messageInput:         msgInput,
+		searchInput:          searchInput,
+		editInput:            editInput,
+		messagesViewport:     vp,
+		focusedInput:         focusMessage,
+		selectedMessageIndex: -1,
+		waifuMood:            "your waifu approves ♡",
+		wsCtx:                wsCtx,
+		wsCancel:             wsCancel,
+		expirationCtx:        expirationCtx,
+		expirationCancel:     expirationCancel,
+		expiresAt:            newRoom.ExpiresAt,
+		room:                 newRoom,
+		isRoomOwner:          newRoom.CurrentUser.ID == newRoom.Owner.ID,
+		fileExplorer:         fileExplorerState{},
+		imageFetched:         make(map[string][]byte),
+		imageFailed:          make(map[string]bool),
+		imagePreviews:        make(map[string]string),
+		imageFetching:        make(map[string]bool),
+	}
+
+	m = m.syncChatLayout()
+	m = m.withSidebarImage()
+	m = m.refreshMessages()
+
+	return m, tea.Batch(
+		m.connectWebSocket(newRoom.ID),
+		m.startExpirationCountdown(),
+	)
 }
 
 func (m model) startExpirationCountdown() tea.Cmd {
@@ -242,6 +263,42 @@ func (m model) startExpirationCountdown() tea.Cmd {
 	}
 }
 
+// waitWS keeps listening on the room WebSocket, if it is open.
+func (m model) waitWS() tea.Cmd {
+	if m.state.chat.wsMsgChan != nil {
+		return waitForWSMessage(m.state.chat.wsMsgChan)
+	}
+	return nil
+}
+
+func (m model) resetMemberFilter() model {
+	m.state.chat.filteredIndices = make([]int, len(m.state.chat.participants))
+	for i := range m.state.chat.filteredIndices {
+		m.state.chat.filteredIndices[i] = i
+	}
+	m.state.chat.memberCursor = min(m.state.chat.memberCursor, max(len(m.state.chat.filteredIndices)-1, 0))
+	return m
+}
+
+func (m model) closeSearch() model {
+	m.state.chat.searchActive = false
+	m.state.chat.focusedInput = focusMessage
+	m.state.chat.searchInput.Blur()
+	m.state.chat.messageInput.Focus()
+	m.state.chat.searchInput.SetValue("")
+	m.state.chat.memberCursor = 0
+	return m.resetMemberFilter()
+}
+
+func (m model) participantName(userID string) string {
+	for _, p := range m.state.chat.participants {
+		if p.ID == userID {
+			return p.Username
+		}
+	}
+	return ""
+}
+
 func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
@@ -250,23 +307,18 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 	case aiEnhanceResultMsg:
 		m.state.chat.aiEnhancing = false
 		if msg.err != nil {
-			m.state.notify = notifyState{
-				open:          true,
-				title:         "AI Enhancement Failed",
-				content:       "Could not reach AI service. Message sent as-is",
-				confirmAction: NoAction,
-			}
-			return m, nil
+			return m.toast(theme.ToneDanger, "AI rewrite failed. Your draft is unchanged.")
 		}
 		m.state.chat.messageInput.SetValue(msg.enhanced)
+		m.state.chat.messageInput.CursorEnd()
+		m.state.chat.waifuMood = "fancy words ✧"
 		return m, nil
 	case imageFileSelectedMsg:
 		if m.state.chat.room == nil {
 			return m, nil
 		}
-		// Show uploading indicator by reusing the AI enhancing flag concept
-		m.state.chat.aiEnhancing = true
-		return m, m.uploadFile(msg.path)
+		m.state.chat.uploading = true
+		return m, tea.Batch(m.uploadFile(msg.path), animTick(animFastInterval))
 
 	case imageFetchedMsg:
 		delete(m.state.chat.imageFetching, msg.messageID)
@@ -277,22 +329,21 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 			m.state.chat.imageFetched[msg.messageID] = msg.bytes
 			m = m.renderImagePreview(msg.messageID)
 		}
-		m.state.chat.messagesViewport.SetContent(m.renderMessages())
+		atBottom := m.state.chat.messagesViewport.AtBottom()
+		m = m.refreshMessages()
+		if atBottom {
+			m.state.chat.messagesViewport.GotoBottom()
+		}
 		return m, nil
 	case fileUploadResultMsg:
-		m.state.chat.aiEnhancing = false
+		m.state.chat.uploading = false
 		if msg.err != nil {
-			m.state.notify = notifyState{
-				open:          true,
-				title:         "Upload Failed",
-				content:       fmt.Sprintf("Could not upload image: %v", msg.err),
-				confirmAction: NoAction,
-			}
-			return m, nil
+			return m.toast(theme.ToneDanger, fmt.Sprintf("Upload failed: %v", msg.err))
 		}
 		if m.state.chat.room == nil {
 			return m, nil
 		}
+		m.state.chat.waifuMood = "cute pic!"
 
 		// Auto-send the image URL as a message. The SDK encrypts it (and sets
 		// the encrypted flag) when the room has a key.
@@ -305,30 +356,18 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		})
 
 	case chatRequestFailedMsg:
-		if !m.state.notify.open {
-			m.state.notify = notifyState{
-				open:          true,
-				title:         "Request Failed",
-				content:       fmt.Sprintf("Could not %s: %v", msg.action, msg.err),
-				confirmAction: NoAction,
-			}
-		}
-		return m, nil
+		return m.toast(theme.ToneDanger, fmt.Sprintf("Couldn't %s: %v", msg.action, msg.err))
 	case roomExpirationTickMsg:
 		if msg.ctx != m.state.chat.expirationCtx {
 			return m, nil // countdown of a room we already left
 		}
 		m.state.chat.timeRemaining = formatDuration(msg.remaining)
 
-		// Show warning at 5 minutes
-		if msg.remaining <= 5*time.Minute && msg.remaining > 4*time.Minute+50*time.Second && !m.state.chat.expirationWarned && !m.state.notify.open {
+		if msg.remaining <= 5*time.Minute && !m.state.chat.expirationWarned {
 			m.state.chat.expirationWarned = true
-			m.state.notify = notifyState{
-				open:          true,
-				title:         "⚠️  Room Expiring Soon",
-				content:       "This room will expire in 5 minutes. All messages will be lost.",
-				confirmAction: NoAction,
-			}
+			m.state.chat.waifuMood = "hurry, time's almost up!"
+			m, cmd = m.toast(theme.ToneWarning, "This room expires in 5 minutes. Messages will be lost.")
+			return m, tea.Batch(cmd, m.startExpirationCountdown())
 		}
 
 		return m, m.startExpirationCountdown()
@@ -343,8 +382,8 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 
 		m.state.notify = notifyState{
 			open:          true,
-			title:         "Room Expired",
-			content:       "This room has expired. You can continue chatting, but the room will be deleted when all users leave.",
+			title:         "This room has expired",
+			content:       "Its messages are gone. Taking you back to the start…",
 			confirmAction: RoomExpiredAction,
 		}
 		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
@@ -390,22 +429,23 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		return m, m.listenWebSocket()
 
 	case wsRoomUpdatedMsg:
+		changed := m.state.chat.roomCode != "" && m.state.chat.roomCode != msg.joinCode
 		m.state.chat.roomCode = msg.joinCode
-		if m.state.chat.wsMsgChan != nil {
-			return m, waitForWSMessage(m.state.chat.wsMsgChan)
+		if changed {
+			m, cmd = m.toast(theme.ToneSuccess, "New join code: "+msg.joinCode)
+			return m, tea.Batch(cmd, m.waitWS())
 		}
-		return m, nil
+		return m, m.waitWS()
 
 	case wsChannelReadyMsg:
 		if msg.ctx != m.state.chat.wsCtx {
 			return m, nil // listener of a room we already left
 		}
 		m.state.chat.wsMsgChan = msg.msgChan
-		return m, tea.Batch(
-			waitForWSMessage(msg.msgChan),
-		)
+		return m, waitForWSMessage(msg.msgChan)
 
 	case wsMessageReceivedMsg:
+		atBottom := m.state.chat.messagesViewport.AtBottom()
 		m.state.chat.messages = append(m.state.chat.messages, msg.message)
 
 		if id := msg.message.ID; isImageURL(msg.message.Content) &&
@@ -416,11 +456,22 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 			}
 		}
 
-		m.state.chat.messagesViewport.SetContent(m.renderMessages())
-		m.state.chat.messagesViewport.GotoBottom()
-		if m.state.chat.wsMsgChan != nil {
-			cmds = append(cmds, waitForWSMessage(m.state.chat.wsMsgChan))
+		own := m.userID != nil && msg.message.UserID == *m.userID
+		if own {
+			m.state.chat.waifuMood = sentMoods[len(m.state.chat.messages)%len(sentMoods)]
 		}
+
+		m = m.refreshMessages()
+		// Follow the conversation unless the user scrolled up to read history.
+		if atBottom || own || m.state.chat.editMode {
+			if !m.state.chat.editMode {
+				m.state.chat.messagesViewport.GotoBottom()
+			}
+			m.state.chat.unread = 0
+		} else {
+			m.state.chat.unread++
+		}
+		cmds = append(cmds, m.waitWS())
 		return m, tea.Batch(cmds...)
 
 	case wsMessageUpdatedMsg:
@@ -430,11 +481,8 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 				break
 			}
 		}
-		m.state.chat.messagesViewport.SetContent(m.renderMessages())
-		if m.state.chat.wsMsgChan != nil {
-			return m, waitForWSMessage(m.state.chat.wsMsgChan)
-		}
-		return m, nil
+		m = m.refreshMessages()
+		return m, m.waitWS()
 	case wsMessageDeletedMsg:
 		for i, message := range m.state.chat.messages {
 			if message.ID == msg.messageID {
@@ -453,11 +501,8 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 				break
 			}
 		}
-		m.state.chat.messagesViewport.SetContent(m.renderMessages())
-		if m.state.chat.wsMsgChan != nil {
-			return m, waitForWSMessage(m.state.chat.wsMsgChan)
-		}
-		return m, nil
+		m = m.refreshMessages()
+		return m, m.waitWS()
 
 	case wsMemberJoinedMsg:
 		exists := false
@@ -468,59 +513,45 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 			}
 		}
 
-		if !exists {
-			m.state.chat.participants = append(m.state.chat.participants, msg.member)
-			if !m.state.chat.searchActive || m.state.chat.searchInput.Value() == "" {
-				m.state.chat.filteredIndices = append(m.state.chat.filteredIndices, len(m.state.chat.participants)-1)
-			}
+		if exists {
+			return m, m.waitWS()
 		}
-		if m.state.chat.wsMsgChan != nil {
-			return m, waitForWSMessage(m.state.chat.wsMsgChan)
+		m.state.chat.participants = append(m.state.chat.participants, msg.member)
+		if !m.state.chat.searchActive || m.state.chat.searchInput.Value() == "" {
+			m.state.chat.filteredIndices = append(m.state.chat.filteredIndices, len(m.state.chat.participants)-1)
 		}
-		return m, nil
+		if m.userID != nil && msg.member.ID == *m.userID {
+			return m, m.waitWS()
+		}
+		m.state.chat.waifuMood = "a new friend!"
+		m, cmd = m.toast(theme.ToneSuccess, msg.member.Username+" joined")
+		return m, tea.Batch(cmd, m.waitWS())
 
 	case wsMemberLeftMsg:
+		name := msg.username
+		if name == "" {
+			name = m.participantName(msg.userID)
+		}
 		for i, p := range m.state.chat.participants {
 			if p.ID == msg.userID {
 				m.state.chat.participants = append(m.state.chat.participants[:i], m.state.chat.participants[i+1:]...)
 				break
 			}
 		}
-		m.state.chat.filteredIndices = make([]int, 0)
-		for i := range m.state.chat.participants {
-			m.state.chat.filteredIndices = append(m.state.chat.filteredIndices, i)
+		m = m.resetMemberFilter()
+		if name == "" {
+			return m, m.waitWS()
 		}
-		if m.state.chat.wsMsgChan != nil {
-			return m, waitForWSMessage(m.state.chat.wsMsgChan)
-		}
-		return m, nil
+		m.state.chat.waifuMood = "bye bye~"
+		m, cmd = m.toast(theme.ToneInfo, name+" left")
+		return m, tea.Batch(cmd, m.waitWS())
 
 	case wsMemberListMsg:
 		m.state.chat.participants = msg.members
-		m.state.chat.filteredIndices = make([]int, len(msg.members))
-		for i := range m.state.chat.filteredIndices {
-			m.state.chat.filteredIndices[i] = i
-		}
-		if m.state.chat.wsMsgChan != nil {
-			return m, waitForWSMessage(m.state.chat.wsMsgChan)
-		}
-		return m, nil
+		m = m.resetMemberFilter()
+		return m, m.waitWS()
 
-	case roomExpirationRedirectMsg:
-		m = m.closeModal()
-		m.clearChatState()
-		return m.NewRoomSwitch()
-
-	case roomExpirationDismissedMsg:
-		m = m.closeModal()
-		m.clearChatState()
-		return m.NewRoomSwitch()
-	case wsKickTimeoutMsg:
-		m = m.closeModal()
-		m.clearChatState()
-		return m.NewRoomSwitch()
-
-	case wsRoomDeletedTimeoutMsg:
+	case roomExpirationRedirectMsg, roomExpirationDismissedMsg, wsKickTimeoutMsg, wsRoomDeletedTimeoutMsg:
 		m = m.closeModal()
 		m.clearChatState()
 		return m.NewRoomSwitch()
@@ -528,392 +559,150 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 	case wsKickedMsg:
 		// Check if I'm the one being kicked
 		if m.userID != nil && *m.userID == msg.userID {
-			m.state.notify = notifyState{
-				open:          true,
-				title:         "Kicked from Room",
-				content:       fmt.Sprintf("You were kicked by %s\nReason: %s", msg.username, msg.reason),
-				confirmAction: NoAction,
+			content := "The room owner removed you."
+			if msg.reason != "" {
+				content += "\nReason: " + msg.reason
 			}
+			m = m.alert(theme.ToneDanger, "You were kicked", content)
 			return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg {
 				return wsKickTimeoutMsg{}
 			})
 		}
 
-		// Someone else was kicked - remove them from participant list
+		name := m.participantName(msg.userID)
 		for i, p := range m.state.chat.participants {
 			if p.ID == msg.userID {
 				m.state.chat.participants = append(m.state.chat.participants[:i], m.state.chat.participants[i+1:]...)
 				break
 			}
 		}
-
-		m.state.chat.filteredIndices = make([]int, 0)
-		for i := range m.state.chat.participants {
-			m.state.chat.filteredIndices = append(m.state.chat.filteredIndices, i)
+		m = m.resetMemberFilter()
+		if name == "" {
+			return m, m.waitWS()
 		}
-
-		if m.state.chat.wsMsgChan != nil {
-			return m, waitForWSMessage(m.state.chat.wsMsgChan)
-		}
-		return m, nil
+		m, cmd = m.toast(theme.ToneWarning, name+" was kicked")
+		return m, tea.Batch(cmd, m.waitWS())
 	case wsRoomDeletedMsg:
-		m.state.notify = notifyState{
-			open:          true,
-			title:         "Room Deleted",
-			content:       "This room has been deleted by the owner",
-			confirmAction: NoAction,
-		}
+		m = m.alert(theme.ToneDanger, "Room deleted", "The owner deleted this room. Taking you back to the start…")
 		return m, tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 			return wsRoomDeletedTimeoutMsg{}
 		})
 
 	case wsErrorMsg:
-		if msg.code == "AUTH_FAILED" || msg.code == "JOIN_FAILED" {
-			m.state.notify = notifyState{
-				open:          true,
-				title:         "Connection Error",
-				content:       msg.message,
-				confirmAction: NoAction,
-			}
-			return m, nil
+		switch msg.code {
+		case "AUTH_FAILED", "JOIN_FAILED":
+			return m.alert(theme.ToneDanger, "Connection error", msg.message), nil
+		case "RATE_LIMITED":
+			m, cmd = m.toast(theme.ToneWarning, "Slow down a little: you're sending too fast")
+			return m, tea.Batch(cmd, m.waitWS())
 		}
-
-		if msg.code == "RATE_LIMITED" {
-			m.state.notify = notifyState{
-				open:          true,
-				title:         "Rate Limited",
-				content:       "You're sending messages too quickly. Please slow down.",
-				confirmAction: NoAction,
-			}
-			return m, waitForWSMessage(m.state.chat.wsMsgChan)
-		}
-
-		return m, waitForWSMessage(m.state.chat.wsMsgChan)
+		return m, m.waitWS()
 
 	case wsDisconnectedMsg:
-		m.state.notify = notifyState{
-			open:          true,
-			title:         "Disconnected",
-			content:       "Lost connection to the chat room",
-			confirmAction: NoAction,
-		}
-		return m, nil
+		return m.alert(theme.ToneDanger, "Disconnected", "Lost the connection to this room. Press ctrl+b to leave."), nil
 
 	case participantSearchResultMsg:
-		if len(msg.results) == 0 {
-			m.state.chat.filteredIndices = make([]int, len(m.state.chat.participants))
-			for i := range m.state.chat.filteredIndices {
-				m.state.chat.filteredIndices[i] = i
-			}
+		if len(msg.results) == 0 && m.state.chat.searchInput.Value() == "" {
+			m = m.resetMemberFilter()
 		} else {
 			m.state.chat.filteredIndices = make([]int, len(msg.results))
 			for i, result := range msg.results {
 				m.state.chat.filteredIndices[i] = int(result.HayIndex)
 			}
 		}
+		m.state.chat.memberCursor = 0
 		return m, nil
 
 	case tea.WindowSizeMsg:
-		m = m.syncChatLayout()
-
-		// Re-render cached images for the new size from the bytes we already
-		// have, instead of leaving them stuck on "loading".
-		m.state.chat.imagePreviews = make(map[string]string)
-		for id := range m.state.chat.imageFetched {
-			m = m.renderImagePreview(id)
-		}
-		m = m.withSidebarImage()
-		m.state.chat.messagesViewport.SetContent(m.renderMessages())
+		m = m.relayoutChat()
 
 	case tea.KeyPressMsg:
 		// Handle modal input first if modal is open
 		if m.state.notify.open {
-			switch m.state.notify.confirmAction {
-			case FileExplorerAction:
-				m, cmd = m.fileExplorerUpdate(msg)
-				cmds = append(cmds, cmd)
-				return m, tea.Batch(cmds...)
-			case NoAction:
-				switch msg.String() {
-				case "enter", "esc", "space", "o", "O":
-					m = m.closeModal()
-					return m, nil
-				}
-			case RoomExpiredAction:
-				switch msg.String() {
-				case "enter", "esc", "space", "o", "O", "y", "Y":
-					return m, func() tea.Msg {
-						return roomExpirationDismissedMsg{}
-					}
-				}
-			case NewJoinCodeAction:
-				switch msg.String() {
-				case "y", "Y", "enter":
-					m = m.closeModal()
-					if m.state.chat.room == nil {
-						return m, nil
-					}
-					roomID, client := m.state.chat.room.ID, m.client
-					return m, m.chatRequest("generate a new join code", func(ctx context.Context, opts []option.RequestOption) error {
-						return client.Room.GenerateNewJoinCode(ctx, roomID, opts...)
-					})
-				case "n", "N", "esc":
-					m = m.closeModal()
-					return m, nil
-				}
-			case ShowQRCodeAction:
-				m = m.closeModal()
-				return m, nil
-			case KickMemberAction:
-				switch msg.String() {
-				case "y", "Y", "enter":
-					return m, func() tea.Msg {
-						return kickMemberSubmittedMsg{
-							userID: m.state.chat.selectedKickUserID,
-						}
-					}
-				case "n", "N", "esc":
-					m = m.closeModal()
-					m.state.chat.selectedKickUserID = ""
-					return m, nil
-				}
-			case GoBackAction:
-				switch msg.String() {
-				case "y", "Y", "enter":
-					m = m.closeModal()
-					leave := m.leaveRoomRequest()
-					m.clearChatState()
-					m, cmd = m.NewRoomSwitch()
-					return m, tea.Batch(cmd, func() tea.Msg { leave(); return nil })
-				case "n", "N", "esc":
-					m = m.closeModal()
-					return m, nil
-				}
-			case DeleteMessageAction:
-				switch msg.String() {
-				case "y", "Y", "enter":
-					m = m.closeModal()
-					m.state.chat.editMode = false
-					m.state.chat.selectedMessageIndex = -1
-					return m, func() tea.Msg {
-						return messageDeleteSubmittedMsg{
-							messageID: m.state.chat.editingMessageID,
-						}
-					}
-				case "n", "N", "esc":
-					m = m.closeModal()
-					return m, nil
-				}
-			case EditMessageAction:
-				m.state.chat.editInput, cmd = m.state.chat.editInput.Update(msg)
-				cmds = append(cmds, cmd)
-
-				switch msg.String() {
-				case "enter":
-					// Submit the edit
-					newContent := m.state.chat.editInput.Value()
-					originalContent := m.getMessageContent(m.state.chat.editingMessageID)
-
-					if newContent != "" && newContent != originalContent {
-						m = m.closeModal()
-						return m, func() tea.Msg {
-							return messageEditSubmittedMsg{
-								messageID:  m.state.chat.editingMessageID,
-								newContent: newContent,
-							}
-						}
-					}
-					m = m.closeModal()
-					return m, nil
-				case "esc":
-					m = m.closeModal()
-					m.state.chat.editMode = false
-					m.state.chat.selectedMessageIndex = -1
-					return m, nil
-				}
-				return m, tea.Batch(cmds...)
-			}
-			// Don't process other keys when modal is open
-			return m, nil
+			return m.chatModalUpdate(msg)
 		}
 
-		// Handle edit mode navigation
-		if m.state.chat.editMode && !m.state.notify.open {
+		if m.state.chat.editMode {
+			return m.chatEditModeUpdate(msg)
+		}
+
+		if m.state.chat.searchActive {
 			switch msg.String() {
-			case "up", "k":
-				m.state.chat.selectedMessageIndex = m.getPreviousOwnMessageIndex(m.state.chat.selectedMessageIndex)
+			case "up":
+				m.state.chat.memberCursor = max(m.state.chat.memberCursor-1, 0)
 				return m, nil
-			case "down", "j":
-				m.state.chat.selectedMessageIndex = m.getNextOwnMessageIndex(m.state.chat.selectedMessageIndex)
-				return m, nil
-			case "delete", "ctrl+d":
-				if m.state.chat.selectedMessageIndex >= 0 && m.state.chat.selectedMessageIndex < len(m.state.chat.messages) {
-					selectedMsg := m.state.chat.messages[m.state.chat.selectedMessageIndex]
-					m.state.chat.editingMessageID = selectedMsg.ID
-					m = m.openDeleteMessageModal(selectedMsg.Content)
-					return m, nil
-				}
+			case "down":
+				m.state.chat.memberCursor = min(m.state.chat.memberCursor+1, max(len(m.state.chat.filteredIndices)-1, 0))
 				return m, nil
 			case "enter":
-				if m.state.chat.selectedMessageIndex >= 0 && m.state.chat.selectedMessageIndex < len(m.state.chat.messages) {
-					selectedMsg := m.state.chat.messages[m.state.chat.selectedMessageIndex]
-					m.state.chat.editingMessageID = selectedMsg.ID
-					m.state.chat.editInput.SetValue(selectedMsg.Content)
-					m = m.openEditMessageModal(selectedMsg.Content)
-					return m, nil
-				}
-				return m, nil
-			case "esc", "ctrl+e":
-				m.state.chat.editMode = false
-				m.state.chat.selectedMessageIndex = -1
-				return m, nil
+				return m.kickSelectedMember()
+			case "esc":
+				return m.closeSearch(), nil
 			}
-			return m, nil
 		}
 
 		switch {
 		case msg.String() == "ctrl+u":
-			m = m.openFileExplorer()
-			return m, nil
+			return m.openFileExplorer(), nil
 		case msg.String() == "ctrl+p":
-			m = m.openQrCodeModal()
-			return m, nil
+			return m.openQrCodeModal(), nil
+		case msg.String() == "ctrl+w":
+			m.state.chat.hideWaifu = !m.state.chat.hideWaifu
+			return m.relayoutChat(), nil
 		case msg.String() == "ctrl+a":
 			content := m.state.chat.messageInput.Value()
-			if content == "" || m.state.chat.aiEnhancing {
+			if content == "" {
+				return m.toast(theme.ToneInfo, "Write a draft first, then ctrl+a rewrites it")
+			}
+			if m.state.chat.aiEnhancing {
 				return m, nil
 			}
 			m.state.chat.aiEnhancing = true
-			// TODO: Set default later
 			if m.state.chat.aiEnhanceStyle == "" {
 				m.state.chat.aiEnhanceStyle = "professional"
 			}
 			if m.state.chat.aiEnhanceTone == "" {
 				m.state.chat.aiEnhanceTone = "polite"
 			}
-			return m, m.enhanceMessage(content)
+			return m, tea.Batch(m.enhanceMessage(content), animTick(animFastInterval))
 		case key.Matches(msg, keys.BackToMenu):
-			m = m.openWarnModalForLeaveRoom()
-			return m, nil
+			return m.openWarnModalForLeaveRoom(), nil
 		case key.Matches(msg, keys.NewJoinCode):
 			if !m.state.chat.isRoomOwner {
-				m.state.notify = notifyState{
-					open:          true,
-					title:         "Permission Denied",
-					content:       "Only the room owner can generate a new join code",
-					confirmAction: NoAction,
-				}
-				return m, nil
+				return m.toast(theme.ToneWarning, "Only the room owner can change the join code")
 			}
-
-			m = m.openNewJoinCodeModal()
-
-			return m, nil
+			return m.openNewJoinCodeModal(), nil
 		case key.Matches(msg, keys.ToggleSearch):
-			m.state.chat.searchActive = !m.state.chat.searchActive
 			if m.state.chat.searchActive {
-				m.state.chat.focusedInput = focusSearch
-				m.state.chat.searchInput.Focus()
-				m.state.chat.messageInput.Blur()
-			} else {
-				m.state.chat.focusedInput = focusMessage
-				m.state.chat.messageInput.Focus()
-				m.state.chat.searchInput.Blur()
-				m.state.chat.searchInput.SetValue("")
-				m.state.chat.filteredIndices = make([]int, len(m.state.chat.participants))
-				for i := range m.state.chat.filteredIndices {
-					m.state.chat.filteredIndices[i] = i
-				}
+				return m.closeSearch(), nil
 			}
+			if m.chatLeftWidth() == 0 {
+				return m.toast(theme.ToneInfo, "Widen the window to see the member list")
+			}
+			m.state.chat.searchActive = true
+			m.state.chat.focusedInput = focusSearch
+			m.state.chat.memberCursor = 0
+			m.state.chat.searchInput.Focus()
+			m.state.chat.messageInput.Blur()
 			return m, nil
 		case msg.String() == "ctrl+e":
-			// Toggle edit mode
-			if !m.state.chat.editMode {
-				// Enter edit mode and select the most recent own message
-				m.state.chat.editMode = true
-				m.state.chat.selectedMessageIndex = m.getLastOwnMessageIndex()
-			} else {
-				m.state.chat.editMode = false
-				m.state.chat.selectedMessageIndex = -1
+			m.state.chat.selectedMessageIndex = m.getLastOwnMessageIndex()
+			if m.state.chat.selectedMessageIndex < 0 {
+				return m.toast(theme.ToneInfo, "You haven't sent any messages yet")
 			}
-		case key.Matches(msg, keys.Enter):
-			if m.state.chat.focusedInput == focusSearch && m.state.chat.searchActive && len(m.state.chat.filteredIndices) == 1 && m.state.chat.isRoomOwner {
-				participantIdx := m.state.chat.filteredIndices[0]
-				if participantIdx >= 0 && participantIdx < len(m.state.chat.participants) {
-					selectedParticipant := m.state.chat.participants[participantIdx]
-
-					// Don't allow kicking yourself
-					if m.userID != nil && selectedParticipant.ID == *m.userID {
-						m.state.notify = notifyState{
-							open:          true,
-							title:         "Cannot Kick Yourself",
-							content:       "You cannot kick yourself from the room",
-							confirmAction: NoAction,
-						}
-						return m, nil
-					}
-
-					m.state.chat.selectedKickUserID = selectedParticipant.ID
-					m = m.openKickMemberModal(selectedParticipant.Username)
-					return m, nil
-				}
-			}
-
-			if m.state.chat.focusedInput == focusMessage && m.state.chat.messageInput.Value() != "" {
-				content := m.state.chat.messageInput.Value()
-
-				limit := validate.WithinLen(1, maxMessageLen, "message")
-				limitText := fmt.Sprintf("Messages must be between 1 and %d characters", maxMessageLen)
-				if m.state.chat.room != nil && m.state.chat.room.EncryptionKey != "" {
-					limit = validate.MaxBytes(maxEncryptedMessageBytes, "message")
-					limitText = fmt.Sprintf("Encrypted messages are limited to %d bytes", maxEncryptedMessageBytes)
-				}
-				validator := validate.Compose(validate.NotEmpty("message"), limit)
-
-				if err := validator(content); err != nil {
-					m.state.notify = notifyState{
-						open:          true,
-						title:         "Invalid Message",
-						content:       limitText,
-						confirmAction: NoAction,
-					}
-					return m, nil
-				}
-
-				m.state.chat.messageInput.SetValue("")
-
-				if m.state.chat.room == nil {
-					return m, nil
-				}
-				roomID, client := m.state.chat.room.ID, m.client
-				return m, m.chatRequest("send message", func(ctx context.Context, opts []option.RequestOption) error {
-					_, err := client.Message.Send(ctx, roomID, apisdk.SendMessageParams{Content: content}, opts...)
-					return err
-				})
-			}
-		case key.Matches(msg, keys.Back):
-			if m.state.chat.searchActive {
-				m.state.chat.searchActive = false
-				m.state.chat.focusedInput = focusMessage
-				m.state.chat.searchInput.Blur()
-				m.state.chat.messageInput.Focus()
-				m.state.chat.searchInput.SetValue("")
-				m.state.chat.filteredIndices = make([]int, len(m.state.chat.participants))
-				for i := range m.state.chat.filteredIndices {
-					m.state.chat.filteredIndices[i] = i
-				}
-				return m, nil
-			}
+			m.state.chat.editMode = true
+			return m.refreshMessages(), nil
+		case key.Matches(msg, keys.Enter) && m.state.chat.focusedInput == focusMessage:
+			return m.sendMessage()
+		case msg.String() == "end":
+			m.state.chat.messagesViewport.GotoBottom()
+			m.state.chat.unread = 0
+			return m, nil
 		}
 	}
 
-	// Update the appropriate input (only if modal is not open)
+	// Update the focused input.
 	if !m.state.notify.open {
-		if m.state.notify.confirmAction == EditMessageAction {
-			m.state.chat.editInput, cmd = m.state.chat.editInput.Update(msg)
-			cmds = append(cmds, cmd)
-		}
-
 		switch m.state.chat.focusedInput {
 		case focusMessage:
 			m.state.chat.messageInput, cmd = m.state.chat.messageInput.Update(msg)
@@ -932,13 +721,203 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		if !m.state.chat.editMode {
 			m.state.chat.messagesViewport, cmd = m.state.chat.messagesViewport.Update(msg)
 			cmds = append(cmds, cmd)
+			if m.state.chat.messagesViewport.AtBottom() {
+				m.state.chat.unread = 0
+			}
 		}
-	} else if m.state.notify.confirmAction == EditMessageAction {
-		m.state.chat.editInput, cmd = m.state.chat.editInput.Update(msg)
-		cmds = append(cmds, cmd)
 	}
 
 	return m, tea.Batch(cmds...)
+}
+
+func (m model) sendMessage() (model, tea.Cmd) {
+	content := m.state.chat.messageInput.Value()
+	if content == "" {
+		return m, nil
+	}
+
+	limit := validate.WithinLen(1, maxMessageLen, "message")
+	limitText := fmt.Sprintf("Messages can be up to %d characters", maxMessageLen)
+	if m.state.chat.room != nil && m.state.chat.room.EncryptionKey != "" {
+		limit = validate.MaxBytes(maxEncryptedMessageBytes, "message")
+		limitText = fmt.Sprintf("Encrypted messages can be up to %d bytes", maxEncryptedMessageBytes)
+	}
+	if err := validate.Compose(validate.NotEmpty("message"), limit)(content); err != nil {
+		return m.toast(theme.ToneWarning, limitText)
+	}
+
+	m.state.chat.messageInput.SetValue("")
+	m.state.chat.messagesViewport.GotoBottom()
+	m.state.chat.unread = 0
+
+	if m.state.chat.room == nil {
+		return m, nil
+	}
+	roomID, client := m.state.chat.room.ID, m.client
+	return m, m.chatRequest("send message", func(ctx context.Context, opts []option.RequestOption) error {
+		_, err := client.Message.Send(ctx, roomID, apisdk.SendMessageParams{Content: content}, opts...)
+		return err
+	})
+}
+
+func (m model) kickSelectedMember() (model, tea.Cmd) {
+	c := m.state.chat
+	if len(c.filteredIndices) == 0 {
+		return m, nil
+	}
+	if !c.isRoomOwner {
+		return m.toast(theme.ToneInfo, "Only the room owner can kick members")
+	}
+	idx := c.filteredIndices[min(c.memberCursor, len(c.filteredIndices)-1)]
+	if idx < 0 || idx >= len(c.participants) {
+		return m, nil
+	}
+	selected := c.participants[idx]
+	if m.userID != nil && selected.ID == *m.userID {
+		return m.toast(theme.ToneInfo, "You can't kick yourself. Use ctrl+b to leave.")
+	}
+	m.state.chat.selectedKickUserID = selected.ID
+	return m.openKickMemberModal(selected.Username), nil
+}
+
+// chatModalUpdate handles keys while a dialog is open on the chat page.
+func (m model) chatModalUpdate(msg tea.KeyPressMsg) (model, tea.Cmd) {
+	var cmd tea.Cmd
+	switch m.state.notify.confirmAction {
+	case FileExplorerAction:
+		return m.fileExplorerUpdate(msg)
+	case NoAction:
+		switch msg.String() {
+		case "enter", "esc", "space", "o", "O":
+			return m.closeModal(), nil
+		}
+		return m, nil
+	case RoomExpiredAction:
+		switch msg.String() {
+		case "enter", "esc", "space", "o", "O", "y", "Y":
+			return m, func() tea.Msg { return roomExpirationDismissedMsg{} }
+		}
+		return m, nil
+	case ShowQRCodeAction:
+		return m.closeModal(), nil
+	case EditMessageAction:
+		switch msg.String() {
+		case "enter":
+			newContent := m.state.chat.editInput.Value()
+			originalContent := m.getMessageContent(m.state.chat.editingMessageID)
+			m = m.closeModal()
+			if newContent != "" && newContent != originalContent {
+				id := m.state.chat.editingMessageID
+				return m, func() tea.Msg {
+					return messageEditSubmittedMsg{messageID: id, newContent: newContent}
+				}
+			}
+			return m, nil
+		case "esc":
+			m = m.closeModal()
+			m.state.chat.editMode = false
+			m.state.chat.selectedMessageIndex = -1
+			return m.refreshMessages(), nil
+		}
+		m.state.chat.editInput, cmd = m.state.chat.editInput.Update(msg)
+		return m, cmd
+	}
+
+	// Confirm dialogs.
+	answer := m.modalAnswer(msg)
+	if answer == answerToggle {
+		m.state.notify.focus = 1 - m.state.notify.focus
+		return m, nil
+	}
+	if answer == answerNone {
+		return m, nil
+	}
+	yes := answer == answerYes
+
+	switch m.state.notify.confirmAction {
+	case NewJoinCodeAction:
+		m = m.closeModal()
+		if !yes || m.state.chat.room == nil {
+			return m, nil
+		}
+		roomID, client := m.state.chat.room.ID, m.client
+		return m, m.chatRequest("generate a new join code", func(ctx context.Context, opts []option.RequestOption) error {
+			return client.Room.GenerateNewJoinCode(ctx, roomID, opts...)
+		})
+	case KickMemberAction:
+		if !yes {
+			m.state.chat.selectedKickUserID = ""
+			return m.closeModal(), nil
+		}
+		userID := m.state.chat.selectedKickUserID
+		return m, func() tea.Msg { return kickMemberSubmittedMsg{userID: userID} }
+	case GoBackAction:
+		m = m.closeModal()
+		if !yes {
+			return m, nil
+		}
+		leave := m.leaveRoomRequest()
+		m.clearChatState()
+		m, cmd = m.NewRoomSwitch()
+		return m, tea.Batch(cmd, func() tea.Msg { leave(); return nil })
+	case DeleteMessageAction:
+		m = m.closeModal()
+		if !yes {
+			return m, nil
+		}
+		m.state.chat.editMode = false
+		m.state.chat.selectedMessageIndex = -1
+		m = m.refreshMessages()
+		id := m.state.chat.editingMessageID
+		return m, func() tea.Msg { return messageDeleteSubmittedMsg{messageID: id} }
+	}
+	return m, nil
+}
+
+// chatEditModeUpdate handles keys while picking one of your messages.
+func (m model) chatEditModeUpdate(msg tea.KeyPressMsg) (model, tea.Cmd) {
+	c := m.state.chat
+	valid := c.selectedMessageIndex >= 0 && c.selectedMessageIndex < len(c.messages)
+
+	switch msg.String() {
+	case "up", "k":
+		m.state.chat.selectedMessageIndex = m.getPreviousOwnMessageIndex(c.selectedMessageIndex)
+		return m.refreshMessages(), nil
+	case "down", "j":
+		m.state.chat.selectedMessageIndex = m.getNextOwnMessageIndex(c.selectedMessageIndex)
+		return m.refreshMessages(), nil
+	case "delete", "ctrl+d":
+		if valid {
+			selected := c.messages[c.selectedMessageIndex]
+			m.state.chat.editingMessageID = selected.ID
+			return m.openDeleteMessageModal(selected.Content), nil
+		}
+	case "enter":
+		if valid {
+			selected := c.messages[c.selectedMessageIndex]
+			m.state.chat.editingMessageID = selected.ID
+			return m.openEditMessageModal(selected.Content), nil
+		}
+	case "esc", "ctrl+e":
+		m.state.chat.editMode = false
+		m.state.chat.selectedMessageIndex = -1
+		return m.refreshMessages(), nil
+	}
+	return m, nil
+}
+
+// relayoutChat resizes everything that depends on the window size.
+func (m model) relayoutChat() model {
+	m = m.syncChatLayout()
+
+	// Re-render cached images for the new size from the bytes we already
+	// have, instead of leaving them stuck on "loading".
+	m.state.chat.imagePreviews = make(map[string]string)
+	for id := range m.state.chat.imageFetched {
+		m = m.renderImagePreview(id)
+	}
+	m = m.withSidebarImage()
+	return m.refreshMessages()
 }
 
 // Helper functions for message navigation
@@ -1010,297 +989,6 @@ func (m model) searchParticipants(query string) tea.Cmd {
 	}
 }
 
-func (m model) ChatView() string {
-	if m.size == undersized || m.size == small || !m.chatLayoutFits() {
-		return m.chatViewCompact()
-	}
-
-	leftWidth := 25
-	rightWidth := 40
-	centerWidth := m.viewportWidth - leftWidth - rightWidth - 4
-
-	header := m.renderChatHeader()
-	headerHeight := lipgloss.Height(header)
-	columnHeight := m.viewportHeight - headerHeight
-
-	// Sync viewport dimensions every frame to stay consistent
-	m.state.chat.messagesViewport.SetWidth(centerWidth)
-	m.state.chat.messagesViewport.SetHeight(columnHeight - 4)
-	m.state.chat.messageInput.SetWidth(centerWidth - 2)
-
-	leftColumn := m.renderParticipantsSidebar(leftWidth, columnHeight)
-	centerColumn := m.renderChatCenter(centerWidth, columnHeight)
-	rightColumn := m.renderRightSidebar(rightWidth, columnHeight)
-
-	body := lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, centerColumn, rightColumn)
-	content := lipgloss.JoinVertical(lipgloss.Left, header, body)
-
-	baseView := m.theme.Base().
-		Width(m.viewportWidth).
-		Height(m.viewportHeight).
-		Render(content)
-
-	if m.state.notify.open {
-		var notifyModal string
-		switch m.state.notify.confirmAction {
-		case EditMessageAction:
-			notifyModal = m.RenderEditModal()
-		case FileExplorerAction:
-			notifyModal = m.RenderFileExplorerModal()
-		default:
-			notifyModal = m.RenderWarnModal()
-		}
-		overlayX := (m.viewportWidth - ModalWidth) / 2
-		overlayY := (m.viewportHeight - ModalHeight) / 2
-		return strfn.PlaceOverlay(overlayX, overlayY, notifyModal, baseView)
-	}
-	return baseView
-}
-
-func (m model) renderChatHeader() string {
-	// Room info with expiration timer
-	var roomInfo string
-	if m.state.chat.timeRemaining != "" {
-		timeColor := lipgloss.Color("#10B981") // Green by default
-		remaining := time.Until(m.state.chat.expiresAt)
-
-		if remaining <= 5*time.Minute {
-			timeColor = lipgloss.Color("#EF4444") // Red for < 5 minutes
-		} else if remaining <= 15*time.Minute {
-			timeColor = lipgloss.Color("#F59E0B") // Orange for < 15 minutes
-		}
-
-		timerStyle := m.theme.Base().Foreground(timeColor).Bold(true)
-		roomInfo = fmt.Sprintf("Room: %s | %s",
-			m.state.chat.roomCode,
-			timerStyle.Render(m.state.chat.timeRemaining))
-	} else {
-		roomInfo = fmt.Sprintf("Room: %s", m.state.chat.roomCode)
-	}
-
-	participantCount := fmt.Sprintf("🍣 %d", len(m.state.chat.participants))
-
-	leftPart := m.theme.TextBrand().Bold(true).Render(roomInfo)
-	rightPart := m.theme.TextBody().Render(participantCount)
-
-	spacer := max(m.viewportWidth-lipgloss.Width(leftPart)-lipgloss.Width(rightPart)-4, 0)
-
-	header := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		leftPart,
-		strings.Repeat(" ", spacer),
-		rightPart,
-	)
-
-	return m.theme.Base().
-		Width(m.viewportWidth).
-		BorderBottom(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(m.theme.Border()).
-		Padding(0, 1).
-		Render(header)
-}
-
-func (m model) renderParticipantsSidebar(width, height int) string {
-	sb := strings.Builder{}
-
-	searchStyle := m.theme.Base().
-		Width(width-2).
-		Padding(0, 1)
-
-	sb.WriteString(searchStyle.Render(m.state.chat.searchInput.View()))
-	sb.WriteString("\n")
-
-	titleText := fmt.Sprintf("Participants (%d)", len(m.state.chat.filteredIndices))
-	title := m.theme.TextAccent().Bold(true).Render(titleText)
-	sb.WriteString(m.theme.Base().Padding(0, 1).Render(title))
-	sb.WriteString("\n\n")
-
-	for _, idx := range m.state.chat.filteredIndices {
-		if idx >= len(m.state.chat.participants) {
-			continue
-		}
-
-		p := m.state.chat.participants[idx]
-		statusIcon := "●"
-		status := m.theme.Base().Foreground(lipgloss.Color("#10B981")).Render(statusIcon)
-		username := m.theme.TextBody().Render(p.Username)
-
-		line := lipgloss.JoinHorizontal(lipgloss.Left, status, " ", username)
-		sb.WriteString(m.theme.Base().Padding(0, 1).Render(line))
-		sb.WriteString("\n")
-	}
-
-	content := sb.String()
-
-	return m.theme.Base().
-		Width(width).
-		Height(height).
-		BorderRight(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(m.theme.Border()).
-		Render(content)
-}
-
-func (m model) renderChatCenter(width, height int) string {
-	sb := strings.Builder{}
-
-	messagesContainer := m.theme.Base().
-		Width(width).
-		Height(height - 4).
-		Render(m.state.chat.messagesViewport.View())
-
-	sb.WriteString(messagesContainer)
-	sb.WriteString("\n")
-
-	inputBorder := m.theme.Base().
-		Width(width).
-		BorderTop(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(m.theme.Border()).
-		Padding(0, 1).
-		Render(m.state.chat.messageInput.View())
-
-	sb.WriteString(inputBorder)
-
-	if m.state.chat.aiEnhancing {
-		enhancingStyle := m.theme.Base().Foreground(lipgloss.Color("#F59E0B")).Bold(true)
-		sb.WriteString(enhancingStyle.Render("  ✦ Enhancing with AI..."))
-		sb.WriteString("\n")
-	}
-
-	var hint string
-	if m.state.chat.editMode {
-		hint = m.theme.TextAccent().Bold(true).Render("EDIT MODE: ↑/↓ to select, Enter to edit, Esc to cancel")
-	} else {
-		hint = m.theme.TextBody().Faint(true).Render(
-			"Ctrl+S: search | Ctrl+E: edit | Ctrl+U: upload | Ctrl+A: AI enhance",
-		)
-	}
-	sb.WriteString(m.theme.Base().Padding(0, 1).Render(hint))
-
-	return m.theme.Base().
-		Width(width).
-		Height(height).
-		Render(sb.String())
-}
-
-func (m model) renderMessages() string {
-	sb := strings.Builder{}
-
-	var userID string
-	if m.userID == nil {
-		userID = "You"
-	} else {
-		userID = *m.userID
-	}
-
-	// Text wraps inside the viewport: 1 cell of padding on each side plus the
-	// 2-cell indent under the header. Without this, long messages were cut off.
-	contentWidth := max(m.state.chat.messagesViewport.Width()-4, 1)
-
-	for i, msg := range m.state.chat.messages {
-		timestamp := m.theme.TextBody().Faint(true).Render(msg.CreatedAt.Format("3:04 PM"))
-
-		var username string
-		isOwnMessage := userID == msg.UserID
-
-		if isOwnMessage {
-			username = m.theme.TextBrand().Bold(true).Render(msg.Username)
-		} else {
-			username = m.theme.TextAccent().Bold(true).Render(msg.Username)
-		}
-
-		// Add selection indicator if in edit mode
-		var selectionIndicator string
-		if m.state.chat.editMode && isOwnMessage && i == m.state.chat.selectedMessageIndex {
-			selectionIndicator = m.theme.Base().
-				Foreground(m.theme.Highlight()).
-				Bold(true).
-				Render("► ")
-		} else {
-			selectionIndicator = "  "
-		}
-
-		header := lipgloss.JoinHorizontal(lipgloss.Left, selectionIndicator, timestamp, " ", username)
-		content := m.renderMessageContent(msg, isOwnMessage, contentWidth)
-
-		msgStyle := m.theme.Base().
-			Padding(0, 1).
-			MarginBottom(1)
-
-		fullMsg := lipgloss.JoinVertical(lipgloss.Left, header, lipgloss.NewStyle().PaddingLeft(2).Render(content))
-		sb.WriteString(msgStyle.Render(fullMsg))
-		sb.WriteString("\n")
-	}
-
-	return sb.String()
-}
-
-func (m model) renderMessageContent(msg apisdk.MessageResponse, isOwnMessage bool, width int) string {
-	if isImageURL(msg.Content) {
-		if m.state.chat.imageFailed[msg.ID] {
-			return m.theme.TextBody().Faint(true).Render("[image unavailable]")
-		}
-
-		if preview, ok := m.state.chat.imagePreviews[msg.ID]; ok {
-			return preview
-		}
-
-		return m.theme.TextBody().Faint(true).Render("⏳ loading image...")
-	}
-
-	if isOwnMessage {
-		return m.theme.TextAccent().Width(width).Render(msg.Content)
-	}
-	return m.theme.TextBody().Width(width).Render(msg.Content)
-}
-
-func (m model) renderRightSidebar(width, height int) string {
-	textHeight := 2
-	imageHeight := height - textHeight - 2
-
-	// View has a value receiver, so the image must be cached from Update (see
-	// withSidebarImage); rendering it here on a miss would decode and resize
-	// the PNG on every frame.
-	imageContent := m.state.chat.cachedImageContent
-	if m.state.chat.cachedImageWidth != width-2 || m.state.chat.cachedImageHeight != imageHeight {
-		imageContent = m.sidebarImage(width-2, imageHeight)
-	}
-
-	waifuText := m.theme.TextAccent().
-		Italic(true).
-		Render("Your waifu approves")
-
-	textStyle := m.theme.Base().
-		Width(width - 2).
-		Align(lipgloss.Center)
-
-	centeredText := textStyle.Render(waifuText)
-
-	content := lipgloss.JoinVertical(
-		lipgloss.Left,
-		imageContent,
-		"",
-		centeredText,
-	)
-
-	return m.theme.Base().
-		Width(width).
-		Height(height).
-		BorderLeft(true).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(m.theme.Border()).
-		Render(content)
-}
-
-func (m model) chatViewCompact() string {
-	return m.theme.Base().
-		Width(m.widthContainer).
-		Height(m.heightContainer).
-		Render(m.theme.TextBody().Render("Chat view requires a larger terminal window"))
-}
-
 func (m *model) clearChatState() {
 	if m.state.chat.wsCancel != nil {
 		m.state.chat.wsCancel()
@@ -1323,11 +1011,11 @@ func (m *model) clearChatState() {
 
 func (m model) openEditMessageModal(currentContent string) model {
 	m.state.chat.editInput.SetValue(currentContent)
+	m.state.chat.editInput.CursorEnd()
 	m.state.chat.editInput.Focus()
 	m.state.notify = notifyState{
 		open:          true,
-		title:         "Edit Message",
-		content:       "",
+		title:         "Edit message",
 		confirmAction: EditMessageAction,
 	}
 	return m
@@ -1338,98 +1026,6 @@ func fetchImage(messageID, url string) tea.Cmd {
 		bytes, err := fetchImageBytes(url)
 		return imageFetchedMsg{messageID: messageID, url: url, bytes: bytes, err: err}
 	}
-}
-
-const (
-	chatLeftWidth      = 25
-	chatRightWidth     = 40
-	imagePreviewHeight = 15
-)
-
-func (m model) chatCenterWidth() int {
-	return m.viewportWidth - chatLeftWidth - chatRightWidth - 4
-}
-
-func (m model) chatColumnHeight() int {
-	return m.viewportHeight - lipgloss.Height(m.renderChatHeader())
-}
-
-// minChatCenterWidth is the narrowest message column the three-column chat
-// layout is drawn with; below it (or with no room for the message viewport)
-// ChatView falls back to the compact view instead of rendering with negative
-// widths, which panics inside the viewport/textinput.
-const minChatCenterWidth = 10
-
-// syncChatLayout sizes the message viewport and inputs for the current window.
-// It must run whenever a room is opened, not only on resize: View works on a
-// copy of the model, so sizes set there never reach Update, and a freshly
-// joined room kept the 50x20 defaults (wrapping and scrolling were computed
-// for 20 rows while more were shown, leaving blank rows under the last message).
-func (m model) syncChatLayout() model {
-	centerWidth := m.chatCenterWidth()
-	columnHeight := m.chatColumnHeight()
-
-	m.state.chat.messagesViewport.SetWidth(max(centerWidth, 1))
-	m.state.chat.messagesViewport.SetHeight(max(columnHeight-4, 1))
-	m.state.chat.messageInput.SetWidth(max(centerWidth-2, 1))
-	m.state.chat.editInput.SetWidth(ModalWidth - 8)
-	return m
-}
-
-func (m model) chatLayoutFits() bool {
-	return m.chatCenterWidth() >= minChatCenterWidth && m.chatColumnHeight()-4 >= 1
-}
-
-// renderImagePreview renders the fetched image for messageID at the current
-// width and caches the result.
-func (m model) renderImagePreview(messageID string) model {
-	data, ok := m.state.chat.imageFetched[messageID]
-	if !ok {
-		return m
-	}
-	width := m.chatCenterWidth() - 4
-	if width <= 0 {
-		return m
-	}
-	preview, err := m.imagePreviewer.ImagePreviewFromBytes(data, width, imagePreviewHeight, "")
-	if err != nil {
-		log.Printf("Failed to render image for message %s: %v", messageID, err)
-		m.state.chat.imageFailed[messageID] = true
-		return m
-	}
-	m.state.chat.imagePreviews[messageID] = preview
-	return m
-}
-
-// sidebarImage renders the selected waifu image at the given size.
-func (m model) sidebarImage(width, height int) string {
-	img := embeds.WaifuImage
-	if m.settingsManager.GetUserConfig().SelectedWaifu == waifu2 {
-		img = embeds.Waifu2Image
-	}
-	content, err := m.imagePreviewer.ImagePreviewFromBytes(img, width, height, "")
-	if err != nil {
-		log.Printf("Failed to load embedded image: %v", err)
-		return m.theme.TextBody().Faint(true).Render("Image unavailable")
-	}
-	return content
-}
-
-// withSidebarImage caches the sidebar image for the current layout; it must
-// be called from Update whenever the layout changes.
-func (m model) withSidebarImage() model {
-	if m.size == undersized || m.size == small || m.viewportWidth == 0 {
-		return m
-	}
-	width := chatRightWidth - 2
-	height := m.chatColumnHeight() - 4
-	if width <= 0 || height <= 0 {
-		return m
-	}
-	m.state.chat.cachedImageContent = m.sidebarImage(width, height)
-	m.state.chat.cachedImageWidth = width
-	m.state.chat.cachedImageHeight = height
-	return m
 }
 
 // chatRequestFailedMsg reports a failed background API call made from the

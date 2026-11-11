@@ -212,20 +212,20 @@ func (m model) RenderFileExplorerModal() string {
 	borderStyle := m.theme.Base().
 		Width(feModalWidth).
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.theme.Highlight()).
+		BorderForeground(m.theme.Brand()).
 		Padding(0, 1)
 
-	titleStyle := m.theme.TextBrand().Bold(true)
-	dimStyle := m.theme.TextBody().Faint(true)
-	dirStyle := m.theme.TextAccent().Bold(true)
-	fileStyle := m.theme.TextBody()
-	cursorStyle := m.theme.Base().Foreground(m.theme.Highlight()).Bold(true)
-	errorStyle := m.theme.Base().Foreground(lipgloss.Color("#EF4444"))
+	titleStyle := m.theme.TextAccent().Bold(true)
+	dimStyle := m.theme.TextSubtle()
+	dirStyle := m.theme.TextBrand().Bold(true)
+	fileStyle := m.theme.TextAccent()
+	cursorStyle := m.theme.TextSecondary().Bold(true)
+	errorStyle := m.theme.TextError()
 
 	// Header
 	sb := strings.Builder{}
 
-	title := titleStyle.Render("  Select Image to Upload")
+	title := m.theme.TextBrand().Render("  ◆  ") + titleStyle.Render("Share an image")
 	sb.WriteString(title)
 	sb.WriteString("\n")
 
@@ -326,8 +326,8 @@ func (m model) RenderFileExplorerModal() string {
 		row := icon + label
 
 		if i == fe.cursor {
-			cursor := cursorStyle.Render("▶ ")
-			row = cursor + row
+			cursor := cursorStyle.Render("▌ ")
+			row = cursor + m.theme.Base().Background(m.theme.Surface()).Render(row)
 		} else {
 			row = "  " + row
 		}
@@ -345,7 +345,7 @@ func (m model) RenderFileExplorerModal() string {
 
 	sb.WriteString(dimStyle.Render(strings.Repeat("─", feModalWidth-2)))
 	sb.WriteString("\n")
-	sb.WriteString(dimStyle.Render("  ↑/↓ navigate  ←/→ enter/exit dir  Enter select  Esc cancel"))
+	sb.WriteString("  " + m.keyHints([]footerCommand{{"↑↓", "move"}, {"←→", "folders"}, {"enter", "send"}, {"~", "home"}, {"esc", "cancel"}}, feModalWidth-6))
 
 	return borderStyle.Render(sb.String())
 }

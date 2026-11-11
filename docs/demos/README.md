@@ -13,8 +13,8 @@ server only stores ciphertext.
 
 ## Create a room and invite people
 
-`n` creates a room. `Ctrl+P` shows a QR invite that carries the join code and
-secure token.
+`n` then `Enter` creates a room. `Ctrl+P` shows a QR invite that carries the
+join code and secure token.
 
 ![Creating a room and showing its QR invite](../assets/demos/create-room.gif)
 
@@ -38,11 +38,12 @@ text never leaves your machine.
 
 ![Enhancing a draft message with AI](../assets/demos/ai-enhance.gif)
 
-## FAQ and settings
+## Menu, FAQ, settings and help
 
-`←/→` move between the tabs; settings change the chat sidebar image.
+`m` opens the menu palette and `tab` or `←/→` move between the tabs. Settings
+pick the companion shown beside the chat, and `?` lists every shortcut.
 
-![FAQ and settings pages](../assets/demos/tour.gif)
+![Menu palette, FAQ, settings and help](../assets/demos/tour.gif)
 
 ## Re-recording
 

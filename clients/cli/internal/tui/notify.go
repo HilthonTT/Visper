@@ -2,9 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/hilthontt/visper/clients/cli/internal/tui/qr"
+	"github.com/hilthontt/visper/clients/cli/internal/tui/theme"
 )
 
 type ConfirmActionType int
@@ -25,7 +28,7 @@ const (
 	RoomExpiredAction
 	FileExplorerAction
 
-	ModalWidth  = 60
+	ModalWidth  = 58
 	ModalHeight = 9
 )
 
@@ -34,226 +37,221 @@ type notifyState struct {
 	title         string
 	content       string
 	confirmAction ConfirmActionType
-	qrCode        string
-	qrSize        int
+	tone          theme.Tone
+	// focus is the highlighted button of a confirm dialog: 0 confirm, 1 cancel.
+	focus  int
+	qrCode string
+	qrSize int
+}
+
+// modalAnswer is what a key press means to a confirm dialog.
+type modalAnswer int
+
+const (
+	answerNone modalAnswer = iota
+	answerYes
+	answerNo
+	answerToggle
+)
+
+func (m model) modalAnswer(msg tea.KeyPressMsg) modalAnswer {
+	switch msg.String() {
+	case "y", "Y":
+		return answerYes
+	case "n", "N", "esc":
+		return answerNo
+	case "enter", "space":
+		if m.state.notify.focus == 0 {
+			return answerYes
+		}
+		return answerNo
+	case "left", "right", "h", "l", "tab", "shift+tab":
+		return answerToggle
+	}
+	return answerNone
+}
+
+// alert opens a dialog with a single OK button.
+func (m model) alert(tone theme.Tone, title, content string) model {
+	m.state.notify = notifyState{
+		open:          true,
+		title:         title,
+		content:       content,
+		confirmAction: NoAction,
+		tone:          tone,
+	}
+	return m
 }
 
 func (m model) openWarnModalForLeaveRoom() model {
+	content := "You'll leave this room. You can come back with the join code while it's still open."
+	if m.state.chat.isRoomOwner {
+		content = "You own this room, so leaving deletes it for everyone. Messages are gone for good."
+	}
 	m.state.notify = notifyState{
 		open:          true,
-		title:         "Are you sure you want to leave?",
-		content:       "You will leave this room",
+		title:         "Leave this room?",
+		content:       content,
 		confirmAction: GoBackAction,
+		tone:          theme.ToneDanger,
 	}
 	return m
 }
 
 func (m model) closeModal() model {
-	m.state.notify = notifyState{
-		open: false,
-	}
+	m.state.notify = notifyState{open: false}
 	return m
 }
 
+func (m model) dialogWidth() int {
+	return max(min(ModalWidth, m.viewportWidth-4), 24)
+}
+
+// buttonLabels returns the confirm and cancel labels for a dialog.
+func buttonLabels(a ConfirmActionType) (string, string) {
+	switch a {
+	case GoBackAction:
+		return "Leave", "Stay"
+	case DeleteMessageAction:
+		return "Delete", "Keep"
+	case KickMemberAction:
+		return "Kick", "Cancel"
+	case NewJoinCodeAction:
+		return "Generate", "Cancel"
+	case RoomInviteAction:
+		return "Join", "Decline"
+	default:
+		return "Yes", "No"
+	}
+}
+
+// renderDialog draws the shared dialog frame: an icon and title, a body and a
+// row of buttons, with the border in the tone's colour.
+func (m model) renderDialog(tone theme.Tone, title, body, buttons string) string {
+	width := m.dialogWidth()
+	inner := width - 6
+	c := m.theme.ToneColor(tone)
+
+	head := m.theme.Base().Foreground(c).Bold(true).Render(theme.ToneIcon(tone)) + "  " +
+		m.theme.TextAccent().Bold(true).Render(title)
+
+	parts := []string{head}
+	if body != "" {
+		parts = append(parts, "", body)
+	}
+	if buttons != "" {
+		parts = append(parts, "", m.theme.Base().Width(inner).Align(lipgloss.Right).Render(buttons))
+	}
+
+	return m.theme.Base().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(c).
+		Padding(1, 2).
+		Width(width).
+		Render(strings.Join(parts, "\n"))
+}
+
+func (m model) button(label, hotkey string, focused bool, tone theme.Tone) string {
+	text := label
+	if hotkey != "" {
+		text += " " + hotkey
+	}
+	if focused {
+		return m.theme.Pill(m.theme.ToneColor(tone), m.theme.OnBrand()).Render(text)
+	}
+	return m.theme.Base().Background(m.theme.Surface()).Foreground(m.theme.Body()).Padding(0, 1).Render(text)
+}
+
 func (m model) RenderWarnModal() string {
-	if !m.state.notify.open {
+	n := m.state.notify
+	if !n.open {
 		return ""
 	}
 
-	if m.state.notify.confirmAction == ShowQRCodeAction {
+	switch n.confirmAction {
+	case ShowQRCodeAction:
 		return m.renderQRCodeModal()
+	case EditMessageAction:
+		return m.RenderEditModal()
 	}
+
+	tone := n.tone
+	switch n.confirmAction {
+	case GoBackAction, DeleteMessageAction, KickMemberAction:
+		tone = theme.ToneDanger
+	case NewJoinCodeAction, RoomExpiredAction:
+		tone = theme.ToneWarning
+	}
+
+	inner := m.dialogWidth() - 6
+	body := m.theme.TextBody().Width(inner).Render(n.content)
 
 	var buttons string
-	if m.state.notify.confirmAction == NoAction {
-		buttons = m.renderOkButton()
-	} else {
-		buttons = m.renderConfirmCancelButtons()
+	switch n.confirmAction {
+	case NoAction, RoomExpiredAction:
+		buttons = m.button("OK", "", true, tone)
+	default:
+		yes, no := buttonLabels(n.confirmAction)
+		buttons = m.button(no, "", n.focus == 1, theme.ToneInfo) + "  " + m.button(yes, "", n.focus == 0, tone)
+		hints := m.theme.TextSubtle().Render("y / n · ←→ · enter")
+		buttons = spread(inner, hints, buttons)
 	}
 
-	// Use a specific width for the inner content
-	innerWidth := ModalWidth - 4 // Account for border (2) + padding (2)
-
-	titleStyle := lipgloss.NewStyle().
-		Foreground(m.theme.Accent()).
-		Bold(true).
-		AlignHorizontal(lipgloss.Center).
-		Width(innerWidth)
-
-	contentStyle := lipgloss.NewStyle().
-		Foreground(m.theme.Body()).
-		AlignHorizontal(lipgloss.Center).
-		Width(innerWidth)
-
-	title := titleStyle.Render(m.state.notify.title)
-	content := contentStyle.Render(m.state.notify.content)
-
-	modalContent := lipgloss.JoinVertical(
-		lipgloss.Center,
-		title,
-		"",
-		content,
-		"",
-		buttons,
-	)
-
-	modalStyle := m.theme.Modal().
-		Width(ModalWidth).
-		Padding(1, 2)
-
-	return modalStyle.Render(modalContent)
+	return m.renderDialog(tone, n.title, body, buttons)
 }
 
 func (m model) RenderEditModal() string {
 	if !m.state.notify.open {
 		return ""
 	}
+	inner := m.dialogWidth() - 6
 
-	innerWidth := ModalWidth - 4
+	input := m.theme.Base().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(m.theme.Brand()).
+		Padding(0, 1).
+		Width(inner).
+		Render(m.state.chat.editInput.View())
 
-	titleStyle := lipgloss.NewStyle().
-		Foreground(m.theme.Accent()).
-		Bold(true).
-		AlignHorizontal(lipgloss.Center).
-		Width(innerWidth)
-
-	title := titleStyle.Render(m.state.notify.title)
-
-	inputView := m.state.chat.editInput.View()
-
-	hint := lipgloss.NewStyle().
-		Foreground(m.theme.Body()).
-		Faint(true).
-		AlignHorizontal(lipgloss.Center).
-		Width(innerWidth).
-		Render("Enter to save • Esc to cancel")
-
-	modalContent := lipgloss.JoinVertical(
-		lipgloss.Center,
-		title,
-		"",
-		inputView,
-		"",
-		hint,
-	)
-
-	modalStyle := m.theme.Modal().
-		Width(ModalWidth).
-		Padding(1, 2)
-
-	return modalStyle.Render(modalContent)
+	hints := m.keyHints([]footerCommand{{"enter", "save"}, {"esc", "cancel"}}, inner)
+	return m.renderDialog(theme.ToneInfo, m.state.notify.title, input, hints)
 }
 
 func (m model) renderQRCodeModal() string {
-	qrModalWidth := max(m.state.notify.qrSize+10, 40)
+	n := m.state.notify
+	width := max(n.qrSize+8, 40)
 
-	innerWidth := qrModalWidth - 4
-
-	titleStyle := lipgloss.NewStyle().
-		Foreground(m.theme.Accent()).
-		Bold(true).
-		AlignHorizontal(lipgloss.Center).
-		Width(innerWidth)
-
-	title := titleStyle.Render(m.state.notify.title)
-
-	qrCodeStyle := lipgloss.NewStyle().
-		AlignHorizontal(lipgloss.Center).
-		Width(innerWidth)
-
-	qrCode := qrCodeStyle.Render(m.state.notify.qrCode)
-
-	roomCodeStyle := lipgloss.NewStyle().
-		Foreground(m.theme.Accent()).
-		Bold(true).
-		AlignHorizontal(lipgloss.Center).
-		Width(innerWidth)
-
-	roomCodeText := roomCodeStyle.Render(fmt.Sprintf("Room Code: %s", m.state.notify.content))
-
-	hint := lipgloss.NewStyle().
-		Foreground(m.theme.Body()).
-		Faint(true).
-		AlignHorizontal(lipgloss.Center).
-		Width(innerWidth).
-		Render("Press any key to close")
-
-	modalContent := lipgloss.JoinVertical(
-		lipgloss.Center,
-		title,
+	code := m.theme.Pill(m.theme.Brand(), m.theme.OnBrand()).Render(n.content)
+	parts := []string{
+		m.theme.TextAccent().Bold(true).Render(n.title),
+		m.theme.TextSubtle().Render("scan to join, or share the code"),
 		"",
-		qrCode,
+		n.qrCode,
 		"",
-		roomCodeText,
+		code,
 		"",
-		hint,
-	)
+		m.theme.TextSubtle().Render("press any key to close"),
+	}
 
-	modalStyle := m.theme.Modal().
-		Width(qrModalWidth).
-		Padding(1, 2)
-
-	return modalStyle.Render(modalContent)
-}
-
-func (m model) renderOkButton() string {
-	innerWidth := ModalWidth - 4
-
-	okButton := lipgloss.NewStyle().
-		Foreground(m.theme.Highlight()).
-		Bold(true).
-		Padding(0, 2).
+	return m.theme.Base().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.theme.Highlight()).
-		Render("OK")
-
-	return lipgloss.NewStyle().
-		AlignHorizontal(lipgloss.Center).
-		Width(innerWidth).
-		Render(okButton)
-}
-
-func (m model) renderConfirmCancelButtons() string {
-	innerWidth := ModalWidth - 4
-
-	confirmButton := lipgloss.NewStyle().
-		Foreground(m.theme.Highlight()).
-		Bold(true).
-		Padding(0, 2).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.theme.Highlight()).
-		Render("Yes (Y)")
-
-	cancelButton := lipgloss.NewStyle().
-		Foreground(m.theme.Body()).
-		Padding(0, 2).
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(m.theme.Border()).
-		Render("No (N)")
-
-	buttons := lipgloss.JoinHorizontal(
-		lipgloss.Center,
-		confirmButton,
-		"  ",
-		cancelButton,
-	)
-
-	return lipgloss.NewStyle().
-		AlignHorizontal(lipgloss.Center).
-		Width(innerWidth).
-		Render(buttons)
+		BorderForeground(m.theme.Brand()).
+		Padding(1, 2).
+		Width(width).
+		Align(lipgloss.Center).
+		Render(lipgloss.JoinVertical(lipgloss.Center, parts...))
 }
 
 func (m model) openDeleteMessageModal(messageContent string) model {
 	displayContent := messageContent
-	if runes := []rune(displayContent); len(runes) > 50 {
-		displayContent = string(runes[:50]) + "..."
+	if runes := []rune(displayContent); len(runes) > 80 {
+		displayContent = string(runes[:80]) + "…"
 	}
 
 	m.state.notify = notifyState{
 		open:          true,
-		title:         "Delete Message",
-		content:       fmt.Sprintf("Are you sure you want to delete this message?\n\n\"%s\"", displayContent),
+		title:         "Delete this message?",
+		content:       fmt.Sprintf("“%s”\n\nIt is removed for everyone in the room.", displayContent),
 		confirmAction: DeleteMessageAction,
 	}
 	return m
@@ -262,54 +260,45 @@ func (m model) openDeleteMessageModal(messageContent string) model {
 func (m model) openNewJoinCodeModal() model {
 	m.state.notify = notifyState{
 		open:          true,
-		title:         "Generate New Join Code",
-		content:       "Are you sure you want to generate a new join code?\nThe old code will no longer work.",
+		title:         "Generate a new join code?",
+		content:       "The current code stops working. People already in the room stay in.",
 		confirmAction: NewJoinCodeAction,
 	}
-
 	return m
 }
 
 func (m model) openKickMemberModal(username string) model {
 	m.state.notify = notifyState{
 		open:          true,
-		title:         "Kick Member",
-		content:       fmt.Sprintf("Are you sure you want to kick %s from the room?", username),
+		title:         "Kick " + username + "?",
+		content:       username + " is removed from the room right away.",
 		confirmAction: KickMemberAction,
 	}
-
 	return m
 }
 
 func (m model) openQrCodeModal() model {
 	qrString, qrSize, err := qr.Generate(m.state.chat.room.QRCodeURL)
 	if err != nil {
-		m.state.notify = notifyState{
-			open:          true,
-			title:         "Error",
-			content:       fmt.Sprintf("Failed to generate QR code: %v", err),
-			confirmAction: NoAction,
-		}
-		return m
+		return m.alert(theme.ToneDanger, "Couldn't make a QR code", err.Error())
 	}
 
 	m.state.notify = notifyState{
 		open:          true,
-		title:         "Room QR Code",
-		content:       m.state.chat.roomCode, // Store room code for display
+		title:         "Invite to this room",
+		content:       m.state.chat.roomCode, // shown under the QR code
 		confirmAction: ShowQRCodeAction,
 		qrCode:        qrString,
 		qrSize:        qrSize,
 	}
-
 	return m
 }
 
 func (m model) openRoomInviteModal(roomID string) model {
 	m.state.notify = notifyState{
 		open:          true,
-		title:         "Room Invitation",
-		content:       fmt.Sprintf("You've been invited to join room %s\n\nAccept invitation?", roomID),
+		title:         "You're invited",
+		content:       fmt.Sprintf("Someone invited you to room %s. Join now?", roomID),
 		confirmAction: RoomInviteAction,
 	}
 	return m

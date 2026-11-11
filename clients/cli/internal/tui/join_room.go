@@ -27,72 +27,36 @@ func (m model) JoinRoomSwitch() (model, tea.Cmd) {
 	return m, textinput.Blink
 }
 
-func (m model) JoinRoomView() string {
+func (m model) JoinRoomView(height int) string {
 	s := m.state.joinRoom
+	width := min(m.widthContainer-4, 52)
 
-	var sections []string
+	title := m.theme.TextAccent().Bold(true).Render("Join a room")
+	lead := m.theme.TextBody().Width(width).Render("Type or paste the code someone shared with you.")
 
-	// Header
-	header := m.theme.TextBrand().
-		Bold(true).
-		Render("Join Room")
-	sections = append(sections, header)
-
-	// Spacing
-	sections = append(sections, "")
-
-	// Instructions
-	instructions := m.theme.TextBody().
-		Render("Enter the room code to join an existing chat room.")
-	sections = append(sections, instructions)
-
-	// Spacing
-	sections = append(sections, "")
-
-	// Input label
-	label := m.theme.TextAccent().
-		Render("Room Code:")
-	sections = append(sections, label)
-
-	// Input field
-	sections = append(sections, s.input.View())
-
-	// Error message if any
+	borderColor := m.theme.Brand()
 	if s.error != "" {
-		sections = append(sections, "")
-		errorMsg := m.theme.TextError().
-			Render("⚠ " + s.error)
-		sections = append(sections, errorMsg)
+		borderColor = m.theme.Error()
+	}
+	field := m.theme.Base().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Padding(0, 1).
+		Width(width).
+		Render(s.input.View())
+
+	var status string
+	switch {
+	case s.joining:
+		status = m.spinner() + " " + m.theme.TextBrand().Render("Joining…")
+	case s.error != "":
+		status = m.theme.TextError().Width(width).Render("✕ " + s.error)
+	default:
+		status = m.theme.TextSubtle().Render("press enter to join")
 	}
 
-	// Joining status
-	if s.joining {
-		sections = append(sections, "")
-		joiningMsg := m.theme.TextHighlight().
-			Render("Joining room...")
-		sections = append(sections, joiningMsg)
-	}
-
-	// Spacing before help
-	sections = append(sections, "")
-	sections = append(sections, "")
-
-	// Help text
-	help := m.theme.TextBody().
-		Faint(true).
-		Render("Press Enter to join • Esc to go back")
-	sections = append(sections, help)
-
-	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
-
-	// Center the content
-	containerStyle := m.theme.Base().
-		Width(m.widthContent).
-		Height(m.heightContent).
-		AlignVertical(lipgloss.Center).
-		AlignHorizontal(lipgloss.Center)
-
-	return containerStyle.Render(content)
+	content := lipgloss.JoinVertical(lipgloss.Left, title, "", lead, "", field, status)
+	return m.pageContent(height, m.theme.Base().Width(width).Render(content))
 }
 
 func (m model) JoinRoomUpdate(msg tea.Msg) (model, tea.Cmd) {
@@ -100,63 +64,72 @@ func (m model) JoinRoomUpdate(msg tea.Msg) (model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
+		if m.state.joinRoom.joining {
+			return m, nil
+		}
 		switch {
+		case key.Matches(msg, keys.Back):
+			// Clear the field first; a second esc goes back.
+			if m.state.joinRoom.input.Value() != "" || m.state.joinRoom.error != "" {
+				m.state.joinRoom.input.SetValue("")
+				m.state.joinRoom.error = ""
+				return m, nil
+			}
+			return m.NewRoomSwitch()
 		case key.Matches(msg, keys.Enter):
 			roomCode := strings.TrimSpace(m.state.joinRoom.input.Value())
 			if roomCode == "" {
-				m.state.joinRoom.error = "Room code cannot be empty"
+				m.state.joinRoom.error = "Enter a room code first."
 				return m, nil
 			}
 
-			if m.state.joinRoom.joining {
-				return m, nil
-			}
 			m.state.joinRoom.error = ""
 			m.state.joinRoom.joining = true
 
 			client, ctx, opts := m.client, m.context, m.requestOpts()
-			return m, func() tea.Msg {
+			return m, tea.Batch(animTick(animFastInterval), func() tea.Msg {
 				room, err := client.Room.GetByJoinCode(ctx, apisdk.JoinByCodeParams{JoinCode: roomCode}, opts...)
 				if err != nil {
 					log.Printf("Failed to join room: %v", err)
 					return joinRoomFailedMsg{err: err}
 				}
 				return roomJoinedMsg{room: room}
-			}
+			})
 		}
 	case joinRoomFailedMsg:
-		m.state.joinRoom.error = "Failed to join room"
+		m.state.joinRoom.error = "No room matches that code. It may have expired, or the code changed."
 		m.state.joinRoom.joining = false
 		return m, nil
 	}
 
+	before := m.state.joinRoom.input.Value()
 	m.state.joinRoom.input, cmd = m.state.joinRoom.input.Update(msg)
+	if m.state.joinRoom.input.Value() != before {
+		m.state.joinRoom.error = ""
+	}
 	return m, cmd
 }
 
 func (m model) initJoinRoom() model {
 	ti := textinput.New()
-	ti.Placeholder = "Enter room code..."
+	ti.Prompt = "› "
+	ti.Placeholder = "room code"
 	ti.Focus()
 	ti.CharLimit = 32
-	ti.SetWidth(40)
+	ti.SetWidth(max(min(m.widthContainer-4, 52)-6, 10))
 	styles := ti.Styles()
 	for _, s := range []*textinput.StyleState{&styles.Focused, &styles.Blurred} {
-		s.Prompt = m.theme.TextBrand()
-		s.Text = m.theme.TextAccent()
-		s.Placeholder = m.theme.TextBody()
+		s.Prompt = m.theme.TextBrand().Bold(true)
+		s.Text = m.theme.TextAccent().Bold(true)
+		s.Placeholder = m.theme.TextSubtle()
 	}
 	ti.SetStyles(styles)
 
-	m.state.joinRoom = joinRoomState{
-		input:   ti,
-		error:   "",
-		joining: false,
-	}
+	m.state.joinRoom = joinRoomState{input: ti}
 
 	m.state.footer.commands = []footerCommand{
-		{key: "enter"},
-		{key: "esc"},
+		{key: "enter", value: "join"},
+		{key: "esc", value: "back"},
 	}
 
 	return m

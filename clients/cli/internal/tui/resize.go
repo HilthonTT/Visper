@@ -10,9 +10,10 @@ func (m model) ResizeView() string {
 		lipgloss.Center,
 		lipgloss.JoinVertical(
 			lipgloss.Center,
-			m.theme.TextAccent().Render("your"),
 			m.LogoView(),
-			m.theme.TextAccent().Render("is too small"),
+			"",
+			m.theme.TextAccent().Render("needs a bigger window"),
+			m.theme.TextSubtle().Render("at least 30 × 12"),
 		),
 	)
 }

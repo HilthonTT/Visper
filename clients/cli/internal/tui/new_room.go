@@ -3,9 +3,9 @@ package tui
 import (
 	"log"
 
-	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/hilthontt/visper/clients/cli/internal/tui/theme"
 	apisdk "github.com/hilthontt/visper/sdk/go"
 )
 
@@ -15,14 +15,10 @@ type createRoomFailedMsg struct {
 
 type newRoomState struct {
 	creating bool
-	roomCode string
 	error    string
 }
 
 func (m model) NewRoomSwitch() (model, tea.Cmd) {
-	m.state.newRoom.creating = false
-	m.state.newRoom.roomCode = ""
-
 	m = m.SwitchPage(newRoomPage)
 	m = m.initNewRoom()
 
@@ -31,161 +27,55 @@ func (m model) NewRoomSwitch() (model, tea.Cmd) {
 	return m.ensureNotificationWebSocket()
 }
 
-func (m model) NewRoomView() string {
+// pageContent centres a page's content in the body area.
+func (m model) pageContent(height int, content string) string {
+	return lipgloss.Place(m.widthContainer, height, lipgloss.Center, lipgloss.Center, content)
+}
+
+func (m model) NewRoomView(height int) string {
 	s := m.state.newRoom
+	width := min(m.widthContainer-4, 60)
 
-	var sections []string
+	title := m.theme.TextAccent().Bold(true).Render("Start a new room")
+	lead := m.theme.TextBody().Width(width).Render("A private room for you and whoever you invite. Share the code, chat, and it's gone.")
 
-	// Header
-	header := m.theme.TextBrand().
-		Bold(true).
-		Render("Create New Room")
-	sections = append(sections, header)
+	check := m.theme.TextSuccess().Render("✓ ")
+	features := lipgloss.JoinVertical(lipgloss.Left,
+		check+m.theme.TextBody().Render("Encrypted on your device; the server sees ciphertext"),
+		check+m.theme.TextBody().Render("No account, email or phone number"),
+		check+m.theme.TextBody().Render("Disappears after 24 hours"),
+	)
 
-	// Spacing
-	sections = append(sections, "")
-
-	// Description
-	if !s.creating && s.roomCode == "" {
-		description := m.theme.TextBody().
-			Render("Create a new anonymous chat room and get a unique room code\nthat you can share with others.\nRoom will expire in 24 hours.")
-		sections = append(sections, description)
-
-		// Spacing
-		sections = append(sections, "")
-		sections = append(sections, "")
-
-		// Confirmation prompt
-		prompt := m.theme.TextAccent().
-			Bold(true).
-			Render("Do you want to create a new room?")
-		sections = append(sections, prompt)
-
-		// Spacing
-		sections = append(sections, "")
-
-		// Options
-		yesOption := m.theme.TextHighlight().
-			Render("  [Y] Yes, create room")
-		noOption := m.theme.TextBody().
-			Render("  [N] No, go back")
-
-		sections = append(sections, yesOption)
-		sections = append(sections, noOption)
+	var action string
+	switch {
+	case s.creating:
+		action = m.spinner() + " " + m.theme.TextBrand().Render("Creating your room…")
+	default:
+		action = m.button("Create room", "↵", true, theme.ToneInfo)
 	}
 
-	// Creating status
-	if s.creating {
-		sections = append(sections, "")
-		creatingMsg := m.theme.TextHighlight().
-			Render("Creating room...")
-
-		spinner := m.theme.TextBrand().
-			Render("⣾⣽⣻⢿⡿⣟⣯⣷") // You can animate this
-
-		sections = append(sections, lipgloss.JoinHorizontal(lipgloss.Left, spinner, "  ", creatingMsg))
-	}
-
-	// Success - Room created
-	if s.roomCode != "" {
-		sections = append(sections, "")
-
-		successMsg := m.theme.TextHighlight().
-			Bold(true).
-			Render("✓ Room created successfully!")
-		sections = append(sections, successMsg)
-
-		sections = append(sections, "")
-
-		// Room code display
-		codeLabel := m.theme.TextBody().
-			Render("Your room code:")
-		sections = append(sections, codeLabel)
-
-		sections = append(sections, "")
-
-		// Room code in a box
-		codeStyle := m.theme.Base().
-			Foreground(m.theme.Accent()).
-			Background(m.theme.Highlight()).
-			Bold(true).
-			Padding(1, 3).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(m.theme.Highlight())
-
-		codeBox := codeStyle.Render(s.roomCode)
-		sections = append(sections, codeBox)
-
-		sections = append(sections, "")
-
-		instruction := m.theme.TextBody().
-			Faint(true).
-			Render("Share this code with others to let them join your room.")
-		sections = append(sections, instruction)
-
-		sections = append(sections, "")
-
-		// Action prompt
-		nextAction := m.theme.TextAccent().
-			Render("Press Enter to continue...")
-		sections = append(sections, nextAction)
-	}
-
+	parts := []string{title, "", lead, "", features, "", action}
 	if s.error != "" {
-		sections = append(sections, "")
-		errorMsg := m.theme.TextError().
-			Render("⚠ " + s.error)
-		sections = append(sections, errorMsg)
+		parts = append(parts, "", m.theme.TextError().Width(width).Render("✕ "+s.error))
 	}
 
-	// Spacing before help
-	if !s.creating && s.roomCode == "" {
-		sections = append(sections, "")
-		sections = append(sections, "")
-
-		// Help text
-		help := m.theme.TextBody().
-			Faint(true).
-			Render("Y to confirm • N or Esc to cancel")
-		sections = append(sections, help)
-	}
-
-	content := lipgloss.JoinVertical(lipgloss.Left, sections...)
-
-	// Center the content
-	containerStyle := m.theme.Base().
-		Width(m.widthContent).
-		Height(m.heightContent).
-		AlignVertical(lipgloss.Center).
-		AlignHorizontal(lipgloss.Center)
-
-	return containerStyle.Render(content)
+	return m.pageContent(height, m.theme.Base().Width(width).Render(lipgloss.JoinVertical(lipgloss.Left, parts...)))
 }
 
 func (m model) NewRoomUpdate(msg tea.Msg) (model, tea.Cmd) {
-	s := m.state.newRoom
-
 	switch msg := msg.(type) {
 	case tea.KeyPressMsg:
-		if s.roomCode != "" {
-			switch {
-			case key.Matches(msg, keys.Enter):
-				// Navigate to the chat page handled by ChatSwitch
-			}
+		if m.state.newRoom.creating {
 			return m, nil
 		}
 
-		if s.creating {
-			return m, nil
-		}
-
-		switch {
-		case key.Matches(msg, keys.Yes):
+		switch msg.String() {
+		case "enter", "y", "Y":
 			m.state.newRoom.creating = true
 			m.state.newRoom.error = ""
 
 			client, ctx, opts := m.client, m.context, m.requestOpts()
-			return m, func() tea.Msg {
+			return m, tea.Batch(animTick(animFastInterval), func() tea.Msg {
 				// Create room with 24 hour expiry
 				newRoom, err := client.Room.Create(ctx, apisdk.RoomCreateParams{ExpiryHours: 24}, opts...)
 				if err != nil {
@@ -193,11 +83,11 @@ func (m model) NewRoomUpdate(msg tea.Msg) (model, tea.Cmd) {
 					return createRoomFailedMsg{err: err}
 				}
 				return roomJoinedMsg{room: newRoom}
-			}
+			})
 		}
 	case createRoomFailedMsg:
 		m.state.newRoom.creating = false
-		m.state.newRoom.error = "Failed to create room"
+		m.state.newRoom.error = "Couldn't create the room. Is the server running? Press enter to try again."
 		return m, nil
 	}
 
@@ -205,16 +95,9 @@ func (m model) NewRoomUpdate(msg tea.Msg) (model, tea.Cmd) {
 }
 
 func (m model) initNewRoom() model {
-	m.state.newRoom = newRoomState{
-		creating: false,
-		roomCode: "",
-		error:    "",
-	}
-
+	m.state.newRoom = newRoomState{}
 	m.state.footer.commands = []footerCommand{
-		{key: "y"},
-		{key: "n/esc"},
+		{key: "enter", value: "create room"},
 	}
-
 	return m
 }

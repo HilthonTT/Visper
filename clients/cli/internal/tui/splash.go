@@ -28,24 +28,26 @@ type UserSignedInMsg struct {
 
 type DelayCompleteMsg struct{}
 
-func (m model) LoadCmds() []tea.Cmd {
-	cmds := []tea.Cmd{}
+// splashMinDuration keeps the splash on screen long enough to be seen, even
+// when the API answers instantly.
+const splashMinDuration = 1200 * time.Millisecond
 
-	cmds = append(cmds, tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
-		return DelayCompleteMsg{}
-	}))
-
-	cmds = append(cmds, func() tea.Msg {
-		response, err := m.client.Health.Get(m.context)
+func (m model) healthCmd() tea.Cmd {
+	client, ctx := m.client, m.context
+	return func() tea.Msg {
+		response, err := client.Health.Get(ctx)
 		if err != nil {
-			return visibleError{
-				message: err.Error(),
-			}
+			return visibleError{message: "Can't reach the Visper server: " + err.Error()}
 		}
 		return response
-	})
+	}
+}
 
-	return cmds
+func (m model) LoadCmds() []tea.Cmd {
+	return []tea.Cmd{
+		tea.Tick(splashMinDuration, func(time.Time) tea.Msg { return DelayCompleteMsg{} }),
+		m.healthCmd(),
+	}
 }
 
 func (m model) IsLoadingComplete() bool {
@@ -54,11 +56,7 @@ func (m model) IsLoadingComplete() bool {
 
 func (m model) SplashInit() tea.Cmd {
 	cmd := func() tea.Msg {
-		client := m.CreateSDKClient()
-
-		return UserSignedInMsg{
-			client: client,
-		}
+		return UserSignedInMsg{client: m.CreateSDKClient()}
 	}
 
 	// Mouse reporting is off by default in Bubble Tea v2 (View.MouseMode).
@@ -70,10 +68,7 @@ func (m model) SplashUpdate(msg tea.Msg) (model, tea.Cmd) {
 	case UserSignedInMsg:
 		m.client = msg.client
 
-		// Connect to notification WebSocket after client is ready
-		var cmds []tea.Cmd
-		cmds = append(cmds, m.LoadCmds()...)
-
+		cmds := m.LoadCmds()
 		var notifyCmd tea.Cmd
 		m, notifyCmd = m.ensureNotificationWebSocket()
 		cmds = append(cmds, notifyCmd)
@@ -86,6 +81,12 @@ func (m model) SplashUpdate(msg tea.Msg) (model, tea.Cmd) {
 		m.state.splash.data = true
 	case visibleError:
 		m.error = &msg
+	case tea.KeyPressMsg:
+		if m.error != nil && m.client != nil && (msg.String() == "r" || msg.String() == "enter") {
+			m.error = nil
+			m.state.splash.data = false
+			return m, tea.Batch(m.healthCmd(), animTick(animFastInterval))
+		}
 	}
 
 	if m.IsLoadingComplete() {
@@ -96,54 +97,45 @@ func (m model) SplashUpdate(msg tea.Msg) (model, tea.Cmd) {
 }
 
 func (m model) SplashView() string {
-	var msg string
-	if m.error != nil {
-		msg = m.error.message
-	} else {
-		msg = ""
-	}
+	tagline := m.theme.TextBody().Render("whisper in the terminal")
+	features := m.theme.TextSubtle().Render("end-to-end encrypted · anonymous · ephemeral")
 
-	var hint string
-	if m.error != nil {
-		hint = lipgloss.JoinHorizontal(
-			lipgloss.Center,
-			m.theme.TextAccent().Bold(true).Render("esc"),
-			" ",
-			"quit",
-		)
-	} else {
-		hint = ""
-	}
-
+	var status string
 	if m.error == nil {
-		return lipgloss.Place(
-			m.viewportWidth,
-			m.viewportHeight,
-			lipgloss.Center,
-			lipgloss.Center,
-			m.LogoView(),
-		)
+		status = m.spinner() + " " + m.theme.TextBody().Render("connecting to "+resource.Resource.Api.Url)
+	} else {
+		width := min(max(m.viewportWidth-8, 20), 60)
+		msg := m.theme.TextError().Width(width - 4).Render(m.error.message)
+		box := m.theme.Base().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(m.theme.Error()).
+			Padding(0, 1).
+			Render(m.theme.TextError().Bold(true).Render("✕ Connection failed") + "\n" + msg)
+		hints := m.keyHints([]footerCommand{{"r", "retry"}, {"esc", "quit"}}, width)
+		status = lipgloss.JoinVertical(lipgloss.Center, box, "", hints)
 	}
+
+	logo := m.WordmarkView()
+	if m.viewportWidth < lipgloss.Width(logo)+4 {
+		logo = m.LogoView()
+	}
+
+	content := lipgloss.JoinVertical(
+		lipgloss.Center,
+		logo,
+		"",
+		tagline,
+		features,
+		"",
+		"",
+		status,
+	)
 
 	return lipgloss.Place(
 		m.viewportWidth,
 		m.viewportHeight,
 		lipgloss.Center,
 		lipgloss.Center,
-		lipgloss.JoinVertical(
-			lipgloss.Center,
-			"",
-			"",
-			"",
-			"",
-			m.LogoView(),
-			"",
-			"",
-			lipgloss.JoinHorizontal(
-				lipgloss.Center,
-				m.theme.TextError().Render(msg),
-			),
-			hint,
-		),
+		content,
 	)
 }
