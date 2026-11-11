@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -206,6 +207,7 @@ func (lb *LoadBalancer) buildBackends(cfgs []config.BackendConfig, existing []*B
 	}
 
 	backends := make([]*Backend, len(cfgs))
+	weights := make([]int, len(cfgs))
 	for i, c := range cfgs {
 		weight := c.Weight
 		if weight <= 0 {
@@ -218,15 +220,22 @@ func (lb *LoadBalancer) buildBackends(cfgs []config.BackendConfig, existing []*B
 		if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return nil, fmt.Errorf("invalid backend url %q: must be absolute http(s) URL", c.URL)
 		}
+		weights[i] = weight
 		if b, ok := byURL[u.String()]; ok {
-			b.weight = weight
 			backends[i] = b
 			continue
 		}
-		b := &Backend{URL: u, alive: true, weight: weight}
+		b := &Backend{URL: u, alive: true}
 		b.ReverseProxy = lb.newReverseProxy(b)
 		backends[i] = b
-		lb.metrics.BackendUpGauge.WithLabelValues(u.Host).Set(1)
+	}
+	// Only touch shared state once the whole config is known to be valid, so
+	// a failed Reload leaves live backends' weights and metrics untouched.
+	for i, b := range backends {
+		b.weight = weights[i]
+		if _, reused := byURL[b.URL.String()]; !reused {
+			lb.metrics.BackendUpGauge.WithLabelValues(b.URL.Host).Set(1)
+		}
 	}
 	return backends, nil
 }
@@ -435,17 +444,30 @@ func (lb *LoadBalancer) checkAll(ctx context.Context) {
 		wg.Go(func() {
 			alive := lb.isBackendAlive(ctx, backend.URL, path)
 			backend.SetAlive(alive)
-
-			label := backend.URL.Host
-			if alive {
-				lb.metrics.BackendUpGauge.WithLabelValues(label).Set(1)
-			} else {
-				lb.metrics.BackendUpGauge.WithLabelValues(label).Set(0)
-				lb.metrics.BackendErrors.WithLabelValues(label, "health_check").Inc()
+			lb.setBackendUp(backend, alive)
+			if !alive {
+				lb.metrics.BackendErrors.WithLabelValues(backend.URL.Host, "health_check").Inc()
 			}
 		})
 	}
 	wg.Wait()
+}
+
+// setBackendUp records b's health in the backend_up gauge, unless a
+// concurrent Reload has removed b. Reload deletes a removed backend's series;
+// setting it afterwards (from an in-flight health check or proxied request)
+// would resurrect a stale series that is never cleaned up.
+func (lb *LoadBalancer) setBackendUp(b *Backend, up bool) {
+	lb.mux.Lock()
+	defer lb.mux.Unlock()
+	if !slices.Contains(lb.backends, b) {
+		return
+	}
+	v := 0.0
+	if up {
+		v = 1
+	}
+	lb.metrics.BackendUpGauge.WithLabelValues(b.URL.Host).Set(v)
 }
 
 // isBackendAlive checks if a backend is alive by making an HTTP request
@@ -513,7 +535,7 @@ func (lb *LoadBalancer) newReverseProxy(b *Backend) *httputil.ReverseProxy {
 			lb.mux.Unlock()
 			if b.IncreaseFailCount() >= maxFail {
 				b.SetAlive(false)
-				lb.metrics.BackendUpGauge.WithLabelValues(label).Set(0)
+				lb.setBackendUp(b, false)
 				log.Printf("backend %s marked down after %d failures", label, maxFail)
 			}
 

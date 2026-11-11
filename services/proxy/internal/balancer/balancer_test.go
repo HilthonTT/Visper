@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/hilthontt/visper/services/proxy/internal/config"
+	"github.com/hilthontt/visper/services/proxy/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 func newTestLB(t *testing.T, urls []string, opts Options) *LoadBalancer {
@@ -325,5 +327,48 @@ func TestHealthCheck(t *testing.T) {
 	lb.checkAll(t.Context())
 	if !lb.backends[0].IsAlive() || lb.backends[1].IsAlive() {
 		t.Fatalf("alive = %v %v, want true false", lb.backends[0].IsAlive(), lb.backends[1].IsAlive())
+	}
+}
+
+func TestFailedReloadLeavesWeightsUntouched(t *testing.T) {
+	lb := newTestLB(t, []string{"http://a:1"}, Options{})
+	err := lb.Reload(&config.Config{
+		Strategy: "round_robin",
+		Backends: []config.BackendConfig{{URL: "http://a:1", Weight: 9}, {URL: "not a url"}},
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid backend")
+	}
+	if w := lb.backends[0].weight; w != 1 {
+		t.Fatalf("failed reload changed live backend weight to %d", w)
+	}
+}
+
+func TestRemovedBackendGaugeNotResurrected(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	lb := newTestLB(t, []string{"http://a:1", "http://b:1"}, Options{Metrics: metrics.New("t", reg)})
+	removed := lb.backends[1]
+	if err := lb.Reload(&config.Config{Strategy: "round_robin", Backends: []config.BackendConfig{{URL: "http://a:1"}}}); err != nil {
+		t.Fatal(err)
+	}
+	// An in-flight health check or proxy error for the removed backend
+	// finishing after the reload.
+	lb.setBackendUp(removed, false)
+
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "t_backend_up" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetValue() == "b:1" {
+					t.Fatal("backend_up series for removed backend was recreated")
+				}
+			}
+		}
 	}
 }
