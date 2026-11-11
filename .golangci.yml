@@ -28,7 +28,7 @@ linters:
       - path: _test\.go
         linters: [gosec, errcheck, bodyclose]
       # Vendored Stainless-style SDK internals
-      - path: api-sdk/internal/
+      - path: sdk/go/internal/
         linters: [gosec, errorlint]
 
 formatters:

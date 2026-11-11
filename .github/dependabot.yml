@@ -2,7 +2,7 @@ version: 2
 
 updates:
   - package-ecosystem: gomod
-    directories: ["/api", "/api-sdk", "/cli", "/proxy"]
+    directories: ["/services/api", "/services/proxy", "/clients/cli", "/sdk/go"]
     schedule:
       interval: weekly
     groups:
@@ -10,7 +10,7 @@ updates:
         update-types: [minor, patch]
 
   - package-ecosystem: pip
-    directory: /ai
+    directory: /services/ai
     schedule:
       interval: weekly
     groups:
@@ -18,7 +18,7 @@ updates:
         update-types: [minor, patch]
 
   - package-ecosystem: npm
-    directory: /web
+    directory: /clients/web
     schedule:
       interval: weekly
     groups:
@@ -26,7 +26,7 @@ updates:
         update-types: [minor, patch]
 
   - package-ecosystem: docker
-    directories: ["/api", "/proxy", "/ai"]
+    directories: ["/services/api", "/services/proxy", "/services/ai"]
     schedule:
       interval: weekly
 

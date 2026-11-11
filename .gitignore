@@ -29,18 +29,17 @@ tmp/
 dist/
 
 # ── API runtime data ─────────────────────────────────────────
-api/infrastructure/config/config-development.yml
-api/data/
-api/uploads/
-api/cmd/**/data/
-api/cmd/**/uploads/
+services/api/data/
+services/api/uploads/
+services/api/cmd/**/data/
+services/api/cmd/**/uploads/
 
 # ── Python ───────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 .venv/
-ai/env/
-ai/models/
+services/ai/env/
+services/ai/models/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
@@ -48,10 +47,10 @@ ai/models/
 
 # ── Web ──────────────────────────────────────────────────────
 node_modules/
-web/dist/
-web/.tanstack/
-web/.output/
-web/.vinxi/
+clients/web/dist/
+clients/web/.tanstack/
+clients/web/.output/
+clients/web/.vinxi/
 
 # ── Media dropped into the repo by accident ──────────────────
 # (tracked assets such as the CLI waifu embeds and web/public icons are
@@ -60,5 +59,9 @@ web/.vinxi/
 *.jpeg
 *.gif
 *.png
-!cli/**/embeds/*.png
-!web/public/*.png
+!clients/cli/**/embeds/*.png
+!clients/web/public/*.png
+!docs/assets/demos/*.gif
+
+# ── Demo recording scratch (docs/demos/record.sh) ───────────
+docs/demos/.work/

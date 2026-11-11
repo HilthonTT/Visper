@@ -1,0 +1,56 @@
+# Local development config (APP_ENV unset or "development").
+# Values match the infrastructure started by `make up` (docker-compose.yml),
+# reached from the host via localhost. Override any key with a
+# VISPER_<SECTION>_<KEY> environment variable, e.g. VISPER_POSTGRES_PASSWORD.
+
+server:
+  internalPort: "5005"
+  externalPort: "5005"
+  runMode: "debug"
+  domain: "localhost"
+  frontEndUrl: "http://localhost:3000"
+  # IPs/CIDRs of reverse proxies whose X-Forwarded-For is trusted for the
+  # client IP (rate limiting). Empty: trust none, use the TCP peer address.
+  trustedProxies: ""
+
+logger:
+  filePath: "logs/"
+  encoding: "console"
+  level: "debug"
+  logger: "zap"
+
+cors:
+  allowOrigins: "*"
+
+postgres:
+  host: "localhost"
+  port: "5432"
+  user: "postgres"
+  password: "admin"
+  dbName: "visper_db"
+  sslMode: "disable"
+  maxIdleConns: 15
+  maxOpenConns: 100
+  connMaxLifetime: 5s
+
+redis:
+  host: "localhost"
+  port: "6379"
+  password: "password"
+  db: "0"
+  dialTimeout: 5s
+  readTimeout: 5s
+  writeTimeout: 5s
+  poolSize: 10
+  poolTimeout: 15s
+  idleCheckFrequency: 500ms
+
+jaeger:
+  serviceName: "visper-api"
+  serviceVersion: "v1.0.0"
+  endpoint: "http://localhost:4318"
+
+sentry:
+  dsn: ""
+  debug: false
+  sendDefaultPII: false
