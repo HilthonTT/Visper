@@ -2,15 +2,6 @@ package file
 
 import "time"
 
-type ErrorResponse struct {
-	Error   string `json:"error"`
-	Message string `json:"message"`
-}
-
-type SuccessResponse struct {
-	Message string `json:"message"`
-}
-
 type UserResponse struct {
 	ID       string `json:"id"`
 	Username string `json:"username,omitempty"`

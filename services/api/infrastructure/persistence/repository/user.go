@@ -8,7 +8,6 @@ import (
 	"github.com/hilthontt/visper/services/api/domain/model"
 	"github.com/hilthontt/visper/services/api/domain/repository"
 	"github.com/hilthontt/visper/services/api/infrastructure/cache"
-	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -85,7 +84,7 @@ func (r *userRepository) GetByID(ctx context.Context, id string) (*model.User, e
 	if !found {
 		span.SetAttributes(attribute.Bool("user.found", false))
 		span.SetStatus(codes.Error, "user not found")
-		return nil, redis.Nil
+		return nil, repository.ErrNotFound
 	}
 
 	span.SetAttributes(
@@ -94,80 +93,4 @@ func (r *userRepository) GetByID(ctx context.Context, id string) (*model.User, e
 	)
 	span.SetStatus(codes.Ok, "user retrieved successfully")
 	return &user, nil
-}
-
-func (r *userRepository) GetByUsername(ctx context.Context, username string) (*model.User, error) {
-	ctx, span := r.tracer.Start(ctx, "userRepository.GetByUsername")
-	defer span.End()
-
-	span.SetAttributes(attribute.String("user.username", username))
-
-	indexKey := fmt.Sprintf("user:username:%s", username)
-	var userID string
-
-	found, err := r.cache.Get(ctx, indexKey, &userID)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to get username index from cache")
-		return nil, err
-	}
-
-	if !found {
-		span.SetAttributes(attribute.Bool("username.index.found", false))
-		span.SetStatus(codes.Error, "username index not found")
-		return nil, redis.Nil
-	}
-
-	span.SetAttributes(
-		attribute.Bool("username.index.found", true),
-		attribute.String("user.id", userID),
-	)
-
-	// GetByID will create its own span
-	user, err := r.GetByID(ctx, userID)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to get user by ID after username lookup")
-		return nil, err
-	}
-
-	span.SetStatus(codes.Ok, "user retrieved by username successfully")
-	return user, nil
-}
-
-func (r *userRepository) SetUsernameIndex(ctx context.Context, username string, userID string) error {
-	ctx, span := r.tracer.Start(ctx, "userRepository.SetUsernameIndex")
-	defer span.End()
-
-	span.SetAttributes(
-		attribute.String("user.username", username),
-		attribute.String("user.id", userID),
-	)
-
-	key := fmt.Sprintf("user:username:%s", username)
-
-	if err := r.cache.Set(ctx, key, userID, 0); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to set username index")
-		return err
-	}
-
-	span.SetStatus(codes.Ok, "username index set successfully")
-	return nil
-}
-
-func (r *userRepository) DeleteUsernameIndex(ctx context.Context, username string) error {
-	ctx, span := r.tracer.Start(ctx, "userRepository.DeleteUsernameIndex")
-	defer span.End()
-
-	span.SetAttributes(attribute.String("user.username", username))
-
-	if err := r.cache.Delete(ctx, fmt.Sprintf("user:username:%s", username)); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to delete username index")
-		return err
-	}
-
-	span.SetStatus(codes.Ok, "username index deleted successfully")
-	return nil
 }

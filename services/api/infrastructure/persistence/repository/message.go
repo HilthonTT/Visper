@@ -83,7 +83,7 @@ func (r *messageRepository) find(ctx context.Context, roomID, messageID string) 
 		}
 	}
 
-	return nil, "", redis.Nil
+	return nil, "", repository.ErrNotFound
 }
 
 func (r *messageRepository) Create(ctx context.Context, message *model.Message) error {
@@ -348,28 +348,6 @@ func sortChronologically(messages []*model.Message) {
 	sort.SliceStable(messages, func(i, j int) bool {
 		return messages[i].CreatedAt.Before(messages[j].CreatedAt)
 	})
-}
-
-func (r *messageRepository) DeleteOldMessages(ctx context.Context, roomID string, before time.Time) error {
-	ctx, span := r.tracer.Start(ctx, "messageRepository.DeleteOldMessages")
-	defer span.End()
-
-	span.SetAttributes(
-		attribute.String("room.id", roomID),
-		attribute.String("query.before", before.Format(time.RFC3339)),
-	)
-
-	key := fmt.Sprintf("room:%s:messages", roomID)
-	score := float64(before.Unix())
-
-	if err := r.cache.ZRemRangeByScore(ctx, key, "-inf", fmt.Sprintf("%f", score)); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to delete old messages")
-		return err
-	}
-
-	span.SetStatus(codes.Ok, "old messages deleted successfully")
-	return nil
 }
 
 // Get message count for a room

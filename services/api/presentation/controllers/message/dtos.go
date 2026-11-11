@@ -33,11 +33,6 @@ type MessageCountResponse struct {
 	Count  int64  `json:"count"`
 }
 
-type ErrorResponse struct {
-	Error   string `json:"error"`
-	Message string `json:"message,omitempty"`
-}
-
 type MessageUpdatedResponse struct {
 	Success   bool   `json:"success"`
 	MessageID string `json:"message_id"`

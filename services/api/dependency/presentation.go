@@ -30,7 +30,7 @@ func (c *Container) initMiddleware() {
 func (c *Container) initControllers() {
 	c.MessageController = message.NewMessageController(c.MessageUC, c.RoomUC, c.WSCore)
 	c.RoomController = room.NewRoomController(c.RoomUC, c.UserUC, c.WSCore, c.Config)
-	c.WebsocketController = wsCtrl.NewWebSocketController(c.RoomUC, c.UserUC, c.WSRoomManager, c.WSCore)
+	c.WebsocketController = wsCtrl.NewWebSocketController(c.RoomUC, c.WSRoomManager, c.WSCore)
 	c.FilesController = file.NewFilesController(c.FileUC, c.Storage)
 	c.UserNotificationController = wsCtrl.NewUserNotificationController(c.UserUC, c.RoomUC, c.NotificationCore)
 

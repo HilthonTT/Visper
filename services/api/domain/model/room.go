@@ -48,15 +48,16 @@ func (r Room) GetQRCodeURL(baseURL string) string {
 	return u.String()
 }
 
-func (r Room) HasExpired() bool {
+// ExpiresAt returns when the room expires, or the zero time for a room that
+// never does.
+func (r Room) ExpiresAt() time.Time {
 	if r.Expiry <= 0 {
-		return false
+		return time.Time{}
 	}
-
-	expiryTime := r.CreatedAt.Add(r.Expiry)
-	return time.Now().After(expiryTime)
+	return r.CreatedAt.Add(r.Expiry)
 }
 
-func (r Room) MemberCount() int {
-	return len(r.Members)
+func (r Room) HasExpired() bool {
+	expiresAt := r.ExpiresAt()
+	return !expiresAt.IsZero() && time.Now().After(expiresAt)
 }

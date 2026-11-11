@@ -6,15 +6,22 @@ import (
 	"fmt"
 	"mime/multipart"
 
+	"github.com/hilthontt/visper/services/api/domain/apperr"
 	"github.com/hilthontt/visper/services/api/domain/model"
 	"github.com/hilthontt/visper/services/api/domain/repository"
 	"github.com/hilthontt/visper/services/api/infrastructure/storage"
-	"github.com/redis/go-redis/v9"
+)
+
+var (
+	ErrRoomNotFound = apperr.New(apperr.NotFound, "room not found")
+	ErrFileNotFound = apperr.New(apperr.NotFound, "file not found")
+	ErrRoomExpired  = apperr.New(apperr.Gone, "room has expired")
+	ErrNotMember    = apperr.New(apperr.Forbidden, "user is not a member of this room")
+	ErrCannotDelete = apperr.New(apperr.Forbidden, "only the file uploader or room owner can delete files")
 )
 
 type FileUseCase interface {
 	UploadFile(ctx context.Context, fileHeader *multipart.FileHeader, roomID, userID string) (*model.File, error)
-	GetFile(ctx context.Context, fileID string) (*model.File, error)
 	GetRoomFiles(ctx context.Context, roomID, userID string) ([]*model.File, error)
 	DeleteFile(ctx context.Context, fileID, userID string) error
 	CleanupOrphanedFiles(ctx context.Context) error
@@ -42,22 +49,20 @@ func NewFileUseCase(
 }
 
 func (uc *fileUseCase) UploadFile(ctx context.Context, fileHeader *multipart.FileHeader, roomID, userID string) (*model.File, error) {
-	room, err := uc.roomRepo.GetByID(ctx, roomID)
+	room, err := uc.getRoom(ctx, roomID)
 	if err != nil {
-		return nil, fmt.Errorf("room not found")
+		return nil, err
 	}
-
 	if room.HasExpired() {
-		return nil, fmt.Errorf("room has expired")
+		return nil, ErrRoomExpired
 	}
-
 	if !room.IsMember(userID) {
-		return nil, fmt.Errorf("user is not a member of this room")
+		return nil, ErrNotMember
 	}
 
 	relativePath, fileID, mimeType, err := uc.localStorage.SaveFile(fileHeader, roomID)
 	if err != nil {
-		return nil, err
+		return nil, storageError(err)
 	}
 
 	file := &model.File{
@@ -77,51 +82,44 @@ func (uc *fileUseCase) UploadFile(ctx context.Context, fileHeader *multipart.Fil
 		_ = uc.localStorage.DeleteFile(relativePath)
 		return nil, fmt.Errorf("failed to save file metadata: %w", err)
 	}
-
 	return file, nil
 }
 
-func (uc *fileUseCase) GetFile(ctx context.Context, fileID string) (*model.File, error) {
-	return uc.fileRepo.GetByID(ctx, fileID)
-}
-
 func (uc *fileUseCase) GetRoomFiles(ctx context.Context, roomID, userID string) ([]*model.File, error) {
-	room, err := uc.roomRepo.GetByID(ctx, roomID)
-	if err != nil || room == nil {
-		return nil, fmt.Errorf("room not found")
+	room, err := uc.getRoom(ctx, roomID)
+	if err != nil {
+		return nil, err
 	}
-
 	// Like messages and room details, the file list is for members only.
 	if !room.IsMember(userID) {
-		return nil, fmt.Errorf("user is not a member of this room")
+		return nil, ErrNotMember
 	}
-
 	return uc.fileRepo.GetByRoomID(ctx, roomID)
 }
 
 func (uc *fileUseCase) DeleteFile(ctx context.Context, fileID, userID string) error {
 	file, err := uc.fileRepo.GetByID(ctx, fileID)
+	if errors.Is(err, repository.ErrNotFound) {
+		return ErrFileNotFound
+	}
 	if err != nil {
-		return fmt.Errorf("file not found")
+		return fmt.Errorf("failed to get file: %w", err)
 	}
 
-	room, err := uc.roomRepo.GetByID(ctx, file.RoomID)
+	room, err := uc.getRoom(ctx, file.RoomID)
 	if err != nil {
-		return fmt.Errorf("room not found")
+		return err
 	}
-
 	if file.UserID != userID && room.Owner.ID != userID {
-		return fmt.Errorf("only the file uploader or room owner can delete files")
+		return ErrCannotDelete
 	}
 
 	if err := uc.localStorage.DeleteFile(file.Path); err != nil {
 		return fmt.Errorf("failed to delete file from storage: %w", err)
 	}
-
 	if err := uc.fileRepo.Delete(ctx, fileID); err != nil {
 		return fmt.Errorf("failed to delete file metadata: %w", err)
 	}
-
 	return nil
 }
 
@@ -130,12 +128,8 @@ func (uc *fileUseCase) CleanupOrphanedFiles(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to get orphaned files: %w", err)
 	}
-
 	for _, file := range orphanedFiles {
-		// Delete from local storage
 		_ = uc.localStorage.DeleteFile(file.Path)
-
-		// Delete metadata
 		_ = uc.fileRepo.Delete(ctx, file.ID)
 	}
 
@@ -143,14 +137,34 @@ func (uc *fileUseCase) CleanupOrphanedFiles(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to get room directories: %w", err)
 	}
-
 	for _, roomID := range roomDirs {
 		// Only a definite "not found" means the room is gone; on any other
 		// error (e.g. Redis unavailable) keep the files.
-		if _, err := uc.roomRepo.GetByID(ctx, roomID); errors.Is(err, redis.Nil) {
+		if _, err := uc.roomRepo.GetByID(ctx, roomID); errors.Is(err, repository.ErrNotFound) {
 			_ = uc.localStorage.DeleteRoomFiles(roomID)
 		}
 	}
-
 	return nil
+}
+
+func (uc *fileUseCase) getRoom(ctx context.Context, roomID string) (*model.Room, error) {
+	room, err := uc.roomRepo.GetByID(ctx, roomID)
+	if errors.Is(err, repository.ErrNotFound) || (err == nil && room == nil) {
+		return nil, ErrRoomNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get room: %w", err)
+	}
+	return room, nil
+}
+
+// storageError gives the storage errors the client can fix their kind.
+func storageError(err error) error {
+	switch {
+	case errors.Is(err, storage.ErrFileTooLarge):
+		return apperr.Wrap(apperr.TooLarge, err)
+	case errors.Is(err, storage.ErrInvalidFileType), errors.Is(err, storage.ErrInvalidPath):
+		return apperr.Wrap(apperr.Invalid, err)
+	}
+	return err
 }
