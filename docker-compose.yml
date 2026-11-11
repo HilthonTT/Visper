@@ -168,7 +168,7 @@ services:
 
   # ── Visper services (docker compose --profile app up) ─────
   api:
-    build: ./api
+    build: ./services/api
     container_name: visper-api
     profiles: [app]
     restart: unless-stopped
@@ -194,7 +194,7 @@ services:
       - visper-network
 
   proxy:
-    build: ./proxy
+    build: ./services/proxy
     container_name: visper-proxy
     profiles: [app]
     restart: unless-stopped
@@ -214,7 +214,7 @@ services:
       - visper-network
 
   ai:
-    build: ./ai
+    build: ./services/ai
     container_name: visper-ai
     profiles: [app]
     restart: unless-stopped
@@ -240,7 +240,7 @@ services:
       - visper-network
 
   ai-worker:
-    build: ./ai
+    build: ./services/ai
     container_name: visper-ai-worker
     profiles: [app]
     restart: unless-stopped

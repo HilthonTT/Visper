@@ -36,7 +36,7 @@ web client and an optional local-LLM "enhance my message" feature.
    │    cli    │               │    web    │
    │   (TUI)   │               │  (React)  │
    └─┬───────┬─┘               └─────┬─────┘
-     │       │ api-sdk               │
+     │       │ sdk/go                │
      │       ▼                       ▼
      │  ┌─────────────────────────────────┐
      │  │ proxy  (load balancer,          │
@@ -58,15 +58,15 @@ web client and an optional local-LLM "enhance my message" feature.
 
 | Directory            | What it is                                                         | Stack                                  |
 | -------------------- | ------------------------------------------------------------------ | -------------------------------------- |
-| [`api/`](api)        | REST + WebSocket backend (clean architecture)                      | Go, Gin, GORM, Redis, OpenTelemetry    |
-| [`api-sdk/`](api-sdk) | Typed Go client for the API, used by the CLI                     | Go                                     |
-| [`cli/`](cli)        | The `visper` terminal client                                       | Go, Bubble Tea v2, Lip Gloss v2        |
-| [`proxy/`](proxy)    | Reverse proxy / load balancer with hierarchical throttling         | Go, Prometheus                         |
-| [`ai/`](ai)          | Message-enhancement service and background worker                  | Python, FastAPI, arq, Ollama           |
-| [`web/`](web)        | Terminal-style web client                                          | React 19, TanStack Start, Vite         |
+| [`services/api/`](services/api)        | REST + WebSocket backend (clean architecture)                      | Go, Gin, GORM, Redis, OpenTelemetry    |
+| [`sdk/go/`](sdk/go) | Typed Go client for the API, used by the CLI                     | Go                                     |
+| [`clients/cli/`](clients/cli)        | The `visper` terminal client                                       | Go, Bubble Tea v2, Lip Gloss v2        |
+| [`services/proxy/`](services/proxy)    | Reverse proxy / load balancer with hierarchical throttling         | Go, Prometheus                         |
+| [`services/ai/`](services/ai)          | Message-enhancement service and background worker                  | Python, FastAPI, arq, Ollama           |
+| [`clients/web/`](clients/web)        | Terminal-style web client                                          | React 19, TanStack Start, Vite         |
 
 The Go modules are tied together with a [Go workspace](go.work), so the CLI
-always builds against the local `api-sdk`.
+always builds against the local `sdk/go`.
 
 ## Getting started
 
@@ -95,7 +95,7 @@ and the AI service on `:8088`.
 Then start the client:
 
 ```bash
-make cli                    # or: cd cli && go run ./cmd/visper
+make cli                    # or: cd clients/cli && go run ./cmd/visper
 ```
 
 ### Local development
@@ -106,26 +106,26 @@ Run the infrastructure in Docker and the services on your machine:
 make up                     # Postgres, Redis, Jaeger, Ollama
 make dev-api                # API with live reload
 make dev-proxy              # proxy with live reload (optional)
-make dev-ai                 # AI service (creates ai/.venv on first run)
+make dev-ai                 # AI service (creates services/ai/.venv on first run)
 make dev-web                # web client on http://localhost:3000
 make cli                    # the TUI
 ```
 
-The API reads `api/infrastructure/config/config-<APP_ENV>.yml`
+The API reads `services/api/infrastructure/config/config-<APP_ENV>.yml`
 (`development` by default; this file is git-ignored, so copy
 `config-docker.yml` to start). Every key can be overridden with a
 `VISPER_<SECTION>_<KEY>` environment variable; see
-[`api/.env.example`](api/.env.example).
+[`services/api/.env.example`](services/api/.env.example).
 
 ### Configuration
 
 | Component | Reference                                    |
 | --------- | -------------------------------------------- |
 | Compose   | [`.env.example`](.env.example)               |
-| API       | [`api/.env.example`](api/.env.example)       |
-| Proxy     | [`proxy/.env.example`](proxy/.env.example)   |
-| AI        | [`ai/.env.example`](ai/.env.example)         |
-| Web       | [`web/.env.example`](web/.env.example)       |
+| API       | [`services/api/.env.example`](services/api/.env.example)       |
+| Proxy     | [`services/proxy/.env.example`](services/proxy/.env.example)   |
+| AI        | [`services/ai/.env.example`](services/ai/.env.example)         |
+| Web       | [`clients/web/.env.example`](clients/web/.env.example)       |
 | CLI       | `VISPER_BASE_URL` (default `http://localhost:5005`), `VISPER_AI_BASE_URL` (default `http://localhost:8088`) |
 
 The CLI stores its settings in your OS config directory
@@ -139,11 +139,11 @@ make check       # everything CI runs: gofmt, vet, golangci-lint, tests, ruff, p
 make build       # build visper, visper-api and visper-proxy into ./bin
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and conventions.
+See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the workflow and conventions.
 
 ## Security
 
-Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
+Please report vulnerabilities privately; see [SECURITY.md](.github/SECURITY.md).
 
 ## Credits
 

@@ -5,7 +5,7 @@
 ## Components touched
 
 - [ ] api
-- [ ] api-sdk
+- [ ] sdk
 - [ ] cli
 - [ ] proxy
 - [ ] ai

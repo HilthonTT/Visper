@@ -6,7 +6,7 @@ body:
     id: component
     attributes:
       label: Component
-      options: [api, api-sdk, cli, proxy, ai, web, docker / infra]
+      options: [api, sdk, cli, proxy, ai, web, docker / infra]
     validations:
       required: true
   - type: textarea
