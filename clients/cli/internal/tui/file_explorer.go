@@ -332,7 +332,8 @@ func (m model) RenderFileExplorerModal() string {
 			row = "  " + row
 		}
 
-		sb.WriteString("  " + row)
+		sb.WriteString("  ")
+		sb.WriteString(row)
 		sb.WriteString("\n")
 	}
 
@@ -345,7 +346,8 @@ func (m model) RenderFileExplorerModal() string {
 
 	sb.WriteString(dimStyle.Render(strings.Repeat("─", feModalWidth-2)))
 	sb.WriteString("\n")
-	sb.WriteString("  " + m.keyHints([]footerCommand{{"↑↓", "move"}, {"←→", "folders"}, {"enter", "send"}, {"~", "home"}, {"esc", "cancel"}}, feModalWidth-6))
+	sb.WriteString("  ")
+	sb.WriteString(m.keyHints([]footerCommand{{"↑↓", "move"}, {"←→", "folders"}, {"enter", "send"}, {"~", "home"}, {"esc", "cancel"}}, feModalWidth-6))
 
 	return borderStyle.Render(sb.String())
 }
