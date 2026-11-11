@@ -51,19 +51,25 @@ export async function notifySelfRoomInvite(
 		},
 	);
 
+	// A JSON content-type does not guarantee a parseable body (empty 502 from a
+	// proxy, truncated response): fall back to `null` instead of surfacing a
+	// cryptic SyntaxError that hides the HTTP status.
 	const isJson = response.headers
 		.get("content-type")
 		?.includes("application/json");
+	const data: unknown = isJson ? await response.json().catch(() => null) : null;
 
 	if (!response.ok) {
-		if (isJson) {
-			const data = (await response.json()) as ApiError;
-			throw new Error(data.message || "Failed to send notification");
-		}
+		const apiError = (data ?? {}) as ApiError;
 		throw new Error(
-			`Server returned ${response.status} - ${response.statusText}`,
+			apiError.message ||
+				apiError.error ||
+				`Server returned ${response.status} - ${response.statusText}`,
 		);
 	}
 
-	return (await response.json()) as SelfRoomInviteResponse;
+	if (data === null || typeof data !== "object") {
+		throw new Error("Unexpected response from server");
+	}
+	return data as SelfRoomInviteResponse;
 }

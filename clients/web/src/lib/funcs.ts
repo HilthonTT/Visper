@@ -43,6 +43,20 @@ export function expandVariables(
 }
 
 /**
+ * Expand an `echo` argument like a shell would: single-quoted text is literal,
+ * anything else has its `$VAR` references expanded. Quotes are stripped after
+ * deciding, so `'$HOME'` prints `$HOME` rather than the variable's value.
+ */
+export function expandEchoArg(
+	input: string,
+	variables: Record<string, string>,
+): string {
+	const isSingleQuoted = /^'[\s\S]*'$/.test(input);
+	const unquoted = stripQuotes(input);
+	return isSingleQuoted ? unquoted : expandVariables(unquoted, variables);
+}
+
+/**
  * Strip one layer of matching surrounding quotes or backticks.
  */
 export function stripQuotes(input: string): string {

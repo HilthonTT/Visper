@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	autocomplete,
+	expandEchoArg,
 	expandVariables,
 	generateTabs,
 	isArgInvalid,
@@ -97,5 +98,18 @@ describe("autocomplete", () => {
 		expect(autocomplete("themes set ub", commands, themes).value).toBe(
 			"themes set ubuntu",
 		);
+	});
+});
+
+describe("expandEchoArg", () => {
+	const vars = { USER: "alice" };
+
+	it("expands unquoted and double-quoted variables", () => {
+		expect(expandEchoArg("hi $USER", vars)).toBe("hi alice");
+		expect(expandEchoArg(`"hi $USER"`, vars)).toBe("hi alice");
+	});
+
+	it("keeps single-quoted text literal", () => {
+		expect(expandEchoArg("'$USER'", vars)).toBe("$USER");
 	});
 });

@@ -14,7 +14,7 @@ from visper_ai.core.ai.enhancement_service import (
 )
 from visper_ai.core.ai.ollama_client import OllamaClient
 from visper_ai.core.config import _redis_url, settings
-from visper_ai.core.utils.rate_limit import check_sliding_window
+from visper_ai.core.utils.rate_limit import RateLimiter, check_sliding_window
 from visper_ai.middleware.logger_middleware import resolve_request_id
 from visper_ai.schemas.rate_limit import sanitize_path
 
@@ -128,3 +128,48 @@ async def test_ollama_client_errors_are_wrapped():
             await client.chat([{"role": "user", "content": "x"}])
     finally:
         await client.close()
+
+
+async def test_fixed_window_key_always_gets_ttl(monkeypatch):
+    redis = fakeredis.FakeAsyncRedis()
+    limiter = RateLimiter()
+    monkeypatch.setattr(limiter, "client", redis)
+    for _ in range(3):
+        await limiter.is_rate_limited("u1", "/v1/ai/enhance", limit=2, period=60)
+    keys = await redis.keys("ratelimit:*")
+    assert len(keys) == 1
+    assert int(await redis.get(keys[0])) == 3
+    assert 0 < await redis.ttl(keys[0]) <= 60
+    await redis.aclose()
+
+
+def test_log_filters_apply_to_structlog_events(monkeypatch):
+    import io
+    import logging
+
+    import structlog
+
+    from visper_ai.core import logger as logger_module
+
+    monkeypatch.setattr(settings, "CONSOLE_LOG_INCLUDE_PATH", False)
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(
+        logger_module.build_formatter(
+            json_output=True,
+            pre_chain=logger_module.SHARED_PROCESSORS,
+            filter_processor=logger_module.console_log_filter_processors,
+        )
+    )
+    std_logger = logging.Logger("filter-test")
+    std_logger.addHandler(handler)
+    log = structlog.wrap_logger(
+        std_logger,
+        processors=[structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
+        wrapper_class=structlog.stdlib.BoundLogger,
+    )
+    log.info("request_completed", path="/secret", status_code=200)
+
+    data = json.loads(stream.getvalue())
+    assert data["event"] == "request_completed"
+    assert "path" not in data

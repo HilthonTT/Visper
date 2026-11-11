@@ -309,8 +309,9 @@ def cache(
                 serializable_data = jsonable_encoder(result)
                 serialized_data = json.dumps(serializable_data)
 
-                await client.set(cache_key, serialized_data)
-                await client.expire(cache_key, expiration)
+                # Single atomic SET ... EX: a separate EXPIRE could be skipped and leave a
+                # key that never expires.
+                await client.set(cache_key, serialized_data, ex=expiration)
 
                 return json.loads(serialized_data)
             else:

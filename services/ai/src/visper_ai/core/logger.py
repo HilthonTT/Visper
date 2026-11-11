@@ -69,14 +69,23 @@ SHARED_PROCESSORS: list[Processor] = [
 ]
 
 
-def build_formatter(*, json_output: bool, pre_chain: list[Processor]) -> structlog.stdlib.ProcessorFormatter:
-    """Build a ProcessorFormatter with the specified renderer and processors."""
+def build_formatter(
+    *, json_output: bool, pre_chain: list[Processor], filter_processor: Processor | None = None
+) -> structlog.stdlib.ProcessorFormatter:
+    """Build a ProcessorFormatter with the specified renderer and processors.
+
+    ``foreign_pre_chain`` only runs for stdlib records, so the per-handler filter and
+    exception formatting go in ``processors``, which run for structlog events too
+    (previously the *_LOG_INCLUDE_* settings were ignored for structlog loggers).
+    """
     renderer = JSONRenderer() if json_output else ConsoleRenderer()
 
-    processors = [structlog.stdlib.ProcessorFormatter.remove_processors_meta, renderer]
-
+    processors: list[Processor] = [structlog.stdlib.ProcessorFormatter.remove_processors_meta]
+    if filter_processor is not None:
+        processors.append(filter_processor)
     if json_output:
-        pre_chain = pre_chain + [structlog.processors.format_exc_info]
+        processors.append(structlog.processors.format_exc_info)
+    processors.append(renderer)
 
     return structlog.stdlib.ProcessorFormatter(foreign_pre_chain=pre_chain, processors=processors)
 
@@ -107,7 +116,8 @@ def setup_logging() -> None:
     console_handler.setFormatter(
         build_formatter(
             json_output=settings.CONSOLE_LOG_FORMAT_JSON,
-            pre_chain=SHARED_PROCESSORS + [console_log_filter_processors],
+            pre_chain=SHARED_PROCESSORS,
+            filter_processor=console_log_filter_processors,
         )
     )
     handlers.append(console_handler)
@@ -125,7 +135,8 @@ def setup_logging() -> None:
         file_handler.setFormatter(
             build_formatter(
                 json_output=settings.FILE_LOG_FORMAT_JSON,
-                pre_chain=SHARED_PROCESSORS + [file_log_filter_processors],
+                pre_chain=SHARED_PROCESSORS,
+                filter_processor=file_log_filter_processors,
             )
         )
         handlers.append(file_handler)

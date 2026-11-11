@@ -61,9 +61,12 @@ class RateLimiter:
         key = f"ratelimit:{user_id}:{sanitized_path}:{window_start}"
 
         try:
-            current_count = await client.incr(key)
-            if current_count == 1:
-                await client.expire(key, period)
+            # INCR and EXPIRE must be atomic: if the process was cancelled (client
+            # disconnect) or Redis errored between them, the key never expired.
+            async with client.pipeline(transaction=True) as pipe:
+                pipe.incr(key)
+                pipe.expire(key, period)
+                current_count, _ = await pipe.execute()
         except Exception:
             logger.exception(f"Error checking rate limit for user {user_id} on path {path}")
             raise
