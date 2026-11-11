@@ -1,32 +1,33 @@
 package tui
 
 import (
+	"context"
+
 	tea "charm.land/bubbletea/v2"
 	apisdk "github.com/hilthontt/visper/sdk/go"
-	"github.com/hilthontt/visper/sdk/go/option"
 )
 
 type aiEnhanceResultMsg struct {
 	enhanced string
 	err      error
+	// session is the chat session (its wsCtx) the draft belongs to, so a
+	// rewrite that finishes after leaving the room isn't put in another
+	// room's message box.
+	session context.Context
 }
 
 func (m model) enhanceMessage(content string) tea.Cmd {
+	client, ctx, opts, session := m.client, m.context, m.requestOpts(), m.state.chat.wsCtx
+	req := apisdk.AIEnhanceRequest{
+		Message: content,
+		Style:   m.state.chat.aiEnhanceStyle,
+		Tone:    m.state.chat.aiEnhanceTone,
+	}
 	return func() tea.Msg {
-		opts := []option.RequestOption{}
-		if m.userID != nil && *m.userID != "" {
-			opts = append(opts, option.WithHeader("X-User-ID", *m.userID))
-		}
-
-		res, err := m.client.AI.Enhance(m.context, apisdk.AIEnhanceRequest{
-			Message: content,
-			Style:   m.state.chat.aiEnhanceStyle,
-			Tone:    m.state.chat.aiEnhanceTone,
-		}, opts...)
-
+		res, err := client.AI.Enhance(ctx, req, opts...)
 		if err != nil {
-			return aiEnhanceResultMsg{err: err}
+			return aiEnhanceResultMsg{err: err, session: session}
 		}
-		return aiEnhanceResultMsg{enhanced: res.Enhanced}
+		return aiEnhanceResultMsg{enhanced: res.Enhanced, session: session}
 	}
 }

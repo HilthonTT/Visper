@@ -40,8 +40,6 @@ type imageFileSelectedMsg struct {
 	path string
 }
 
-type fileExplorerClosedMsg struct{}
-
 func loadDir(dir string) ([]fileExplorerEntry, error) {
 	raw, err := os.ReadDir(dir)
 	if err != nil {
@@ -118,10 +116,7 @@ func (m model) fileExplorerUpdate(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		fe.cursor = 0
 		fe.err = ""
 	case "esc":
-		m = m.closeModal()
-		return m, func() tea.Msg {
-			return fileExplorerClosedMsg{}
-		}
+		return m.closeModal(), nil
 
 	case "up", "k":
 		if fe.cursor > 0 {

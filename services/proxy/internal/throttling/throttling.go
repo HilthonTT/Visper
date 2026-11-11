@@ -74,6 +74,11 @@ func NewThrottler(config ThrottleConfig, client redis.UniversalClient) *Throttle
 		span = config.Interval
 		config.Spans = 1
 	}
+	// Spans are numbered from the Unix epoch, so the interval must be an
+	// exact multiple of the span: otherwise the truncation remainder
+	// accumulates every interval and span positions drift away from interval
+	// boundaries (1s/7 spans drifts by >10s by now), skewing node estimation.
+	config.Interval = span * time.Duration(config.Spans)
 	return &Throttler{
 		config:        config,
 		client:        client,

@@ -166,6 +166,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case notificationWSChannelReadyMsg:
+		if msg.ctx != m.state.notification.wsCtx {
+			// A listener we already stopped (e.g. we entered a room while it
+			// was starting). Adopting its channel would orphan the current one.
+			return m, nil
+		}
 		m.state.notification.wsMsgChan = msg.msgChan
 		return m, waitForNotificationWSMessage(msg.msgChan)
 	case notificationWSRoomInviteMsg:
@@ -197,12 +202,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case roomInviteDeclinedMsg:
+		// The invite handler already re-armed the listener; waiting here too
+		// would add a second reader on every decline.
 		m.state.notification.pendingInvite = nil
 		m = m.closeModal()
-
-		if m.state.notification.wsMsgChan != nil {
-			return m, waitForNotificationWSMessage(m.state.notification.wsMsgChan)
-		}
 		return m, nil
 
 	case notificationWSErrorMsg:
@@ -457,10 +460,18 @@ func (m model) Cleanup() {
 // leaving). Closing the WebSocket alone keeps us listed as a member. All model
 // state is captured up front so the function can run off the Update loop.
 func (m model) leaveRoomRequest() func() {
-	if m.client == nil || m.state.chat.room == nil || m.state.chat.room.ID == "" {
+	if m.state.chat.room == nil {
 		return func() {}
 	}
-	client, roomID, isOwner, opts := m.client, m.state.chat.room.ID, m.state.chat.isRoomOwner, m.requestOpts()
+	return leaveRoomFunc(m.client, m.state.chat.room.ID, m.state.chat.isRoomOwner, m.requestOpts())
+}
+
+// leaveRoomFunc returns a function that leaves (or, for its owner, deletes)
+// roomID. It touches no model state, so it can run off the Update loop.
+func leaveRoomFunc(client *apisdk.Client, roomID string, isOwner bool, opts []option.RequestOption) func() {
+	if client == nil || roomID == "" {
+		return func() {}
+	}
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()

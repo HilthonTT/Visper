@@ -55,3 +55,14 @@ func TestMarshalOmitsUnsetFields(t *testing.T) {
 		t.Fatalf("got %q, want empty", got)
 	}
 }
+
+func TestMarshalSmallNumericKinds(t *testing.T) {
+	type params struct {
+		F float32 `query:"f"`
+		I int8    `query:"i"`
+	}
+	got := Marshal(params{F: 0.1, I: -3}).Encode()
+	if want := "f=0.1&i=-3"; got != want {
+		t.Fatalf("Marshal = %q, want %q", got, want)
+	}
+}

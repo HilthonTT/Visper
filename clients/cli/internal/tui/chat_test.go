@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -113,5 +114,97 @@ func TestChatViewportIsSizedWhenRoomOpens(t *testing.T) {
 	vp := m.state.chat.messagesViewport
 	if vp.Width() != m.chatCenterWidth() || vp.Height() != m.chatColumnHeight()-4 {
 		t.Fatalf("viewport is %dx%d, want %dx%d", vp.Width(), vp.Height(), m.chatCenterWidth(), m.chatColumnHeight()-4)
+	}
+}
+
+// A kick/expiry/deletion timer set in one room used to fire after the user had
+// already left and joined another, throwing them out of the new room.
+func TestStaleLeaveTimerDoesNotEjectFromNewRoom(t *testing.T) {
+	m := newChatModel(t)
+	old := m.state.chat.wsCtx
+	m.clearChatState()
+	m.page = newRoomPage
+	m, _ = m.ChatSwitch(&apisdk.RoomResponse{ID: "r2", JoinCode: "DEF", ExpiresAt: time.Now().Add(time.Hour)})
+
+	for _, msg := range []tea.Msg{wsKickTimeoutMsg{ctx: old}, wsRoomDeletedTimeoutMsg{ctx: old}, roomExpirationRedirectMsg{ctx: old}} {
+		tm, _ := m.Update(msg)
+		if mm := tm.(model); mm.page != chatPage || mm.state.chat.roomCode != "DEF" {
+			t.Fatalf("%T from the previous room left the new one", msg)
+		}
+	}
+	tm, _ := m.Update(wsKickTimeoutMsg{ctx: m.state.chat.wsCtx})
+	if tm.(model).page == chatPage {
+		t.Fatal("kick timeout of the current room was ignored")
+	}
+}
+
+// An upload started in a previous room used to be auto-sent into the next one.
+func TestUploadFromPreviousRoomIsIgnored(t *testing.T) {
+	m := newChatModel(t)
+	m.state.chat.uploading = true
+	m, cmd := m.ChatUpdate(fileUploadResultMsg{fileURL: "https://x/a.png", session: context.Background()})
+	if cmd != nil || !m.state.chat.uploading {
+		t.Fatal("upload result from another session was applied")
+	}
+}
+
+// Rooms without an expiry (zero expires_at) used to "expire" after a second.
+func TestRoomWithoutExpiryHasNoCountdown(t *testing.T) {
+	m := newChatModel(t)
+	m.state.chat.expiresAt = time.Time{}
+	if m.startExpirationCountdown() != nil {
+		t.Fatal("countdown started for a room that never expires")
+	}
+}
+
+func TestMemberSearchSurvivesMembershipChanges(t *testing.T) {
+	m := newChatModel(t)
+	m.state.chat.participants = []apisdk.UserResponse{
+		{ID: "1", Username: "alice"}, {ID: "2", Username: "carol"}, {ID: "3", Username: "bob"}, {ID: "4", Username: "dave"},
+	}
+	m.state.chat.searchActive = true
+	m.state.chat.searchInput.SetValue("bob")
+
+	// Search ran on the 4-member snapshot; carol leaves before it returns.
+	res := m.searchParticipants("bob")()
+	m, _ = m.ChatUpdate(wsMemberLeftMsg{userID: "2", username: "carol"})
+	m, _ = m.ChatUpdate(res)
+	if f := m.state.chat.filteredIndices; len(f) != 1 || m.state.chat.participants[f[0]].ID != "3" {
+		t.Fatalf("filter = %v, want only bob", f)
+	}
+
+	// Another member leaving keeps the filter on bob.
+	m, _ = m.ChatUpdate(wsMemberLeftMsg{userID: "1", username: "alice"})
+	if f := m.state.chat.filteredIndices; len(f) != 1 || m.state.chat.participants[f[0]].ID != "3" {
+		t.Fatalf("filter after leave = %v, want only bob", f)
+	}
+
+	// A result for an outdated query is dropped.
+	m, _ = m.ChatUpdate(participantSearchResultMsg{query: "da", ids: []string{"4"}})
+	if f := m.state.chat.filteredIndices; len(f) != 1 || m.state.chat.participants[f[0]].ID != "3" {
+		t.Fatalf("stale result applied: %v", f)
+	}
+}
+
+// A second create/join finishing while already in a room used to swap only
+// the room pointer, sending to one room while listening to another.
+func TestSecondRoomJoinWhileInChatIsIgnored(t *testing.T) {
+	m := newChatModel(t)
+	m.page = chatPage
+	tm, _ := m.Update(roomJoinedMsg{room: &apisdk.RoomResponse{ID: "other", JoinCode: "ZZZ"}})
+	if got := tm.(model).state.chat.room.ID; got != "r" {
+		t.Fatalf("room switched to %q", got)
+	}
+}
+
+// The invite QR code kept encoding the old join code after it was changed.
+func TestQRCodeFollowsNewJoinCode(t *testing.T) {
+	m := newChatModel(t)
+	room := *m.state.chat.room
+	room.QRCodeURL = "https://visper.example/?joinCode=ABC&secureCode=s3"
+	m.state.chat.room = &room
+	m, _ = m.ChatUpdate(wsRoomUpdatedMsg{joinCode: "NEW"})
+	if got := m.state.chat.room.QRCodeURL; !strings.Contains(got, "joinCode=NEW") || !strings.Contains(got, "secureCode=s3") {
+		t.Fatalf("QR URL = %q", got)
 	}
 }

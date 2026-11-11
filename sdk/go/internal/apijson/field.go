@@ -46,8 +46,8 @@ func getSubField(root reflect.Value, index []int, name string) reflect.Value {
 		return reflect.Value{}
 	}
 
-	field := meta.FieldByName("JSON")
-	if !meta.IsValid() {
+	field := meta.FieldByName(name)
+	if !field.IsValid() {
 		return reflect.Value{}
 	}
 

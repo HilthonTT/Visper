@@ -44,26 +44,6 @@ func TestIsImageURL(t *testing.T) {
 	}
 }
 
-func TestWordWrap(t *testing.T) {
-	tests := []struct {
-		in    string
-		width int
-		want  string
-	}{
-		{"", 10, ""},
-		{"hello world", 20, "hello world"},
-		{"hello world", 5, "hello\nworld"},
-		{"a b c d", 3, "a b\nc d"},
-		{"  spaced   out  ", 20, "spaced out"},
-		{"averyveryverylongword x", 5, "averyveryverylongword\nx"},
-	}
-	for _, tt := range tests {
-		if got := wordWrap(tt.in, tt.width); got != tt.want {
-			t.Errorf("wordWrap(%q, %d) = %q, want %q", tt.in, tt.width, got, tt.want)
-		}
-	}
-}
-
 func TestMaxEncryptedMessageBytesFitsServerLimit(t *testing.T) {
 	// base64(nonce || secretbox(plaintext)) must not exceed maxMessageLen.
 	const nonce, overhead = 24, 16

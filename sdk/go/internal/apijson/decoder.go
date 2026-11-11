@@ -325,6 +325,20 @@ func (d *decoderBuilder) newArrayTypeDecoder(t reflect.Type) decoderFunc {
 		}
 
 		arrayNode := node.Array()
+		if t.Kind() == reflect.Array {
+			// A fixed-size array cannot be Set from a slice; decode in place,
+			// ignoring surplus items and zeroing missing ones like encoding/json.
+			for i := 0; i < value.Len(); i++ {
+				if i >= len(arrayNode) {
+					value.Index(i).SetZero()
+					continue
+				}
+				if err := itemDecoder(arrayNode[i], value.Index(i), state); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		arrayValue := reflect.MakeSlice(reflect.SliceOf(t.Elem()), len(arrayNode), len(arrayNode))
 		for i, itemNode := range arrayNode {
 			err := itemDecoder(itemNode, arrayValue.Index(i), state)
@@ -605,7 +619,10 @@ func (d *decoderBuilder) newUnionDecoder(t reflect.Type) decoderFunc {
 				exactness: exact,
 			}
 			inner := reflect.New(variant.Type).Elem()
-			err := decoder(node, inner, state)
+			// Decode with the per-variant state so its exactness is what
+			// gets compared below (and a loose match on one variant does not
+			// degrade the caller's state).
+			err := decoder(node, inner, &sub)
 			if err != nil {
 				continue
 			}

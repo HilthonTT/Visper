@@ -24,6 +24,12 @@ and an optional "enhance my message" feature backed by a local
 More demos (QR invites, editing, image sharing, AI rewrite):
 **[docs/demos](docs/demos/README.md)**.
 
+The web client mirrors the TUI's layout (header tabs, footer key hints and
+the companion panel) and sends room invites to your CLI from the browser
+([more screenshots](clients/web/README.md#screenshots)):
+
+![The Visper web client: terminal page with the companion panel](docs/assets/screenshots/web-terminal.png)
+
 ## Quick start
 
 Requires Docker and Go 1.27+.

@@ -139,11 +139,11 @@ func (e *encoder) newPrimitiveTypeEncoder(t reflect.Type) encoderFunc {
 			}
 			return writer.WriteField(key, "false")
 		}
-	case reflect.Int, reflect.Int16, reflect.Int32, reflect.Int64:
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return func(key string, v reflect.Value, writer *multipart.Writer) error {
 			return writer.WriteField(key, strconv.FormatInt(v.Int(), 10))
 		}
-	case reflect.Uint, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return func(key string, v reflect.Value, writer *multipart.Writer) error {
 			return writer.WriteField(key, strconv.FormatUint(v.Uint(), 10))
 		}
@@ -193,7 +193,9 @@ func (e *encoder) newStructTypeEncoder(t reflect.Type) encoderFunc {
 	var collectEncoderFields func(r reflect.Type, index []int)
 	collectEncoderFields = func(r reflect.Type, index []int) {
 		for i := 0; i < r.NumField(); i++ {
-			idx := append(index, i)
+			// Clip index so sibling fields never share (and overwrite) the
+			// backing array of their stored idx once embedding is 3+ deep.
+			idx := append(index[:len(index):len(index)], i)
 			field := t.FieldByIndex(idx)
 			if !field.IsExported() {
 				continue
@@ -312,6 +314,14 @@ func escapeQuotes(s string) string {
 
 func (e *encoder) newReaderTypeEncoder() encoderFunc {
 	return func(key string, value reflect.Value, writer *multipart.Writer) error {
+		// An unset optional file (nil interface or nil pointer) is omitted;
+		// otherwise io.Copy below would panic on the nil reader.
+		switch value.Kind() {
+		case reflect.Interface, reflect.Pointer:
+			if value.IsNil() {
+				return nil
+			}
+		}
 		reader := value.Convert(reflect.TypeOf((*io.Reader)(nil)).Elem()).Interface().(io.Reader)
 		filename := "anonymous_file"
 		contentType := "application/octet-stream"

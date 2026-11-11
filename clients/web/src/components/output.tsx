@@ -8,9 +8,11 @@ import { GeneralOutput } from "./commands/general-output";
 import { Help } from "./commands/help";
 import { History } from "./commands/history";
 import { JoinRoom } from "./commands/join-room";
-import { SetJoinCode } from "./commands/set-join-code";
-import { SetSecureCode } from "./commands/set-secure-code";
-import { SetUserId } from "./commands/set-user-id";
+import {
+	SetJoinCode,
+	SetSecureCode,
+	SetUserId,
+} from "./commands/set-credential";
 import { Themes } from "./commands/themes";
 import { Welcome } from "./commands/welcome";
 import { OutputContainer, UsageDiv } from "./styles/output-styled";

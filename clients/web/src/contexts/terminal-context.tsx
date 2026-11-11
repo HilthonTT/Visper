@@ -3,6 +3,8 @@ import { createContext, type ReactNode, useContext } from "react";
 export type TerminalContextType = {
 	/** Arguments of this history entry's command (command name excluded). */
 	arg: string[];
+	/** Raw text after the command name (quotes and inner whitespace intact). */
+	rawArg: string;
 	/** Full command history, newest first. */
 	history: string[];
 	/** True right after a submit, false while the user is typing. */
@@ -10,6 +12,8 @@ export type TerminalContextType = {
 	/** Position of this entry in `history` (0 = latest). */
 	index: number;
 	clearHistory?: () => void;
+	/** Submit `input` as if it had been typed at the prompt. */
+	runCommand?: (input: string) => void;
 };
 
 const TerminalContext = createContext<TerminalContextType | undefined>(

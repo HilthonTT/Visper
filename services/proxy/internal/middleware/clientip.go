@@ -51,25 +51,27 @@ func (c *ClientIPResolver) isTrusted(addr netip.Addr) bool {
 	return false
 }
 
-// TrustsPeer reports whether the direct peer of r is a trusted proxy.
-func (c *ClientIPResolver) TrustsPeer(r *http.Request) bool {
+// peer returns the host part of r.RemoteAddr and, if it parses, its address.
+func peer(r *http.Request) (string, netip.Addr, bool) {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
-	peer, err := netip.ParseAddr(host)
-	return err == nil && c.isTrusted(peer)
+	addr, err := netip.ParseAddr(host)
+	return host, addr, err == nil
+}
+
+// TrustsPeer reports whether the direct peer of r is a trusted proxy.
+func (c *ClientIPResolver) TrustsPeer(r *http.Request) bool {
+	_, addr, ok := peer(r)
+	return ok && c.isTrusted(addr)
 }
 
 // ClientIP returns the client IP for r. When the peer is trusted, it walks
 // X-Forwarded-For from right to left and returns the first untrusted hop.
 func (c *ClientIPResolver) ClientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
-	}
-	peer, err := netip.ParseAddr(host)
-	if err != nil || !c.isTrusted(peer) {
+	host, last, ok := peer(r)
+	if !ok || !c.isTrusted(last) {
 		return host
 	}
 
@@ -86,7 +88,7 @@ func (c *ClientIPResolver) ClientIP(r *http.Request) string {
 		if !c.isTrusted(addr) {
 			return addr.Unmap().String()
 		}
-		peer = addr
+		last = addr
 	}
-	return peer.Unmap().String()
+	return last.Unmap().String()
 }

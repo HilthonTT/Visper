@@ -1,9 +1,14 @@
-import { User, WebsiteName, Wrapper } from "./styles/terminal-info-styled";
+import {
+	Prompt,
+	PromptArrow,
+	PromptHost,
+	PromptPath,
+	PromptUser,
+} from "./styles/terminal-styled";
 
-export const TerminalInfo = () => {
-	return (
-		<Wrapper>
-			<User>anonymous</User>@<WebsiteName>terminal.visper.dev</WebsiteName>:~$
-		</Wrapper>
-	);
-};
+export const TerminalInfo = () => (
+	<Prompt>
+		<PromptUser>anonymous</PromptUser>@<PromptHost>visper</PromptHost>{" "}
+		<PromptPath>~</PromptPath> <PromptArrow>❯</PromptArrow>
+	</Prompt>
+);

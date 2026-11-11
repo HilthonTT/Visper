@@ -1,18 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useShell } from "@/contexts/shell-context";
 import { useUser } from "@/contexts/user-context";
 import type { RoomParams } from "@/hooks/use-room-params";
-import { commandNames } from "@/lib/commands";
-import { autocomplete } from "@/lib/funcs";
+import { commandNames, isValidCommand } from "@/lib/commands";
+import { moodForCommand } from "@/lib/companions";
+import { autocomplete, parseCommand } from "@/lib/funcs";
 import { themeNames } from "@/lib/themes";
 import { HistoryItem } from "./history-item";
-import {
-	Form,
-	Hints,
-	Input,
-	MobileBr,
-	MobileSpan,
-	Wrapper,
-} from "./styles/terminal-styled";
+import { Filler, Form, Hints, Input, Wrapper } from "./styles/terminal-styled";
+import { Muted } from "./styles/ui";
 import { TerminalInfo } from "./terminal-info";
 
 type HistoryEntry = {
@@ -23,13 +19,16 @@ type HistoryEntry = {
 
 interface TerminalProps {
 	searchParams: RoomParams;
+	/** False while another page is shown; the terminal stays mounted. */
+	active: boolean;
 }
 
-export const Terminal = ({ searchParams }: TerminalProps) => {
+export const Terminal = ({ searchParams, active }: TerminalProps) => {
 	const inputRef = useRef<HTMLInputElement>(null);
 	const nextId = useRef(1);
 
 	const { setJoinCode, setSecureCode } = useUser();
+	const { setMood } = useShell();
 
 	const [inputVal, setInputVal] = useState("");
 	const [entries, setEntries] = useState<HistoryEntry[]>([
@@ -44,16 +43,28 @@ export const Terminal = ({ searchParams }: TerminalProps) => {
 	const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
 		setRerender(false);
 		setInputVal(e.target.value);
+		// Completion candidates belong to the previous input; drop them.
+		setHints([]);
 	}, []);
+
+	const runCommand = useCallback(
+		(input: string) => {
+			const entry = { id: nextId.current++, input };
+			const [cmd] = parseCommand(input);
+			setMood(moodForCommand(cmd, isValidCommand(cmd), entry.id));
+			setEntries((prev) => [entry, ...prev]);
+			setInputVal("");
+			setRerender(true);
+			setHints([]);
+			setPointer(-1);
+			inputRef.current?.focus();
+		},
+		[setMood],
+	);
 
 	const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
 		e.preventDefault();
-		const entry = { id: nextId.current++, input: inputVal };
-		setEntries((prev) => [entry, ...prev]);
-		setInputVal("");
-		setRerender(true);
-		setHints([]);
-		setPointer(-1);
+		runCommand(inputVal);
 	};
 
 	const clearHistory = useCallback(() => {
@@ -116,8 +127,13 @@ export const Terminal = ({ searchParams }: TerminalProps) => {
 		}
 	};
 
-	// Clicking anywhere focuses the input, unless the user is selecting text.
+	// Clicking anywhere focuses the input, unless the user is selecting text
+	// or another page is showing.
 	useEffect(() => {
+		if (!active) {
+			return;
+		}
+		inputRef.current?.focus();
 		const focusInput = () => {
 			if (window.getSelection()?.toString()) {
 				return;
@@ -126,7 +142,7 @@ export const Terminal = ({ searchParams }: TerminalProps) => {
 		};
 		document.addEventListener("click", focusInput);
 		return () => document.removeEventListener("click", focusInput);
-	}, []);
+	}, [active]);
 
 	useEffect(() => {
 		if (searchParams.joinCode) {
@@ -144,20 +160,23 @@ export const Terminal = ({ searchParams }: TerminalProps) => {
 
 	return (
 		<Wrapper data-testid="terminal-wrapper">
+			<Filler />
 			{hints.length > 1 && (
-				<div>
+				<Hints>
 					{hints.map((hCmd) => (
-						<Hints key={hCmd}>{hCmd}</Hints>
+						<Muted key={hCmd}>{hCmd}</Muted>
 					))}
-				</div>
+				</Hints>
 			)}
 			<Form onSubmit={handleSubmit}>
 				<label htmlFor="terminal-input">
-					<TerminalInfo /> <MobileBr />
-					<MobileSpan>&#62;</MobileSpan>
+					<TerminalInfo />
 				</label>
 				<Input
-					title="terminal-input"
+					aria-label="Command input"
+					placeholder={
+						entries.length <= 1 ? "try help, or press Tab" : undefined
+					}
 					type="text"
 					id="terminal-input"
 					autoComplete="off"
@@ -179,6 +198,7 @@ export const Terminal = ({ searchParams }: TerminalProps) => {
 					cmdHistory={cmdHistory}
 					rerender={rerender}
 					clearHistory={clearHistory}
+					runCommand={runCommand}
 				/>
 			))}
 		</Wrapper>

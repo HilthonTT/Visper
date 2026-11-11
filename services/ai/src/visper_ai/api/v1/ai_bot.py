@@ -15,7 +15,7 @@ from ...core.ai.enhancement_service import EnhancementStyle, EnhancementTone, Te
 from ...core.ai.ollama_client import OllamaClient
 from ...core.config import settings
 from ...core.utils.cache import async_get_redis
-from ...core.utils.webhook import WebhookURLError, validate_webhook_url
+from ...core.utils.webhook import WebhookURLError, post_webhook, validate_webhook_url
 from ...schemas.ai_bot import (
     AsyncEnhanceRequest,
     AsyncEnhanceResponse,
@@ -175,16 +175,41 @@ async def _get_task_status(redis: Redis, task_id: str) -> dict | None:
     return None
 
 
+async def _enhance_with_cache(
+    redis: Redis, user_id: str, message: str, style: EnhancementStyle, tone: EnhancementTone
+) -> tuple[dict, bool]:
+    """Return ``({"enhanced", "improvements", "metadata"}, cached)``, using and filling the cache.
+
+    Cache errors are swallowed (logged); enhancement errors propagate.
+    """
+    cached = await _get_cached_result(redis, user_id, message, style.value, tone.value)
+    if cached:
+        return cached, True
+
+    service = get_enhancement_service()
+    enhanced, metadata = await service.enhance(message=message, style=style, tone=tone)
+    improvements = service.analyze_improvements(
+        original=message,
+        enhanced=enhanced,
+        style=style.value,
+        tone=tone.value,
+    )
+    await _cache_result(redis, user_id, message, style.value, tone.value, enhanced, improvements, metadata)
+    return {"enhanced": enhanced, "improvements": improvements, "metadata": metadata}, False
+
+
 async def _notify_webhook(callback_url: str | None, payload: dict) -> None:
     if not callback_url:
         return
     try:
-        # Re-check right before sending: the host's DNS may have changed since the
-        # request was accepted (DNS rebinding). Redirects stay disabled so a public
-        # URL cannot bounce the request to an internal one.
-        await validate_webhook_url(callback_url, allow_private=settings.WEBHOOK_ALLOW_PRIVATE_NETWORKS)
-        async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT, follow_redirects=False) as client:
-            await client.post(callback_url, json=payload)
+        # Re-validated and pinned to the checked IP right before sending: the host's
+        # DNS may have changed since the request was accepted (DNS rebinding).
+        await post_webhook(
+            callback_url,
+            payload,
+            allow_private=settings.WEBHOOK_ALLOW_PRIVATE_NETWORKS,
+            http_timeout=WEBHOOK_TIMEOUT,
+        )
     except WebhookURLError as e:
         logger.warning(f"Refused to call webhook: {e}")
     except httpx.HTTPError as e:
@@ -208,35 +233,14 @@ async def _process_enhancement_background(
         # Update status to processing
         await _store_task_status(redis, task_id, "processing", {**base, "original": message})
 
-        # Check cache
-        cached = await _get_cached_result(redis, user_id, message, style.value, tone.value)
-
-        if cached:
-            enhanced = cached["enhanced"]
-            improvements = cached["improvements"]
-            metadata = cached["metadata"]
-        else:
-            # Perform enhancement
-            service = get_enhancement_service()
-
-            enhanced, metadata = await service.enhance(message=message, style=style, tone=tone)
-
-            improvements = service.analyze_improvements(
-                original=message,
-                enhanced=enhanced,
-                style=style.value,
-                tone=tone.value,
-            )
-
-            # Cache result
-            await _cache_result(redis, user_id, message, style.value, tone.value, enhanced, improvements, metadata)
-
+        result, cached = await _enhance_with_cache(redis, user_id, message, style, tone)
+        if not cached:
             logger.info(
                 f"Background enhancement completed for task {task_id}",
                 extra={
                     "user_id": user_id,
-                    "method": metadata.get("method"),
-                    "processing_time_ms": metadata.get("processing_time_ms"),
+                    "method": result["metadata"].get("method"),
+                    "processing_time_ms": result["metadata"].get("processing_time_ms"),
                 },
             )
 
@@ -249,12 +253,12 @@ async def _process_enhancement_background(
                 **base,
                 "completed_at": _now_iso(),
                 "original": message,
-                "enhanced": enhanced,
+                "enhanced": result["enhanced"],
                 "style": style.value,
                 "tone": tone.value,
-                "improvements": improvements,
-                "metadata": metadata,
-                "cached": bool(cached),
+                "improvements": result["improvements"],
+                "metadata": result["metadata"],
+                "cached": cached,
             },
         )
     except Exception as e:
@@ -429,64 +433,35 @@ async def enhance_message(
     """
     user_id = user["id"]
 
-    # Check cache first
-    cached = await _get_cached_result(redis, user_id, req.message, req.style.value, req.tone.value)
-
-    if cached:
-        logger.info(f"Cache hit for user {user_id}")
-        return EnhanceResponse(
-            original=req.message,
-            enhanced=cached["enhanced"],
-            style=req.style.value,
-            tone=req.tone.value,
-            improvements=cached["improvements"],
-            metadata=cached["metadata"],
-            cached=True,
-        )
-
-    # Enhance with AI
     try:
-        service = get_enhancement_service()
-
-        enhanced, metadata = await service.enhance(
-            message=req.message,
-            style=req.style,
-            tone=req.tone,
-        )
-
-        improvements = service.analyze_improvements(
-            original=req.message,
-            enhanced=enhanced,
-            style=req.style.value,
-            tone=req.tone.value,
-        )
+        result, cached = await _enhance_with_cache(redis, user_id, req.message, req.style, req.tone)
     except Exception as e:
         logger.error(f"Enhancement failed for user {user_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to enhance message"
         ) from e
 
-    # Cache result
-    await _cache_result(redis, user_id, req.message, req.style.value, req.tone.value, enhanced, improvements, metadata)
-
-    logger.info(
-        f"Enhanced message for user {user_id}",
-        extra={
-            "style": req.style.value,
-            "tone": req.tone.value,
-            "method": metadata.get("method"),
-            "processing_time_ms": metadata.get("processing_time_ms"),
-        },
-    )
+    if cached:
+        logger.info(f"Cache hit for user {user_id}")
+    else:
+        logger.info(
+            f"Enhanced message for user {user_id}",
+            extra={
+                "style": req.style.value,
+                "tone": req.tone.value,
+                "method": result["metadata"].get("method"),
+                "processing_time_ms": result["metadata"].get("processing_time_ms"),
+            },
+        )
 
     return EnhanceResponse(
         original=req.message,
-        enhanced=enhanced,
+        enhanced=result["enhanced"],
         style=req.style.value,
         tone=req.tone.value,
-        improvements=improvements,
-        metadata=metadata,
-        cached=False,
+        improvements=result["improvements"],
+        metadata=result["metadata"],
+        cached=cached,
     )
 
 
@@ -510,8 +485,6 @@ async def enhance_messages_batch(
     successful = 0
     failed = 0
 
-    service = get_enhancement_service()
-
     for message in req.messages:
         if len(message) < settings.MIN_MESSAGE_LENGTH:
             results.append(
@@ -525,52 +498,8 @@ async def enhance_messages_batch(
             failed += 1
             continue
 
-        # Check cache
-        cached = await _get_cached_result(redis, user_id, message, req.style.value, req.tone.value)
-
-        if cached:
-            results.append(
-                {
-                    "original": message,
-                    "enhanced": cached["enhanced"],
-                    "improvements": cached["improvements"],
-                    "cached": True,
-                }
-            )
-            successful += 1
-            continue
-
-        # Enhance
         try:
-            enhanced, metadata = await service.enhance(
-                message=message,
-                style=req.style,
-                tone=req.tone,
-            )
-
-            improvements = service.analyze_improvements(
-                original=message,
-                enhanced=enhanced,
-                style=req.style.value,
-                tone=req.tone.value,
-            )
-
-            # Cache
-            await _cache_result(
-                redis, user_id, message, req.style.value, req.tone.value, enhanced, improvements, metadata
-            )
-
-            results.append(
-                {
-                    "original": message,
-                    "enhanced": enhanced,
-                    "improvements": improvements,
-                    "metadata": metadata,
-                    "cached": False,
-                }
-            )
-            successful += 1
-
+            result, cached = await _enhance_with_cache(redis, user_id, message, req.style, req.tone)
         except Exception as e:
             logger.error(f"Batch enhancement failed for message: {e}")
             results.append(
@@ -582,6 +511,14 @@ async def enhance_messages_batch(
                 }
             )
             failed += 1
+            continue
+
+        item = {"original": message, "enhanced": result["enhanced"], "improvements": result["improvements"]}
+        if not cached:
+            # Batch cache hits never carried metadata; keep the payload shape unchanged.
+            item["metadata"] = result["metadata"]
+        results.append({**item, "cached": cached})
+        successful += 1
 
     processing_time = (time.perf_counter() - start_time) * 1000
 

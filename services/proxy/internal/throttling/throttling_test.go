@@ -30,12 +30,16 @@ func TestNewThrottlerSanitizesConfig(t *testing.T) {
 		{"defaults for zero config", ThrottleConfig{}, 6, 10 * time.Second},
 		{"sub-second spans", ThrottleConfig{MaxRequests: 1, Interval: time.Second, Spans: 4}, 4, 250 * time.Millisecond},
 		{"more spans than nanoseconds", ThrottleConfig{MaxRequests: 1, Interval: 2, Spans: 10}, 1, 2},
+		{"interval not divisible by spans", ThrottleConfig{MaxRequests: 1, Interval: time.Second, Spans: 7}, 7, 142857142},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			th := NewThrottler(tt.cfg, nil)
 			if th.config.Spans != tt.wantSpans || th.spanDuration != tt.wantSpan {
 				t.Fatalf("got spans=%d span=%v, want %d %v", th.config.Spans, th.spanDuration, tt.wantSpans, tt.wantSpan)
+			}
+			if want := th.spanDuration * time.Duration(th.config.Spans); th.config.Interval != want {
+				t.Fatalf("interval %v is not spans*span (%v); span positions drift from interval boundaries", th.config.Interval, want)
 			}
 		})
 	}
