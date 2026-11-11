@@ -89,14 +89,9 @@ func (uc *roomUseCase) RegenerateSecureCode(ctx context.Context, userID, id stri
 		return nil, fmt.Errorf("room ID cannot be empty")
 	}
 
-	room, err := uc.repository.GetByID(ctx, id)
+	room, err := uc.loadRoom(ctx, id)
 	if err != nil {
-		uc.logger.Error("failed to get room for secure code regeneration", zap.Error(err), zap.String("roomID", id))
-		return nil, fmt.Errorf("failed to get room: %w", err)
-	}
-
-	if room == nil {
-		return nil, fmt.Errorf("room not found")
+		return nil, err
 	}
 
 	if room.Owner.ID != userID {
@@ -120,14 +115,9 @@ func (uc *roomUseCase) GenerateNewJoinCode(ctx context.Context, userID, id strin
 		return nil, fmt.Errorf("room ID cannot be empty")
 	}
 
-	room, err := uc.repository.GetByID(ctx, id)
+	room, err := uc.loadRoom(ctx, id)
 	if err != nil {
-		uc.logger.Error("failed to get room for deletion", zap.Error(err), zap.String("roomID", id))
-		return nil, fmt.Errorf("failed to get room: %w", err)
-	}
-
-	if room == nil {
-		return nil, fmt.Errorf("room not found")
+		return nil, err
 	}
 
 	if room.Owner.ID != userID {
@@ -189,14 +179,9 @@ func (uc *roomUseCase) Delete(ctx context.Context, id string, userID string) err
 		return fmt.Errorf("room ID cannot be empty")
 	}
 
-	room, err := uc.repository.GetByID(ctx, id)
+	room, err := uc.loadRoom(ctx, id)
 	if err != nil {
-		uc.logger.Error("failed to get room for deletion", zap.Error(err), zap.String("roomID", id))
-		return fmt.Errorf("failed to get room: %w", err)
-	}
-
-	if room == nil {
-		return fmt.Errorf("room not found")
+		return err
 	}
 
 	// Only owner can delete the room
@@ -246,14 +231,9 @@ func (uc *roomUseCase) KickMember(ctx context.Context, roomID, userID, requester
 		return fmt.Errorf("room ID, user ID, and requester ID cannot be empty")
 	}
 
-	room, err := uc.repository.GetByID(ctx, roomID)
+	room, err := uc.loadRoom(ctx, roomID)
 	if err != nil {
-		uc.logger.Error("failed to get room for kicking member", zap.Error(err), zap.String("roomID", roomID))
-		return fmt.Errorf("failed to get room: %w", err)
-	}
-
-	if room == nil {
-		return fmt.Errorf("room not found")
+		return err
 	}
 
 	if room.Owner.ID != requesterID {
@@ -366,17 +346,19 @@ func (uc *roomUseCase) LeaveRoom(ctx context.Context, roomID string, userID stri
 		return fmt.Errorf("room ID and user ID cannot be empty")
 	}
 
-	room, err := uc.repository.GetByID(ctx, roomID)
+	room, err := uc.loadRoom(ctx, roomID)
 	if err != nil {
-		return fmt.Errorf("failed to get room: %w", err)
-	}
-
-	if room == nil {
-		return fmt.Errorf("room not found")
+		return err
 	}
 
 	if room.Owner.ID == userID {
 		return fmt.Errorf("room owner cannot leave, delete the room instead")
+	}
+
+	// Without this check any user could "leave" any room, which broadcasts a
+	// bogus member-left notice to its members.
+	if !room.IsMember(userID) {
+		return fmt.Errorf("user is not a member of this room")
 	}
 
 	if err := uc.repository.RemoveUser(ctx, roomID, userID); err != nil {
@@ -386,6 +368,21 @@ func (uc *roomUseCase) LeaveRoom(ctx context.Context, roomID string, userID stri
 
 	uc.logger.Info("user left room", zap.String("roomID", roomID), zap.String("userID", userID))
 	return nil
+}
+
+// loadRoom reads a room from the repository, which reports a missing room as
+// redis.Nil. That is mapped to "room not found" so that controllers answer 404
+// instead of 500.
+func (uc *roomUseCase) loadRoom(ctx context.Context, id string) (*model.Room, error) {
+	room, err := uc.repository.GetByID(ctx, id)
+	if errors.Is(err, redis.Nil) || (err == nil && room == nil) {
+		return nil, fmt.Errorf("room not found")
+	}
+	if err != nil {
+		uc.logger.Error("failed to get room", zap.Error(err), zap.String("roomID", id))
+		return nil, fmt.Errorf("failed to get room: %w", err)
+	}
+	return room, nil
 }
 
 func (uc *roomUseCase) isRoomExpired(room *model.Room) bool {

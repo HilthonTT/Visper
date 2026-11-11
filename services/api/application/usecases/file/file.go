@@ -15,7 +15,7 @@ import (
 type FileUseCase interface {
 	UploadFile(ctx context.Context, fileHeader *multipart.FileHeader, roomID, userID string) (*model.File, error)
 	GetFile(ctx context.Context, fileID string) (*model.File, error)
-	GetRoomFiles(ctx context.Context, roomID string) ([]*model.File, error)
+	GetRoomFiles(ctx context.Context, roomID, userID string) ([]*model.File, error)
 	DeleteFile(ctx context.Context, fileID, userID string) error
 	CleanupOrphanedFiles(ctx context.Context) error
 }
@@ -85,10 +85,15 @@ func (uc *fileUseCase) GetFile(ctx context.Context, fileID string) (*model.File,
 	return uc.fileRepo.GetByID(ctx, fileID)
 }
 
-func (uc *fileUseCase) GetRoomFiles(ctx context.Context, roomID string) ([]*model.File, error) {
-	_, err := uc.roomRepo.GetByID(ctx, roomID)
-	if err != nil {
+func (uc *fileUseCase) GetRoomFiles(ctx context.Context, roomID, userID string) ([]*model.File, error) {
+	room, err := uc.roomRepo.GetByID(ctx, roomID)
+	if err != nil || room == nil {
 		return nil, fmt.Errorf("room not found")
+	}
+
+	// Like messages and room details, the file list is for members only.
+	if !room.IsMember(userID) {
+		return nil, fmt.Errorf("user is not a member of this room")
 	}
 
 	return uc.fileRepo.GetByRoomID(ctx, roomID)

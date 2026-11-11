@@ -139,6 +139,14 @@ func (r *roomRepository) Delete(ctx context.Context, id string) error {
 		return err
 	}
 
+	// Same for the message history: room IDs are never reused, so nothing
+	// would ever read or expire it again.
+	if err := r.cache.Delete(ctx, fmt.Sprintf("room:%s:messages", id)); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to delete room messages")
+		return err
+	}
+
 	if err := r.cache.SRem(ctx, "rooms", id); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to remove room from rooms set")

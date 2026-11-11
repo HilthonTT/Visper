@@ -372,7 +372,7 @@ func (c *roomController) LeaveRoom(ctx *gin.Context) {
 
 	if err := c.usecase.LeaveRoom(ctx.Request.Context(), roomID, user.ID); err != nil {
 		status := http.StatusInternalServerError
-		if err.Error() == "room not found" {
+		if err.Error() == "room not found" || err.Error() == "user is not a member of this room" {
 			status = http.StatusNotFound
 		} else if err.Error() == "room owner cannot leave, delete the room instead" {
 			status = http.StatusForbidden

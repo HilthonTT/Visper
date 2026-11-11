@@ -260,7 +260,7 @@ func (c *filesController) GetRoomFiles(ctx *gin.Context) {
 		return
 	}
 
-	_, exists := middlewares.GetUserFromContext(ctx)
+	user, exists := middlewares.GetUserFromContext(ctx)
 	if !exists {
 		ctx.JSON(http.StatusUnauthorized, ErrorResponse{
 			Error:   "unauthorized",
@@ -269,11 +269,14 @@ func (c *filesController) GetRoomFiles(ctx *gin.Context) {
 		return
 	}
 
-	files, err := c.fileUseCase.GetRoomFiles(ctx.Request.Context(), roomID)
+	files, err := c.fileUseCase.GetRoomFiles(ctx.Request.Context(), roomID, user.ID)
 	if err != nil {
 		status := http.StatusInternalServerError
-		if err.Error() == "room not found" {
+		switch err.Error() {
+		case "room not found":
 			status = http.StatusNotFound
+		case "user is not a member of this room":
+			status = http.StatusForbidden
 		}
 		ctx.JSON(status, ErrorResponse{
 			Error:   "fetch_failed",
