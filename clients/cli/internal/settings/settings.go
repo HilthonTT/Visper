@@ -108,11 +108,45 @@ func (s *manager) SetUserConfig(config *UserConfig) error {
 	if err := os.MkdirAll(filepath.Dir(s.configPath), 0o700); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
-	if err := os.WriteFile(s.configPath, data, 0o600); err != nil {
+	if err := writeFileAtomic(s.configPath, data, 0o600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
 	cfg := *config
 	s.cache = &cfg
 	return nil
+}
+
+// writeFileAtomic writes data to a temporary file in the same directory and
+// renames it over path, so a crash or full disk mid-write never leaves a
+// truncated config behind (os.WriteFile truncates the existing file first,
+// and a partial file is then discarded as corrupt, resetting all settings).
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	if _, err = tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	if err = os.Chmod(tmpName, perm); err != nil {
+		return err
+	}
+	err = os.Rename(tmpName, path)
+	return err
 }

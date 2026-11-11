@@ -111,9 +111,12 @@ type kickMemberSubmittedMsg struct {
 
 type roomExpirationTickMsg struct {
 	remaining time.Duration
+	ctx       context.Context
 }
 
-type roomExpiredMsg struct{}
+type roomExpiredMsg struct {
+	ctx context.Context
+}
 
 type roomExpirationDismissedMsg struct{}
 
@@ -206,6 +209,7 @@ func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 			imageFetching:        make(map[string]bool),
 		}
 
+		m = m.syncChatLayout()
 		m = m.withSidebarImage()
 
 		return m, tea.Batch(
@@ -218,20 +222,21 @@ func (m model) ChatSwitch(newRoom *apisdk.RoomResponse) (model, tea.Cmd) {
 }
 
 func (m model) startExpirationCountdown() tea.Cmd {
+	ctx, expiresAt := m.state.chat.expirationCtx, m.state.chat.expiresAt
 	return func() tea.Msg {
 		ticker := time.NewTicker(1 * time.Second)
 		defer ticker.Stop()
 
 		for {
 			select {
-			case <-m.state.chat.expirationCtx.Done():
+			case <-ctx.Done():
 				return nil
 			case <-ticker.C:
-				remaining := time.Until(m.state.chat.expiresAt)
+				remaining := time.Until(expiresAt)
 				if remaining <= 0 {
-					return roomExpiredMsg{}
+					return roomExpiredMsg{ctx: ctx}
 				}
-				return roomExpirationTickMsg{remaining: remaining}
+				return roomExpirationTickMsg{remaining: remaining, ctx: ctx}
 			}
 		}
 	}
@@ -310,6 +315,9 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		}
 		return m, nil
 	case roomExpirationTickMsg:
+		if msg.ctx != m.state.chat.expirationCtx {
+			return m, nil // countdown of a room we already left
+		}
 		m.state.chat.timeRemaining = formatDuration(msg.remaining)
 
 		// Show warning at 5 minutes
@@ -326,6 +334,9 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		return m, m.startExpirationCountdown()
 
 	case roomExpiredMsg:
+		if msg.ctx != m.state.chat.expirationCtx {
+			return m, nil
+		}
 		if m.state.chat.expirationCancel != nil {
 			m.state.chat.expirationCancel()
 		}
@@ -386,6 +397,9 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		return m, nil
 
 	case wsChannelReadyMsg:
+		if msg.ctx != m.state.chat.wsCtx {
+			return m, nil // listener of a room we already left
+		}
 		m.state.chat.wsMsgChan = msg.msgChan
 		return m, tea.Batch(
 			waitForWSMessage(msg.msgChan),
@@ -425,6 +439,17 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		for i, message := range m.state.chat.messages {
 			if message.ID == msg.messageID {
 				m.state.chat.messages = append(m.state.chat.messages[:i], m.state.chat.messages[i+1:]...)
+				// Keep the edit-mode selection on the same message: indices after
+				// i shift down by one.
+				switch sel := m.state.chat.selectedMessageIndex; {
+				case sel > i:
+					m.state.chat.selectedMessageIndex--
+				case sel == i:
+					m.state.chat.selectedMessageIndex = -1
+					if m.state.chat.editMode {
+						m.state.chat.selectedMessageIndex = m.getLastOwnMessageIndex()
+					}
+				}
 				break
 			}
 		}
@@ -589,13 +614,7 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		return m, nil
 
 	case tea.WindowSizeMsg:
-		centerWidth := m.chatCenterWidth()
-		columnHeight := m.chatColumnHeight()
-
-		m.state.chat.messagesViewport.SetWidth(centerWidth)
-		m.state.chat.messagesViewport.SetHeight(columnHeight - 4)
-		m.state.chat.messageInput.SetWidth(centerWidth - 2)
-		m.state.chat.editInput.SetWidth(ModalWidth - 8)
+		m = m.syncChatLayout()
 
 		// Re-render cached images for the new size from the bytes we already
 		// have, instead of leaving them stuck on "loading".
@@ -662,8 +681,10 @@ func (m model) ChatUpdate(msg tea.Msg) (model, tea.Cmd) {
 				switch msg.String() {
 				case "y", "Y", "enter":
 					m = m.closeModal()
+					leave := m.leaveRoomRequest()
 					m.clearChatState()
-					return m.NewRoomSwitch()
+					m, cmd = m.NewRoomSwitch()
+					return m, tea.Batch(cmd, func() tea.Msg { leave(); return nil })
 				case "n", "N", "esc":
 					m = m.closeModal()
 					return m, nil
@@ -952,7 +973,7 @@ func (m model) getPreviousOwnMessageIndex(currentIndex int) int {
 		return currentIndex
 	}
 	userID := *m.userID
-	for i := currentIndex - 1; i >= 0; i-- {
+	for i := min(currentIndex, len(m.state.chat.messages)) - 1; i >= 0; i-- {
 		if m.state.chat.messages[i].UserID == userID {
 			return i
 		}
@@ -990,7 +1011,7 @@ func (m model) searchParticipants(query string) tea.Cmd {
 }
 
 func (m model) ChatView() string {
-	if m.size == undersized || m.size == small {
+	if m.size == undersized || m.size == small || !m.chatLayoutFits() {
 		return m.chatViewCompact()
 	}
 
@@ -1174,6 +1195,10 @@ func (m model) renderMessages() string {
 		userID = *m.userID
 	}
 
+	// Text wraps inside the viewport: 1 cell of padding on each side plus the
+	// 2-cell indent under the header. Without this, long messages were cut off.
+	contentWidth := max(m.state.chat.messagesViewport.Width()-4, 1)
+
 	for i, msg := range m.state.chat.messages {
 		timestamp := m.theme.TextBody().Faint(true).Render(msg.CreatedAt.Format("3:04 PM"))
 
@@ -1198,13 +1223,13 @@ func (m model) renderMessages() string {
 		}
 
 		header := lipgloss.JoinHorizontal(lipgloss.Left, selectionIndicator, timestamp, " ", username)
-		content := m.renderMessageContent(msg, isOwnMessage)
+		content := m.renderMessageContent(msg, isOwnMessage, contentWidth)
 
 		msgStyle := m.theme.Base().
 			Padding(0, 1).
 			MarginBottom(1)
 
-		fullMsg := lipgloss.JoinVertical(lipgloss.Left, header, "  "+content)
+		fullMsg := lipgloss.JoinVertical(lipgloss.Left, header, lipgloss.NewStyle().PaddingLeft(2).Render(content))
 		sb.WriteString(msgStyle.Render(fullMsg))
 		sb.WriteString("\n")
 	}
@@ -1212,7 +1237,7 @@ func (m model) renderMessages() string {
 	return sb.String()
 }
 
-func (m model) renderMessageContent(msg apisdk.MessageResponse, isOwnMessage bool) string {
+func (m model) renderMessageContent(msg apisdk.MessageResponse, isOwnMessage bool, width int) string {
 	if isImageURL(msg.Content) {
 		if m.state.chat.imageFailed[msg.ID] {
 			return m.theme.TextBody().Faint(true).Render("[image unavailable]")
@@ -1226,9 +1251,9 @@ func (m model) renderMessageContent(msg apisdk.MessageResponse, isOwnMessage boo
 	}
 
 	if isOwnMessage {
-		return m.theme.TextAccent().Render(msg.Content)
+		return m.theme.TextAccent().Width(width).Render(msg.Content)
 	}
-	return m.theme.TextBody().Render(msg.Content)
+	return m.theme.TextBody().Width(width).Render(msg.Content)
 }
 
 func (m model) renderRightSidebar(width, height int) string {
@@ -1327,6 +1352,32 @@ func (m model) chatCenterWidth() int {
 
 func (m model) chatColumnHeight() int {
 	return m.viewportHeight - lipgloss.Height(m.renderChatHeader())
+}
+
+// minChatCenterWidth is the narrowest message column the three-column chat
+// layout is drawn with; below it (or with no room for the message viewport)
+// ChatView falls back to the compact view instead of rendering with negative
+// widths, which panics inside the viewport/textinput.
+const minChatCenterWidth = 10
+
+// syncChatLayout sizes the message viewport and inputs for the current window.
+// It must run whenever a room is opened, not only on resize: View works on a
+// copy of the model, so sizes set there never reach Update, and a freshly
+// joined room kept the 50x20 defaults (wrapping and scrolling were computed
+// for 20 rows while more were shown, leaving blank rows under the last message).
+func (m model) syncChatLayout() model {
+	centerWidth := m.chatCenterWidth()
+	columnHeight := m.chatColumnHeight()
+
+	m.state.chat.messagesViewport.SetWidth(max(centerWidth, 1))
+	m.state.chat.messagesViewport.SetHeight(max(columnHeight-4, 1))
+	m.state.chat.messageInput.SetWidth(max(centerWidth-2, 1))
+	m.state.chat.editInput.SetWidth(ModalWidth - 8)
+	return m
+}
+
+func (m model) chatLayoutFits() bool {
+	return m.chatCenterWidth() >= minChatCenterWidth && m.chatColumnHeight()-4 >= 1
 }
 
 // renderImagePreview renders the fetched image for messageID at the current

@@ -53,3 +53,23 @@ func TestConfigDirIsNotWorkingDirectory(t *testing.T) {
 		t.Fatalf("ConfigDir() = %q", dir)
 	}
 }
+
+func TestSetUserConfigOverwritesAtomically(t *testing.T) {
+	dir := t.TempDir()
+	m := newManager(dir)
+	for _, w := range []int{2, 1} {
+		if err := m.SetUserConfig(&UserConfig{SelectedWaifu: w}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := newManager(dir).GetUserConfig().SelectedWaifu; got != 1 {
+		t.Fatalf("persisted SelectedWaifu = %d, want 1", got)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != configFile {
+		t.Fatalf("unexpected files left in config dir: %v", entries)
+	}
+}

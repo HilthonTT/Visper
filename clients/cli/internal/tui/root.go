@@ -141,6 +141,13 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	cmds := []tea.Cmd{}
 
+	if env, ok := msg.(wsChanMsg); ok {
+		if m.page != chatPage || env.ch != m.state.chat.wsMsgChan {
+			return m, nil // stale message from a room we already left
+		}
+		msg = env.msg
+	}
+
 	switch msg := msg.(type) {
 	case roomJoinedMsg:
 		return m.ChatSwitch(msg.room)
@@ -407,31 +414,8 @@ func (m model) getContent() string {
 }
 
 func (m model) Cleanup() {
-	if m.page == chatPage && m.client != nil {
-		roomID := m.state.chat.room.ID
-		if roomID != "" {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-
-			opts := []option.RequestOption{}
-			if m.userID != nil && *m.userID != "" {
-				opts = append(opts, option.WithHeader("X-User-ID", *m.userID))
-			}
-
-			var err error
-
-			if m.state.chat.isRoomOwner {
-				err = m.client.Room.Delete(ctx, roomID, opts...)
-			} else {
-				_, err = m.client.Room.Leave(ctx, roomID, opts...)
-			}
-
-			if err != nil {
-				log.Printf("Error leaving room during cleanup: %v", err)
-			} else {
-				log.Printf("Successfully notified server of room exit")
-			}
-		}
+	if m.page == chatPage {
+		m.leaveRoomRequest()()
 	}
 
 	if m.state.chat.wsCancel != nil {
@@ -441,6 +425,33 @@ func (m model) Cleanup() {
 		m.state.chat.wsConn.Close()
 	}
 	m.stopNotificationWebSocket()
+}
+
+// leaveRoomRequest returns a function that tells the server we left the
+// current room (the owner deletes it, as the server forbids the owner from
+// leaving). Closing the WebSocket alone keeps us listed as a member. All model
+// state is captured up front so the function can run off the Update loop.
+func (m model) leaveRoomRequest() func() {
+	if m.client == nil || m.state.chat.room == nil || m.state.chat.room.ID == "" {
+		return func() {}
+	}
+	client, roomID, isOwner, opts := m.client, m.state.chat.room.ID, m.state.chat.isRoomOwner, m.requestOpts()
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		var err error
+		if isOwner {
+			err = client.Room.Delete(ctx, roomID, opts...)
+		} else {
+			_, err = client.Room.Leave(ctx, roomID, opts...)
+		}
+		if err != nil {
+			log.Printf("Error leaving room: %v", err)
+		} else {
+			log.Printf("Successfully notified server of room exit")
+		}
+	}
 }
 
 func (m model) cleanupCmd() tea.Msg {

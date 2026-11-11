@@ -18,6 +18,7 @@ type wsConnectedMsg struct {
 
 type wsChannelReadyMsg struct {
 	msgChan chan tea.Msg
+	ctx     context.Context
 }
 
 type wsMessageReceivedMsg struct {
@@ -370,8 +371,17 @@ func (m model) listenWebSocket() tea.Cmd {
 			}
 		}()
 
-		return wsChannelReadyMsg{msgChan: msgChan}
+		return wsChannelReadyMsg{msgChan: msgChan, ctx: m.state.chat.wsCtx}
 	}
+}
+
+// wsChanMsg tags a message read from a room WebSocket channel with that
+// channel, so Update can drop messages from a room the user already left
+// (otherwise a buffered message or the close of the old channel is applied to
+// the next room, e.g. showing a "Disconnected" modal or a foreign message).
+type wsChanMsg struct {
+	ch  chan tea.Msg
+	msg tea.Msg
 }
 
 func waitForWSMessage(msgChan chan tea.Msg) tea.Cmd {
@@ -381,8 +391,8 @@ func waitForWSMessage(msgChan chan tea.Msg) tea.Cmd {
 		}
 		msg, ok := <-msgChan
 		if !ok {
-			return wsDisconnectedMsg{}
+			return wsChanMsg{ch: msgChan, msg: wsDisconnectedMsg{}}
 		}
-		return msg
+		return wsChanMsg{ch: msgChan, msg: msg}
 	}
 }
