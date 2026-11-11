@@ -2,14 +2,12 @@ package tui
 
 import (
 	"fmt"
-	"log"
+	"strconv"
 	"strings"
 	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/hilthontt/visper/clients/cli/internal/tui/embeds"
-	apisdk "github.com/hilthontt/visper/sdk/go"
 )
 
 // ---------------------------------------------------------------------------
@@ -25,28 +23,34 @@ import (
 
 const (
 	chatMembersWidth   = 24
-	chatWaifuWidth     = 36
+	chatCompanionWidth = 36
 	chatInputHeight    = 3 // rounded box around the one-line input
 	chatStatusHeight   = 1
 	chatHeaderHeight   = 2 // bar + rule
-	imagePreviewHeight = 15
+
+	// Window widths from which the side panels are shown.
+	chatMembersMinWindow   = 76
+	chatCompanionMinWindow = 116
 
 	// minChatCenterWidth is the narrowest message column the chat is drawn
-	// with; below it ChatView shows a "too small" notice instead of rendering
+	// with; below it chatView shows a "too small" notice instead of rendering
 	// with negative widths, which panics inside the viewport/textinput.
 	minChatCenterWidth = 30
+
+	// counterWidth is the space reserved in the input box for the length counter.
+	counterWidth = 9
 )
 
 func (m model) chatLeftWidth() int {
-	if m.viewportWidth >= 76 {
+	if m.viewportWidth >= chatMembersMinWindow {
 		return chatMembersWidth
 	}
 	return 0
 }
 
 func (m model) chatRightWidth() int {
-	if !m.state.chat.hideWaifu && m.viewportWidth >= 116 {
-		return chatWaifuWidth
+	if !m.state.chat.companion.hidden && m.viewportWidth >= chatCompanionMinWindow {
+		return chatCompanionWidth
 	}
 	return 0
 }
@@ -63,8 +67,9 @@ func (m model) chatViewportHeight() int {
 	return m.chatColumnHeight() - chatInputHeight - chatStatusHeight
 }
 
-// counterWidth is the space reserved in the input box for the length counter.
-const counterWidth = 9
+func (m model) chatLayoutFits() bool {
+	return m.chatCenterWidth() >= minChatCenterWidth && m.chatViewportHeight() >= 3
+}
 
 // syncChatLayout sizes the message viewport and inputs for the current window.
 // It must run whenever a room is opened, not only on resize: View works on a
@@ -72,86 +77,85 @@ const counterWidth = 9
 // joined room kept the 50x20 defaults (wrapping and scrolling were computed
 // for 20 rows while more were shown, leaving blank rows under the last message).
 func (m model) syncChatLayout() model {
+	c := &m.state.chat
 	centerWidth := m.chatCenterWidth()
 
-	m.state.chat.messagesViewport.SetWidth(max(centerWidth, 1))
-	m.state.chat.messagesViewport.SetHeight(max(m.chatViewportHeight(), 1))
+	c.viewport.SetWidth(max(centerWidth, 1))
+	c.viewport.SetHeight(max(m.chatViewportHeight(), 1))
 	// box border (2) + padding (2) + prompt (2) + cursor (1) + counter
-	m.state.chat.messageInput.SetWidth(max(centerWidth-7-counterWidth, 1))
-	m.state.chat.searchInput.SetWidth(max(chatMembersWidth-9, 1))
-	m.state.chat.editInput.SetWidth(max(m.dialogWidth()-13, 1))
+	c.messageInput.SetWidth(max(centerWidth-7-counterWidth, 1))
+	c.members.search.SetWidth(max(chatMembersWidth-9, 1))
+	c.editInput.SetWidth(max(m.dialogWidth()-13, 1))
 	return m
 }
 
-func (m model) chatLayoutFits() bool {
-	return m.chatCenterWidth() >= minChatCenterWidth && m.chatViewportHeight() >= 3
+// relayoutChat resizes everything that depends on the window size.
+func (m model) relayoutChat() model {
+	m = m.syncChatLayout()
+	m = m.rerenderImagePreviews()
+	m = m.withCompanionImage()
+	return m.refreshMessages()
 }
 
 // ---------------------------------------------------------------------------
 // View
 
-func (m model) ChatView() string {
-	if m.size == undersized || !m.chatLayoutFits() {
-		return m.chatViewCompact()
+func (m model) chatView() string {
+	if !m.chatLayoutFits() {
+		return m.chatTooSmallView()
 	}
 
 	colHeight := m.chatColumnHeight()
-	columns := []string{}
+	var columns []string
 	if w := m.chatLeftWidth(); w > 0 {
-		columns = append(columns, m.renderParticipantsSidebar(w, colHeight))
+		columns = append(columns, m.membersPanelView(w, colHeight))
 	}
-	columns = append(columns, m.renderChatCenter(m.chatCenterWidth(), colHeight))
+	columns = append(columns, m.chatCenterView(m.chatCenterWidth()))
 	if w := m.chatRightWidth(); w > 0 {
-		columns = append(columns, m.renderRightSidebar(w, colHeight))
+		columns = append(columns, m.companionPanelView(w, colHeight))
 	}
 
 	view := lipgloss.JoinVertical(lipgloss.Left,
-		m.renderChatHeader(),
+		m.chatTopBarView(),
 		lipgloss.JoinHorizontal(lipgloss.Top, columns...),
 	)
 	view = m.theme.Base().Width(m.viewportWidth).Height(m.viewportHeight).MaxHeight(m.viewportHeight).Render(view)
 
 	switch {
 	case m.state.menu.help:
-		return m.overlay(m.HelpView(), view)
-	case m.state.notify.open:
-		var modal string
-		switch m.state.notify.confirmAction {
-		case FileExplorerAction:
-			modal = m.RenderFileExplorerModal()
-		default:
-			modal = m.RenderWarnModal()
-		}
-		return m.overlay(modal, view)
+		return m.overlay(m.helpView(), view)
+	case m.state.dialog.open:
+		return m.overlay(m.dialogView(), view)
 	}
 	return view
 }
 
-func (m model) renderChatHeader() string {
+func (m model) chatTopBarView() string {
 	width := m.viewportWidth
 	c := m.state.chat
 
-	left := []string{m.LogoView()}
-	left = append(left, m.theme.Pill(m.theme.Surface(), m.theme.Brand()).Render("# "+c.roomCode))
-	if c.room != nil && c.room.EncryptionKey != "" {
+	left := []string{
+		m.logoView(),
+		m.theme.Pill(m.theme.Surface(), m.theme.Brand()).Render("# " + c.roomCode),
+	}
+	if c.encrypted() {
 		left = append(left, m.theme.TextSuccess().Render("● ")+m.theme.TextBody().Render("encrypted"))
 	}
 
 	var right []string
-	if c.timeRemaining != "" {
-		remaining := time.Until(c.expiresAt)
+	if c.expiry.remaining != "" {
+		remaining := time.Until(c.expiry.expiresAt)
 		style := m.theme.TextBody()
 		switch {
-		case remaining <= 5*time.Minute:
+		case remaining <= expiryWarning:
 			style = m.theme.TextError().Bold(true)
 		case remaining <= 15*time.Minute:
 			style = m.theme.TextWarning().Bold(true)
 		}
-		right = append(right, m.theme.TextSubtle().Render("expires in ")+style.Render(c.timeRemaining))
+		right = append(right, m.theme.TextSubtle().Render("expires in ")+style.Render(c.expiry.remaining))
 	}
-	n := len(c.participants)
-	people := fmt.Sprintf("%d people", n)
-	if n == 1 {
+	people := fmt.Sprintf("%d people", len(c.members.list))
+	if len(c.members.list) == 1 {
 		people = "just you"
 	}
 	right = append(right, m.theme.TextBody().Render(people))
@@ -171,21 +175,21 @@ func (m model) renderChatHeader() string {
 	return lipgloss.JoinVertical(lipgloss.Left, spread(width, l, r), m.rule(width))
 }
 
-func (m model) renderParticipantsSidebar(width, height int) string {
+func (m model) membersPanelView(width, height int) string {
 	c := m.state.chat
+	s := c.members
 	inner := width - 3 // right border + 1 cell padding each side
 
-	var lines []string
 	title := m.theme.TextSubtle().Bold(true).Render("MEMBERS") + " " +
-		m.theme.TextBody().Render(fmt.Sprintf("%d", len(c.participants)))
-	lines = append(lines, "", title, "")
+		m.theme.TextBody().Render(strconv.Itoa(len(s.list)))
+	lines := []string{"", title, ""}
 
-	if c.searchActive {
+	if s.searching {
 		box := m.theme.Base().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(m.theme.Brand()).
 			Width(inner).
-			Render(c.searchInput.View())
+			Render(s.search.View())
 		lines = append(lines, strings.Split(box, "\n")...)
 	}
 
@@ -196,52 +200,51 @@ func (m model) renderParticipantsSidebar(width, height int) string {
 
 	listHeight := height - len(lines) - 2
 	rows := 0
-	for i, idx := range c.filteredIndices {
-		if idx >= len(c.participants) {
+	for i, idx := range s.filtered {
+		if idx >= len(s.list) {
 			continue
 		}
-		if rows >= listHeight-1 && len(c.filteredIndices)-i > 1 {
-			lines = append(lines, m.theme.TextSubtle().Render(fmt.Sprintf("+%d more", len(c.filteredIndices)-i)))
+		if rows >= listHeight-1 && len(s.filtered)-i > 1 {
+			lines = append(lines, m.theme.TextSubtle().Render(fmt.Sprintf("+%d more", len(s.filtered)-i)))
 			break
 		}
-		p := c.participants[idx]
+		p := s.list[idx]
 
 		var badges string
 		if p.ID == ownerID {
 			badges += m.theme.TextWarning().Render(" ★")
 		}
-		if m.userID != nil && p.ID == *m.userID {
+		if m.isCurrentUser(p.ID) {
 			badges += m.theme.TextSubtle().Render(" you")
 		}
 		nameWidth := inner - 2 - lipgloss.Width(badges)
 		name := m.theme.Base().Foreground(m.theme.UserColor(p.Username)).Render(truncate(p.Username, nameWidth))
-		dot := m.theme.TextSuccess().Render("●")
-		row := dot + " " + name + badges
+		row := m.theme.TextSuccess().Render("●") + " " + name + badges
 
-		if c.searchActive && i == c.memberCursor {
+		if s.searching && i == s.cursor {
 			row = m.theme.Base().Background(m.theme.Surface()).Width(inner).Render(row)
 		}
 		lines = append(lines, row)
 		rows++
 	}
-	if c.searchActive && len(c.filteredIndices) == 0 {
+	if s.searching && len(s.filtered) == 0 {
 		lines = append(lines, m.theme.TextSubtle().Render("no one by that name"))
 	}
 
-	var hint string
-	if c.searchActive {
-		if c.isRoomOwner {
-			hint = m.keyHints([]footerCommand{{"enter", "kick"}, {"esc", "close"}}, inner)
-		} else {
-			hint = m.keyHints([]footerCommand{{"esc", "close"}}, inner)
-		}
-	} else {
-		hint = m.keyHints([]footerCommand{{"ctrl+s", "search"}}, inner)
+	var hints []keyHint
+	switch {
+	case s.searching && c.isRoomOwner:
+		hints = []keyHint{{"enter", "kick"}, {"esc", "close"}}
+	case s.searching:
+		hints = []keyHint{{"esc", "close"}}
+	default:
+		hints = []keyHint{{"ctrl+s", "search"}}
 	}
 
-	body := strings.Join(lines, "\n")
-	body = lipgloss.PlaceVertical(height-1, lipgloss.Top, body)
-	body = lipgloss.JoinVertical(lipgloss.Left, lipgloss.NewStyle().MaxHeight(height-1).Render(body), hint)
+	body := lipgloss.PlaceVertical(height-1, lipgloss.Top, strings.Join(lines, "\n"))
+	body = lipgloss.JoinVertical(lipgloss.Left,
+		lipgloss.NewStyle().MaxHeight(height-1).Render(body),
+		m.keyHints(hints, inner))
 
 	return m.theme.Base().
 		Width(width).
@@ -255,18 +258,19 @@ func (m model) renderParticipantsSidebar(width, height int) string {
 		Render(body)
 }
 
-func (m model) renderChatCenter(width, height int) string {
+// chatCenterView is the message list, the input box and the status line.
+func (m model) chatCenterView(width int) string {
 	c := m.state.chat
 
 	messages := m.theme.Base().
 		Width(width).
 		Height(m.chatViewportHeight()).
 		MaxHeight(m.chatViewportHeight()).
-		Render(c.messagesViewport.View())
+		Render(c.viewport.View())
 
 	// Input box with a length counter on the right.
 	inputBorder := m.theme.Border()
-	if c.focusedInput == focusMessage && !c.editMode && !m.state.notify.open {
+	if !c.members.searching && !c.edit.active && !m.state.dialog.open {
 		inputBorder = m.theme.Brand()
 	}
 	var counter string
@@ -293,14 +297,15 @@ func (m model) renderChatCenter(width, height int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, messages, input, status)
 }
 
-// messageLength returns the draft's length and the limit it is measured
-// against (bytes for encrypted rooms, characters otherwise).
-func (m model) messageLength() (int, int) {
-	v := m.state.chat.messageInput.Value()
-	if m.state.chat.room != nil && m.state.chat.room.EncryptionKey != "" {
-		return len(v), maxEncryptedMessageBytes
-	}
-	return len([]rune(v)), maxMessageLen
+// chatHints are the status line hints when nothing else is going on.
+var chatHints = []keyHint{
+	{"enter", "send"},
+	{"ctrl+e", "edit"},
+	{"ctrl+u", "image"},
+	{"ctrl+a", "AI"},
+	{"ctrl+p", "invite"},
+	{"ctrl+b", "leave"},
+	{"?", "help"},
 }
 
 func (m model) chatStatusLine(width int) string {
@@ -310,212 +315,61 @@ func (m model) chatStatusLine(width int) string {
 	}
 
 	switch {
-	case c.editMode:
-		return mode("EDIT") + m.keyHints([]footerCommand{
+	case c.edit.active:
+		return mode("EDIT") + m.keyHints([]keyHint{
 			{"↑↓", "select"}, {"enter", "edit"}, {"ctrl+d", "delete"}, {"esc", "done"},
 		}, width-7)
-	case c.searchActive:
-		return mode("SEARCH") + m.keyHints([]footerCommand{{"↑↓", "select"}, {"esc", "close"}}, width-9)
+	case c.members.searching:
+		return mode("SEARCH") + m.keyHints([]keyHint{{"↑↓", "select"}, {"esc", "close"}}, width-9)
 	case c.uploading:
 		return m.spinner() + " " + m.theme.TextBrand().Render("Uploading image…")
 	case c.aiEnhancing:
 		return m.spinner() + " " + m.theme.TextBrand().Render("Rewriting your draft with AI…")
-	}
-
-	hints := []footerCommand{
-		{"enter", "send"},
-		{"ctrl+e", "edit"},
-		{"ctrl+u", "image"},
-		{"ctrl+a", "AI"},
-		{"ctrl+p", "invite"},
-		{"ctrl+b", "leave"},
-		{"?", "help"},
-	}
-	if c.unread > 0 {
+	case c.unread > 0:
 		unread := m.theme.Pill(m.theme.Brand(), m.theme.OnBrand()).Render(fmt.Sprintf("↓ %d new", c.unread)) + " "
-		return unread + m.keyHints(append([]footerCommand{{"end", "jump"}}, hints...), width-lipgloss.Width(unread))
+		return unread + m.keyHints(append([]keyHint{{"end", "jump"}}, chatHints...), width-lipgloss.Width(unread))
 	}
-	return m.keyHints(hints, width)
-}
-
-// ---------------------------------------------------------------------------
-// Messages
-
-// refreshMessages re-renders the message list into the viewport and, in edit
-// mode, scrolls so the selected message is visible.
-func (m model) refreshMessages() model {
-	content, top, bottom := m.renderMessagesWithSelection()
-	vp := &m.state.chat.messagesViewport
-	vp.SetContent(content)
-	if top >= 0 {
-		switch {
-		case top < vp.YOffset():
-			vp.SetYOffset(top)
-		case bottom >= vp.YOffset()+vp.Height():
-			vp.SetYOffset(bottom - vp.Height() + 1)
-		}
-	}
-	return m
-}
-
-func (m model) renderMessages() string {
-	s, _, _ := m.renderMessagesWithSelection()
-	return s
-}
-
-func dayLabel(t time.Time) string {
-	now := time.Now()
-	y1, m1, d1 := t.Date()
-	y2, m2, d2 := now.Date()
-	switch {
-	case y1 == y2 && m1 == m2 && d1 == d2:
-		return "Today"
-	case y1 == y2 && m1 == m2 && d1 == d2-1:
-		return "Yesterday"
-	default:
-		return t.Format("Mon, Jan 2")
-	}
-}
-
-// renderMessagesWithSelection renders the conversation and returns the first
-// and last line of the selected message (-1 when nothing is selected).
-func (m model) renderMessagesWithSelection() (string, int, int) {
-	c := m.state.chat
-	width := c.messagesViewport.Width()
-
-	if len(c.messages) == 0 {
-		return m.renderEmptyChat(width, c.messagesViewport.Height()), -1, -1
-	}
-
-	var userID string
-	if m.userID != nil {
-		userID = *m.userID
-	}
-
-	// 1 cell padding each side, plus the bar and its padding in front of the text.
-	contentWidth := max(width-4, 1)
-
-	var lines []string
-	selTop, selBottom := -1, -1
-	var prev *apisdk.MessageResponse
-	for i := range c.messages {
-		msg := c.messages[i]
-		isOwn := msg.UserID == userID
-		selected := c.editMode && isOwn && i == c.selectedMessageIndex
-
-		if prev == nil || dayLabel(prev.CreatedAt) != dayLabel(msg.CreatedAt) {
-			label := " " + dayLabel(msg.CreatedAt) + " "
-			side := max((width-2-lipgloss.Width(label))/2, 0)
-			sepLine := m.rule(side) + m.theme.TextSubtle().Render(label) + m.rule(side)
-			if prev != nil {
-				lines = append(lines, "")
-			}
-			lines = append(lines, " "+sepLine, "")
-		}
-
-		// Consecutive messages from one person within a few minutes share a header.
-		grouped := prev != nil && prev.UserID == msg.UserID &&
-			msg.CreatedAt.Sub(prev.CreatedAt) < 5*time.Minute &&
-			dayLabel(prev.CreatedAt) == dayLabel(msg.CreatedAt)
-
-		if !grouped {
-			if prev != nil {
-				lines = append(lines, "")
-			}
-			name := m.theme.Base().Foreground(m.theme.UserColor(msg.Username)).Bold(true).Render(msg.Username)
-			header := " " + name
-			if isOwn {
-				header += m.theme.TextSubtle().Render(" (you)")
-			}
-			header += m.theme.TextSubtle().Render("  " + msg.CreatedAt.Format("3:04 PM"))
-			if selected {
-				header += m.theme.TextSecondary().Bold(true).Render("  ◂ editing")
-			}
-			lines = append(lines, header)
-		} else if selected {
-			lines = append(lines, " "+m.theme.TextSecondary().Bold(true).Render("◂ editing"))
-		}
-
-		barColor := m.theme.UserColor(msg.Username)
-		if c.editMode && !selected {
-			barColor = m.theme.Border()
-		}
-		if selected {
-			barColor = m.theme.Secondary()
-		}
-		body := m.renderMessageContent(msg, isOwn, contentWidth-1)
-		block := m.theme.Base().
-			BorderLeft(true).
-			BorderStyle(lipgloss.ThickBorder()).
-			BorderForeground(barColor).
-			PaddingLeft(1).
-			MarginLeft(1).
-			Render(body)
-
-		blockLines := strings.Split(block, "\n")
-		if selected {
-			selTop = len(lines) - 1
-			selBottom = len(lines) + len(blockLines) - 1
-		}
-		lines = append(lines, blockLines...)
-		prev = &c.messages[i]
-	}
-	lines = append(lines, "")
-
-	return strings.Join(lines, "\n"), selTop, selBottom
-}
-
-func (m model) renderEmptyChat(width, height int) string {
-	code := m.theme.Pill(m.theme.Surface(), m.theme.Brand()).Render(m.state.chat.roomCode)
-	content := lipgloss.JoinVertical(lipgloss.Center,
-		m.theme.TextAccent().Bold(true).Render("No messages yet"),
-		"",
-		m.theme.TextBody().Render("Share the code ")+code+m.theme.TextBody().Render(" to invite people,"),
-		m.theme.TextBody().Render("or press ")+m.theme.Key().Render("ctrl+p")+m.theme.TextBody().Render(" for a QR code."),
-		"",
-		m.theme.TextSubtle().Render("Messages are encrypted before they leave this terminal."),
-	)
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, content)
-}
-
-func (m model) renderMessageContent(msg apisdk.MessageResponse, isOwnMessage bool, width int) string {
-	if isImageURL(msg.Content) {
-		if m.state.chat.imageFailed[msg.ID] {
-			return m.theme.TextSubtle().Italic(true).Render("[image unavailable]")
-		}
-		if preview, ok := m.state.chat.imagePreviews[msg.ID]; ok {
-			return preview
-		}
-		return m.theme.TextSubtle().Italic(true).Render("loading image…")
-	}
-
-	if isOwnMessage {
-		return m.theme.TextAccent().Width(width).Render(msg.Content)
-	}
-	return m.theme.TextAccent().Faint(false).Width(width).Render(msg.Content)
+	return m.keyHints(chatHints, width)
 }
 
 // ---------------------------------------------------------------------------
 // Companion panel
 
-// waifuDims is the size of the companion image for the current layout.
-func (m model) waifuDims() (int, int) {
+// companionImageSize is the size of the companion image for the current layout.
+func (m model) companionImageSize() (int, int) {
 	return m.chatRightWidth() - 3, m.chatColumnHeight() - 5
 }
 
-func (m model) renderRightSidebar(width, height int) string {
-	w, h := m.waifuDims()
+// withCompanionImage caches the companion image for the current layout; it
+// must be called from Update whenever the layout changes.
+func (m model) withCompanionImage() model {
+	if m.chatRightWidth() == 0 {
+		return m
+	}
+	w, h := m.companionImageSize()
+	if w <= 0 || h <= 0 {
+		return m
+	}
+	p := &m.state.chat.companion
+	p.image = m.companionImage(m.selectedCompanionID(), w, h)
+	p.imageWidth, p.imageHeight = w, h
+	return m
+}
+
+func (m model) companionPanelView(width, height int) string {
+	w, h := m.companionImageSize()
+	p := m.state.chat.companion
 
 	// View has a value receiver, so the image must be cached from Update (see
-	// withSidebarImage); rendering it here on a miss would decode and resize
+	// withCompanionImage); rendering it here on a miss would decode and resize
 	// the PNG on every frame.
-	image := m.state.chat.cachedImageContent
-	if m.state.chat.cachedImageWidth != w || m.state.chat.cachedImageHeight != h {
-		image = m.waifuImage(m.selectedWaifuID(), w, h)
+	image := p.image
+	if p.imageWidth != w || p.imageHeight != h {
+		image = m.companionImage(m.selectedCompanionID(), w, h)
 	}
 	image = lipgloss.Place(w, h, lipgloss.Center, lipgloss.Bottom, image)
 
-	mood := m.theme.TextSecondary().Italic(true).Width(w).Align(lipgloss.Center).Render(m.state.chat.waifuMood)
+	mood := m.theme.TextSecondary().Italic(true).Width(w).Align(lipgloss.Center).Render(p.mood)
 	hint := m.theme.TextSubtle().Width(w).Align(lipgloss.Center).Render("ctrl+w hide")
 
 	return m.theme.Base().
@@ -530,70 +384,12 @@ func (m model) renderRightSidebar(width, height int) string {
 		Render(lipgloss.JoinVertical(lipgloss.Left, "", image, "", mood, hint))
 }
 
-func (m model) chatViewCompact() string {
+func (m model) chatTooSmallView() string {
 	msg := lipgloss.JoinVertical(lipgloss.Center,
-		m.LogoView(),
+		m.logoView(),
 		"",
 		m.theme.TextAccent().Render("Make the window a little bigger"),
 		m.theme.TextSubtle().Render("to see the conversation"),
 	)
 	return lipgloss.Place(m.viewportWidth, m.viewportHeight, lipgloss.Center, lipgloss.Center, msg)
-}
-
-// ---------------------------------------------------------------------------
-// Images
-
-// renderImagePreview renders the fetched image for messageID at the current
-// width and caches the result.
-func (m model) renderImagePreview(messageID string) model {
-	data, ok := m.state.chat.imageFetched[messageID]
-	if !ok {
-		return m
-	}
-	width := m.chatCenterWidth() - 6
-	if width <= 0 {
-		return m
-	}
-	preview, err := m.imagePreviewer.ImagePreviewFromBytes(data, width, imagePreviewHeight, "")
-	if err != nil {
-		log.Printf("Failed to render image for message %s: %v", messageID, err)
-		m.state.chat.imageFailed[messageID] = true
-		return m
-	}
-	m.state.chat.imagePreviews[messageID] = preview
-	return m
-}
-
-func (m model) selectedWaifuID() int {
-	return m.settingsManager.GetUserConfig().SelectedWaifu
-}
-
-// waifuImage renders a companion image at the given size.
-func (m model) waifuImage(id, width, height int) string {
-	img := embeds.WaifuImage
-	if id == waifu2 {
-		img = embeds.Waifu2Image
-	}
-	content, err := m.imagePreviewer.ImagePreviewFromBytes(img, width, height, "")
-	if err != nil {
-		log.Printf("Failed to load embedded image: %v", err)
-		return m.theme.TextSubtle().Render("image unavailable")
-	}
-	return content
-}
-
-// withSidebarImage caches the companion image for the current layout; it must
-// be called from Update whenever the layout changes.
-func (m model) withSidebarImage() model {
-	if m.chatRightWidth() == 0 {
-		return m
-	}
-	w, h := m.waifuDims()
-	if w <= 0 || h <= 0 {
-		return m
-	}
-	m.state.chat.cachedImageContent = m.waifuImage(m.selectedWaifuID(), w, h)
-	m.state.chat.cachedImageWidth = w
-	m.state.chat.cachedImageHeight = h
-	return m
 }
