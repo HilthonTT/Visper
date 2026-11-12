@@ -54,7 +54,10 @@ func (lb *LoadBalancer) newReverseProxy(b *Backend) *httputil.ReverseProxy {
 
 func (lb *LoadBalancer) proxyErrorHandler(b *Backend) func(http.ResponseWriter, *http.Request, error) {
 	return func(w http.ResponseWriter, r *http.Request, err error) {
-		if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
+		if rec, ok := w.(*statusRecorder); ok {
+			rec.proxyFailed = true
+		}
+		if r.Context().Err() != nil {
 			// The client went away; not the backend's fault.
 			w.WriteHeader(statusClientClosedRequest)
 			return
@@ -102,6 +105,9 @@ type statusRecorder struct {
 	http.ResponseWriter
 	status      int
 	wroteHeader bool
+	// proxyFailed is set when ReverseProxy could not get a response from
+	// the backend and the error handler answered instead.
+	proxyFailed bool
 }
 
 func newStatusRecorder(w http.ResponseWriter) *statusRecorder {

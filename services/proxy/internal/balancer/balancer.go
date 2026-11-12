@@ -126,10 +126,13 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		lb.metrics.BackendResponseTime.WithLabelValues(label).Observe(d)
 	}
 
-	if status < http.StatusInternalServerError {
-		backend.resetFailures()
-	} else {
+	switch {
+	case rec.proxyFailed:
+		// Already accounted for by the proxy error handler.
+	case status >= http.StatusInternalServerError:
 		lb.metrics.BackendErrors.WithLabelValues(label, "response_error").Inc()
+	default:
+		backend.resetFailures()
 	}
 }
 

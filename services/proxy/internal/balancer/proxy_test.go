@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"bufio"
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -112,8 +113,54 @@ func TestProxyErrorMarksBackendDown(t *testing.T) {
 	if n := testutil.ToFloat64(m.BackendErrors.WithLabelValues(host, "proxy_error")); n != 2 {
 		t.Errorf("proxy_error = %v, want 2", n)
 	}
+	// Regression: proxy errors used to be counted as response errors too.
+	if n := testutil.ToFloat64(m.BackendErrors.WithLabelValues(host, "response_error")); n != 0 {
+		t.Errorf("response_error = %v, want 0", n)
+	}
 	if up := testutil.ToFloat64(m.BackendUpGauge.WithLabelValues(host)); up != 0 {
 		t.Errorf("backend_up = %v, want 0", up)
+	}
+}
+
+func TestBackend5xxCountsAsResponseError(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer backend.Close()
+
+	m := metrics.New("t", prometheus.NewRegistry())
+	lb := newTestLB(t, testConfig("", backend.URL), Options{Metrics: m})
+	w := httptest.NewRecorder()
+	lb.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	host := lb.backends[0].label()
+	if n := testutil.ToFloat64(m.BackendErrors.WithLabelValues(host, "response_error")); n != 1 {
+		t.Errorf("response_error = %v, want 1", n)
+	}
+	if n := testutil.ToFloat64(m.RequestCount.WithLabelValues(host, "500", http.MethodGet)); n != 1 {
+		t.Errorf("request_count{status=500} = %v, want 1", n)
+	}
+}
+
+// Regression: a client hanging up was answered with 499, which counted as
+// a success and cleared the backend's failure count.
+func TestClientDisconnectKeepsFailureCount(t *testing.T) {
+	lb := newTestLB(t, testConfig("", "http://127.0.0.1:1"), Options{})
+	b := lb.backends[0]
+	b.recordFailure(10)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the client is already gone
+	w := httptest.NewRecorder()
+	lb.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx))
+
+	if w.Code != statusClientClosedRequest {
+		t.Fatalf("status %d, want %d", w.Code, statusClientClosedRequest)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.failCount != 1 {
+		t.Fatalf("failCount = %d, want 1 (unchanged)", b.failCount)
 	}
 }
 
