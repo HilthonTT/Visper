@@ -50,9 +50,9 @@ func TestReloadKeepsBackendsByURL(t *testing.T) {
 		t.Fatalf("settings not updated: strategy=%v interval=%v", lb.strategy, lb.interval())
 	}
 	select {
-	case <-lb.intervalReset:
+	case <-lb.reloaded:
 	default:
-		t.Fatal("interval change did not wake the health checker")
+		t.Fatal("reload did not wake the health checker")
 	}
 }
 

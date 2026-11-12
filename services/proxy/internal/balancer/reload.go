@@ -11,15 +11,12 @@ import (
 // unchanged are kept, along with their health state and open connections.
 // On error nothing is changed.
 func (lb *LoadBalancer) Reload(cfg *config.Config) error {
-	before := lb.interval()
 	if err := lb.apply(cfg); err != nil {
 		return err
 	}
-	if lb.interval() != before {
-		select {
-		case lb.intervalReset <- struct{}{}:
-		default: // a wake-up is already pending
-		}
+	select {
+	case lb.reloaded <- struct{}{}:
+	default: // a wake-up is already pending
 	}
 	logf("configuration reloaded: %d backends, strategy %s", len(cfg.Backends), cfg.Strategy)
 	return nil

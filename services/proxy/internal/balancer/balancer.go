@@ -33,9 +33,9 @@ type LoadBalancer struct {
 	trustForwarded func(*http.Request) bool
 	transport      http.RoundTripper
 	healthClient   *http.Client
-	// intervalReset wakes the health-check loop when a reload changes the
-	// interval.
-	intervalReset chan struct{}
+	// reloaded wakes the health-check loop after a reload so new backends
+	// and a new interval take effect immediately.
+	reloaded chan struct{}
 
 	mu                  sync.Mutex
 	backends            []*Backend
@@ -65,7 +65,7 @@ func New(cfg *config.Config, opts Options) (*LoadBalancer, error) {
 		trustForwarded: opts.TrustForwarded,
 		transport:      newProxyTransport(),
 		healthClient:   newHealthClient(),
-		intervalReset:  make(chan struct{}, 1),
+		reloaded:       make(chan struct{}, 1),
 	}
 	if err := lb.apply(cfg); err != nil {
 		return nil, err

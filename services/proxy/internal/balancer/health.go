@@ -25,11 +25,14 @@ func newHealthClient() *http.Client {
 			ExpectContinueTimeout: 1 * time.Second,
 		},
 		Timeout: 3 * time.Second,
+		// A redirect is an answer: the backend is up.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
 
 // RunHealthChecks checks every backend immediately and then on every
-// health-check interval until ctx is done.
+// health-check interval until ctx is done. After a Reload it re-checks right
+// away so new backends are verified without waiting for the next tick.
 func (lb *LoadBalancer) RunHealthChecks(ctx context.Context) {
 	ticker := time.NewTicker(lb.interval())
 	defer ticker.Stop()
@@ -39,8 +42,9 @@ func (lb *LoadBalancer) RunHealthChecks(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-lb.intervalReset:
+		case <-lb.reloaded:
 			ticker.Reset(lb.interval())
+			lb.checkAll(ctx)
 		case <-ticker.C:
 			lb.checkAll(ctx)
 		}
@@ -64,10 +68,20 @@ func (lb *LoadBalancer) checkAll(ctx context.Context) {
 	for _, b := range backends {
 		wg.Go(func() {
 			alive := lb.probe(ctx, b.URL, path)
+			if ctx.Err() != nil {
+				return // shutting down: the result says nothing about the backend
+			}
+			wasAlive := b.IsAlive()
 			b.setAlive(alive)
 			lb.setBackendUp(b, alive)
-			if !alive {
+			switch {
+			case !alive:
 				lb.metrics.BackendErrors.WithLabelValues(b.label(), "health_check").Inc()
+				if wasAlive {
+					logf("backend %s failed its health check, marked down", b.label())
+				}
+			case !wasAlive:
+				logf("backend %s is healthy again", b.label())
 			}
 		})
 	}
