@@ -45,6 +45,29 @@ pick the companion shown beside the chat, and `?` lists every shortcut.
 
 ![Menu palette, FAQ, settings and help](../assets/demos/tour.gif)
 
+## Web client
+
+The same features in the browser ([clients/web](../../clients/web)), recorded with
+[Playwright](https://playwright.dev) against the production build.
+
+### Chat in the browser
+
+Paste an invite code on the **Chat** tab and talk. The page encrypts and
+decrypts with the room key itself; the server only relays ciphertext.
+
+![Joining a room in the browser and chatting](../assets/demos/web-chat.gif)
+
+### React, reply and search
+
+Hover a message to react or reply. Search runs in the page over the loaded
+messages, since the server can't read them.
+
+![Reacting, replying and searching in the web chat](../assets/demos/web-reactions.gif)
+
+### Terminal, themes and pages
+
+![The web terminal, a theme change and the other pages](../assets/demos/web-tour.gif)
+
 ## Re-recording
 
 You need Docker and Go. The script runs VHS in a container, so you don't need
@@ -61,3 +84,19 @@ The other person in the chat demos is
 and the script types its join code into the tape. Tapes that use
 `{{JOIN_CODE}}` get a bot that replies; tapes that use `{{JOIN_CODE_SILENT}}` get
 one that stays quiet.
+
+### Web demos
+
+`record-web.sh` runs Playwright and ffmpeg in containers, so you only need
+Docker, Go and pnpm. The browser calls the API with credentials, so start the
+API with the overlay that allows the demo origin:
+
+```bash
+docker compose -f docker-compose.yml -f docs/demos/web-demo.compose.yml --profile app up -d api
+bash docs/demos/record-web.sh              # chat, reactions, tour -> docs/assets/demos/web-*.gif
+bash docs/demos/record-web.sh reactions    # just this one
+```
+
+The scenes are in [`web/scenes.mjs`](web/scenes.mjs). They are captured as
+lossless screenshots (about 10 per second) rather than Playwright's video, whose
+compression noise makes the GIFs several times larger.

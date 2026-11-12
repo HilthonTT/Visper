@@ -26,10 +26,11 @@ More demos (QR invites, editing, image sharing, AI rewrite):
 **[docs/demos](docs/demos/README.md)**.
 
 The web client mirrors the TUI's layout (header tabs, footer key hints and
-the companion panel) and sends room invites to your CLI from the browser
-([more screenshots](clients/web/README.md#screenshots)):
+the companion panel) and joins rooms right in the browser, with the same
+end-to-end encryption ([more demos](docs/demos/README.md#web-client),
+[screenshots](clients/web/README.md#screenshots)):
 
-![The Visper web client: terminal page with the companion panel](docs/assets/screenshots/web-terminal.png)
+![Joining a Visper room in the browser and chatting](docs/assets/demos/web-chat.gif)
 
 ## Quick start
 

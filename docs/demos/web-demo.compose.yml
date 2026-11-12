@@ -1,0 +1,11 @@
+# Overlay for recording the web demos (docs/demos/record-web.sh).
+#
+# The web chat identifies the browser with the API's cookie, so its requests
+# carry credentials, and browsers refuse credentialed requests when CORS
+# allows "*". The demo pages are served from http://localhost:3000.
+#
+#   docker compose -f docker-compose.yml -f docs/demos/web-demo.compose.yml --profile app up -d api
+services:
+  api:
+    environment:
+      VISPER_CORS_ALLOWORIGINS: http://localhost:3000

@@ -4,6 +4,12 @@ Terminal-style web client for [Visper](https://github.com/HilthonTT/Visper), the
 
 Built with React 19, TanStack Start/Router, Vite and styled-components. Every colour comes from the active theme (`src/lib/themes.ts`).
 
+## Demos
+
+![Joining a room in the browser and chatting](../../docs/assets/demos/web-chat.gif)
+
+More (reactions, replies, search, the terminal): [docs/demos](../../docs/demos/README.md#web-client).
+
 ## Screenshots
 
 The layout follows the CLI's TUI: a header with the logo, page tabs and API status, the page in the middle, the companion on the right (wide screens, toggle with `alt+w`), and a footer with key hints.
