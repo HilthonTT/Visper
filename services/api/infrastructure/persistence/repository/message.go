@@ -178,6 +178,53 @@ func (r *messageRepository) Update(ctx context.Context, message *model.Message) 
 	return errConcurrentModification
 }
 
+func (r *messageRepository) Mutate(ctx context.Context, roomID, messageID string, fn func(*model.Message) error) (*model.Message, error) {
+	ctx, span := r.tracer.Start(ctx, "messageRepository.Mutate")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("room.id", roomID),
+		attribute.String("message.id", messageID),
+	)
+
+	key := fmt.Sprintf("room:%s:messages", roomID)
+
+	for range maxMemberRaceRetries {
+		message, oldData, err := r.find(ctx, roomID, messageID)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to get message")
+			return nil, err
+		}
+		createdAt, updatedAt := message.CreatedAt, message.UpdatedAt
+		if err := fn(message); err != nil {
+			return nil, err
+		}
+		message.CreatedAt, message.UpdatedAt = createdAt, updatedAt
+
+		newData, err := json.Marshal(message)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to marshal message")
+			return nil, fmt.Errorf("failed to marshal message: %w", err)
+		}
+
+		replaced, err := r.cache.ZReplace(ctx, key, oldData, string(newData), float64(createdAt.Unix()))
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to replace message")
+			return nil, fmt.Errorf("failed to update message: %w", err)
+		}
+		if replaced {
+			span.SetStatus(codes.Ok, "message mutated successfully")
+			return message, nil
+		}
+	}
+
+	span.SetStatus(codes.Error, "message changed concurrently")
+	return nil, errConcurrentModification
+}
+
 func (r *messageRepository) Delete(ctx context.Context, roomID string, messageID string) error {
 	ctx, span := r.tracer.Start(ctx, "messageRepository.Delete")
 	defer span.End()

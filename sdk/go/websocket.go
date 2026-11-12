@@ -2,6 +2,7 @@ package apisdk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -23,6 +24,18 @@ const (
 	MessageReceived = "message.received"
 	MessageDeleted  = "message.deleted"
 	MessageUpdated  = "message.updated"
+	// MessageReactions carries a message's full, new list of reactions
+	// (MessageReactionsPayload).
+	MessageReactions = "message.reactions"
+
+	// PresenceUpdate lists the members connected right now (PresencePayload).
+	PresenceUpdate = "presence.update"
+	// MemberTyping is sent when a member types (TypingPayload). It is not
+	// repeated more than every two seconds; treat it as stale after a few.
+	MemberTyping = "member.typing"
+	// ReadUpdate is the last message a member has read (ReadPayload). On
+	// connect, every member's current marker follows the message history.
+	ReadUpdate = "read.update"
 
 	ErrorEvent          = "error"
 	AuthenticationError = "error.auth"
@@ -41,12 +54,39 @@ type WSMessage struct {
 }
 
 type MessagePayload struct {
-	ID        string `json:"id"`
-	Content   string `json:"content"`
+	ID        string            `json:"id"`
+	Content   string            `json:"content"`
+	UserID    string            `json:"userId"`
+	Username  string            `json:"username"`
+	Timestamp string            `json:"timestamp"`
+	Encrypted bool              `json:"encrypted"`
+	ReplyToID string            `json:"replyToId,omitempty"`
+	Reactions []ReactionPayload `json:"reactions,omitempty"`
+}
+
+type ReactionPayload struct {
 	UserID    string `json:"userId"`
-	Username  string `json:"username"`
-	Timestamp string `json:"timestamp"`
+	Emoji     string `json:"emoji"`
 	Encrypted bool   `json:"encrypted"`
+}
+
+type MessageReactionsPayload struct {
+	ID        string            `json:"id"`
+	Reactions []ReactionPayload `json:"reactions"`
+}
+
+type PresencePayload struct {
+	Online []string `json:"online"`
+}
+
+type TypingPayload struct {
+	UserID   string `json:"userId"`
+	Username string `json:"username"`
+}
+
+type ReadPayload struct {
+	UserID    string `json:"userId"`
+	MessageID string `json:"messageId"`
 }
 
 type MessageUpdatedPayload struct {
@@ -140,9 +180,29 @@ func (ws *RoomWebSocket) Listen(ctx context.Context) error {
 	})
 }
 
-// SendMessage sends content as a text frame.
-func (ws *RoomWebSocket) SendMessage(content string) error {
-	return ws.write(websocket.TextMessage, []byte(content))
+// Messages are sent with MessageService.Send (so they are stored and
+// encrypted); the socket only carries these control frames.
+
+// SendTyping tells the room the user is typing. The server relays at most one
+// every two seconds per connection.
+func (ws *RoomWebSocket) SendTyping() error {
+	return ws.sendFrame(map[string]string{"type": "typing"})
+}
+
+// SendRead tells the room the user has read up to messageID.
+func (ws *RoomWebSocket) SendRead(messageID string) error {
+	if messageID == "" {
+		return ErrMissingIDParameter
+	}
+	return ws.sendFrame(map[string]string{"type": "read", "messageId": messageID})
+}
+
+func (ws *RoomWebSocket) sendFrame(frame map[string]string) error {
+	data, err := json.Marshal(frame)
+	if err != nil {
+		return err
+	}
+	return ws.write(websocket.TextMessage, data)
 }
 
 func (r *RoomService) ConnectWebSocket(

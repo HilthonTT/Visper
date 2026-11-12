@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"encoding/json"
 	"log"
 	"sync"
 	"time"
@@ -17,7 +18,25 @@ const (
 	maxClientMessageSize = 32 * 1024
 
 	clientSendBuffer = 64
+
+	// typingInterval is the least time between two relayed typing events
+	// from one connection.
+	typingInterval = 2 * time.Second
+	// maxMessageIDLength bounds message IDs in read events (UUIDs are 36).
+	maxMessageIDLength = 64
 )
+
+// Client frames are JSON control events. Messages themselves are sent over
+// REST (so they are stored, encrypted); a frame never becomes a message.
+const (
+	clientTyping = "typing"
+	clientRead   = "read"
+)
+
+type clientFrame struct {
+	Type      string `json:"type"`
+	MessageID string `json:"messageId"`
+}
 
 type Client struct {
 	conn *websocket.Conn
@@ -35,6 +54,8 @@ type Client struct {
 
 	drainOnce sync.Once
 	drain     chan struct{} // closed to flush queued messages and then close
+
+	lastTyping time.Time // only touched by ReadMessage
 }
 
 func NewClient(conn *websocket.Conn, id, roomID, username string) *Client {
@@ -127,32 +148,34 @@ func (c *Client) ReadMessage(core *Core) {
 			return
 		}
 
-		if len(raw) == 0 {
-			continue
-		}
-
-		payload := struct {
-			Content   string `json:"content"`
-			Username  string `json:"username"`
-			Timestamp string `json:"timestamp"`
-			UserID    string `json:"userId"`
-			Encrypted bool   `json:"encrypted"`
-		}{
-			Content:   string(raw),
-			Username:  c.Username,
-			Timestamp: time.Now().Format(time.RFC3339),
-			UserID:    c.ID,
-			Encrypted: false,
-		}
-
-		if !core.Publish(&WSMessage{
-			Type:   MessageReceived,
-			RoomID: c.RoomID,
-			Data:   payload,
-		}) {
+		if !c.handleFrame(core, raw) {
 			return
 		}
 	}
+}
+
+// handleFrame acts on one frame from the client. Invalid frames are ignored;
+// it returns false once the core has shut down.
+func (c *Client) handleFrame(core *Core, raw []byte) bool {
+	var frame clientFrame
+	if len(raw) == 0 || json.Unmarshal(raw, &frame) != nil {
+		return true
+	}
+
+	switch frame.Type {
+	case clientTyping:
+		if time.Since(c.lastTyping) < typingInterval {
+			return true
+		}
+		c.lastTyping = time.Now()
+		return core.Publish(NewMemberTyping(c.RoomID, c.ID, c.Username))
+	case clientRead:
+		if frame.MessageID == "" || len(frame.MessageID) > maxMessageIDLength {
+			return true
+		}
+		return core.MarkRead(c.RoomID, c.ID, frame.MessageID)
+	}
+	return true
 }
 
 func (c *Client) WriteMessage() {

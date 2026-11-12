@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -18,6 +19,9 @@ import (
 
 const (
 	maxMessageLength = 2000
+	// maxReactionLength bounds an encrypted reaction (base64 of nonce, tag
+	// and a short emoji sequence).
+	maxReactionLength = 256
 
 	defaultMessageLimit = 50
 	maxMessageLimit     = 200
@@ -34,10 +38,17 @@ var (
 	ErrMessageNotFound = apperr.New(apperr.NotFound, "message not found")
 	ErrNotEditor       = apperr.New(apperr.Forbidden, "unauthorized: you can only edit your own messages")
 	ErrNotDeleter      = apperr.New(apperr.Forbidden, "unauthorized: you can only delete your own messages")
+
+	ErrReplyTargetNotFound = apperr.New(apperr.Invalid, "the message you replied to no longer exists")
+	ErrReactionTooLong     = apperr.Newf(apperr.Invalid, "reaction cannot exceed %d characters", maxReactionLength)
 )
 
 type MessageUseCase interface {
-	Send(ctx context.Context, roomID, userID, username, content string, encrypted bool) (*model.Message, error)
+	// Send stores a message; replyToID, if set, must be a message of the room.
+	Send(ctx context.Context, roomID, userID, username, content string, encrypted bool, replyToID string) (*model.Message, error)
+	// SetReaction sets userID's reaction to a message, replacing any previous
+	// one; an empty emoji removes it. It returns the updated message.
+	SetReaction(ctx context.Context, roomID, messageID, userID, emoji string, encrypted bool) (*model.Message, error)
 	Update(ctx context.Context, roomID, messageID, userID, content string, encrypted bool) error
 	Delete(ctx context.Context, roomID, messageID, userID string) error
 	GetRoomMessages(ctx context.Context, roomID string, limit int64) ([]*model.Message, error)
@@ -63,7 +74,7 @@ func NewMessageUseCase(
 	}
 }
 
-func (uc *messageUseCase) Send(ctx context.Context, roomID, userID, username, content string, encrypted bool) (*model.Message, error) {
+func (uc *messageUseCase) Send(ctx context.Context, roomID, userID, username, content string, encrypted bool, replyToID string) (*model.Message, error) {
 	switch {
 	case roomID == "":
 		return nil, ErrRoomIDRequired
@@ -76,6 +87,13 @@ func (uc *messageUseCase) Send(ctx context.Context, roomID, userID, username, co
 	if err != nil {
 		return nil, err
 	}
+	if replyToID != "" {
+		if _, err := uc.repository.GetByID(ctx, roomID, replyToID); errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrReplyTargetNotFound
+		} else if err != nil {
+			return nil, fmt.Errorf("failed to get replied-to message: %w", err)
+		}
+	}
 
 	message := &model.Message{
 		ID:        uuid.NewString(),
@@ -85,6 +103,7 @@ func (uc *messageUseCase) Send(ctx context.Context, roomID, userID, username, co
 		Content:   content,
 		Encrypted: encrypted,
 		CreatedAt: time.Now(),
+		ReplyToID: replyToID,
 	}
 
 	if err := uc.repository.Create(ctx, message); err != nil {
@@ -146,6 +165,32 @@ func (uc *messageUseCase) Delete(ctx context.Context, roomID, messageID, userID 
 
 	uc.logger.Info("message deleted", zap.String("messageID", messageID), zap.String("roomID", roomID), zap.String("userID", userID))
 	return nil
+}
+
+func (uc *messageUseCase) SetReaction(ctx context.Context, roomID, messageID, userID, emoji string, encrypted bool) (*model.Message, error) {
+	if err := validateIDs(roomID, messageID, userID); err != nil {
+		return nil, err
+	}
+	emoji = strings.TrimSpace(emoji)
+	if len(emoji) > maxReactionLength {
+		return nil, ErrReactionTooLong
+	}
+
+	message, err := uc.repository.Mutate(ctx, roomID, messageID, func(m *model.Message) error {
+		m.Reactions = slices.DeleteFunc(m.Reactions, func(r model.Reaction) bool { return r.UserID == userID })
+		if emoji != "" {
+			m.Reactions = append(m.Reactions, model.Reaction{UserID: userID, Emoji: emoji, Encrypted: encrypted})
+		}
+		return nil
+	})
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, ErrMessageNotFound
+	}
+	if err != nil {
+		uc.logger.Error("failed to set reaction", zap.Error(err), zap.String("messageID", messageID))
+		return nil, fmt.Errorf("failed to set reaction: %w", err)
+	}
+	return message, nil
 }
 
 func (uc *messageUseCase) GetRoomMessages(ctx context.Context, roomID string, limit int64) ([]*model.Message, error) {

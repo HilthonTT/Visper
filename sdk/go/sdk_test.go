@@ -178,6 +178,7 @@ func TestClientServicesDoNotShareOptionBackingArray(t *testing.T) {
 
 func TestRoomWebSocketListenStopsOnCancel(t *testing.T) {
 	upgrader := websocket.Upgrader{}
+	frames := make(chan string, 4)
 	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/rooms/r1/ws") {
 			http.NotFound(w, r)
@@ -191,8 +192,13 @@ func TestRoomWebSocketListenStopsOnCancel(t *testing.T) {
 		conn.WriteJSON(WSMessage{Type: MessageReceived, RoomID: "r1", Data: map[string]any{"id": "m1"}})
 		// Keep the connection open (silently) until the client goes away.
 		for {
-			if _, _, err := conn.ReadMessage(); err != nil {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
 				return
+			}
+			select {
+			case frames <- string(data):
+			default:
 			}
 		}
 	}))
@@ -218,8 +224,21 @@ func TestRoomWebSocketListenStopsOnCancel(t *testing.T) {
 		t.Fatal("no message received")
 	}
 
-	if err := ws.SendMessage("hi"); err != nil {
-		t.Fatalf("SendMessage: %v", err)
+	if err := ws.SendTyping(); err != nil {
+		t.Fatalf("SendTyping: %v", err)
+	}
+	if err := ws.SendRead("m1"); err != nil {
+		t.Fatalf("SendRead: %v", err)
+	}
+	for _, want := range []string{`{"type":"typing"}`, `{"messageId":"m1","type":"read"}`} {
+		select {
+		case got := <-frames:
+			if got != want {
+				t.Fatalf("frame = %s, want %s", got, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("frame not received")
+		}
 	}
 
 	cancel()
@@ -232,8 +251,8 @@ func TestRoomWebSocketListenStopsOnCancel(t *testing.T) {
 		t.Fatal("Listen did not return after context cancellation")
 	}
 
-	if err := ws.SendMessage("after close"); !errors.Is(err, ErrWebSocketClosed) {
-		t.Fatalf("SendMessage after close = %v, want ErrWebSocketClosed", err)
+	if err := ws.SendTyping(); !errors.Is(err, ErrWebSocketClosed) {
+		t.Fatalf("SendTyping after close = %v, want ErrWebSocketClosed", err)
 	}
 	if err := ws.Close(); err != nil {
 		t.Fatalf("second Close = %v", err)
@@ -301,7 +320,7 @@ func TestWebSocketCloseDoesNotWaitForBlockedWriter(t *testing.T) {
 	go func() {
 		defer close(writerDone)
 		payload := strings.Repeat("x", 1<<20)
-		for ws.SendMessage(payload) == nil {
+		for ws.SendRead(payload) == nil {
 		}
 	}()
 	time.Sleep(500 * time.Millisecond) // let the writer fill the socket buffers and block
@@ -317,5 +336,49 @@ func TestWebSocketCloseDoesNotWaitForBlockedWriter(t *testing.T) {
 	case <-writerDone:
 	case <-time.After(5 * time.Second):
 		t.Fatal("blocked writer not released by Close")
+	}
+}
+
+func TestReactionsAreEncryptedAndDecrypted(t *testing.T) {
+	keyB64, _ := GenerateKeyBase64()
+	var sent SetReactionParams
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/rooms/r1/messages/m1/reaction" || r.Method != http.MethodPut {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		json.NewDecoder(r.Body).Decode(&sent)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id": "m1", "content": "hi", "created_at": "2026-01-01T00:00:00Z",
+			"reactions": []map[string]any{{"user_id": "u1", "emoji": sent.Emoji, "encrypted": sent.Encrypted}},
+		})
+	}))
+	client.Message.SetEncryptionKey(keyB64)
+
+	res, err := client.Message.SetReaction(context.Background(), "r1", "m1", "👍")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sent.Encrypted || sent.Emoji == "👍" {
+		t.Fatalf("reaction was not encrypted on the wire: %+v", sent)
+	}
+	if len(res.Reactions) != 1 || res.Reactions[0].Emoji != "👍" || res.Reactions[0].Encrypted {
+		t.Fatalf("reactions not decrypted: %+v", res.Reactions)
+	}
+}
+
+func TestSendReplyCarriesReplyToID(t *testing.T) {
+	var body map[string]any
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"m2","content":"yo","reply_to_id":"m1","created_at":"2026-01-01T00:00:00Z"}`)
+	}))
+	res, err := client.Message.Send(context.Background(), "r1", SendMessageParams{Content: "yo", ReplyToID: "m1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["reply_to_id"] != "m1" || res.ReplyToID != "m1" {
+		t.Fatalf("request %v, response %+v", body, res)
 	}
 }

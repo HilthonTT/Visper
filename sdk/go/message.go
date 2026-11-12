@@ -80,6 +80,74 @@ func (m *MessageService) Send(ctx context.Context, roomID string, body SendMessa
 	return res, nil
 }
 
+// SetReaction sets the current user's reaction to a message, replacing any
+// previous one. The emoji is encrypted with the room key like message
+// content. It returns the message with its new reactions, decrypted.
+func (m *MessageService) SetReaction(ctx context.Context, roomID, messageID, emoji string, opts ...option.RequestOption) (*MessageResponse, error) {
+	opts = slices.Concat(m.Options, opts)
+	key := m.key()
+	if roomID == "" || messageID == "" {
+		return nil, ErrMissingIDParameter
+	}
+
+	body := SetReactionParams{Emoji: emoji}
+	if key != "" {
+		encrypted, err := EncryptWithKeyB64(emoji, key)
+		if err != nil {
+			return nil, fmt.Errorf("encryption failed: %w", err)
+		}
+		body.Emoji, body.Encrypted = encrypted, true
+	}
+
+	path := fmt.Sprintf("api/v1/rooms/%s/messages/%s/reaction", url.PathEscape(roomID), url.PathEscape(messageID))
+	res := &MessageResponse{}
+	if err := requestconfig.ExecuteNewRequest(ctx, http.MethodPut, path, body, &res, opts...); err != nil {
+		return nil, err
+	}
+	decryptMessage(res, key)
+	return res, nil
+}
+
+// RemoveReaction removes the current user's reaction to a message.
+func (m *MessageService) RemoveReaction(ctx context.Context, roomID, messageID string, opts ...option.RequestOption) (*MessageResponse, error) {
+	opts = slices.Concat(m.Options, opts)
+	key := m.key()
+	if roomID == "" || messageID == "" {
+		return nil, ErrMissingIDParameter
+	}
+
+	path := fmt.Sprintf("api/v1/rooms/%s/messages/%s/reaction", url.PathEscape(roomID), url.PathEscape(messageID))
+	res := &MessageResponse{}
+	if err := requestconfig.ExecuteNewRequest(ctx, http.MethodDelete, path, nil, &res, opts...); err != nil {
+		return nil, err
+	}
+	decryptMessage(res, key)
+	return res, nil
+}
+
+// decryptMessage decrypts a message's content and reactions in place.
+// Failures are shown in place of the text rather than failing the call.
+func decryptMessage(msg *MessageResponse, key string) {
+	msg.Content, msg.Encrypted = decryptField(msg.Content, msg.Encrypted, key)
+	for i := range msg.Reactions {
+		r := &msg.Reactions[i]
+		r.Emoji, r.Encrypted = decryptField(r.Emoji, r.Encrypted, key)
+	}
+}
+
+// decryptField decrypts one encrypted field; it reports whether the result
+// is still encrypted (no key).
+func decryptField(value string, encrypted bool, key string) (string, bool) {
+	if !encrypted || key == "" {
+		return value, encrypted
+	}
+	decrypted, err := DecryptWithKeyB64(value, key)
+	if err != nil {
+		return "[Decryption failed]", false
+	}
+	return decrypted, false
+}
+
 // Update encrypts and updates a message
 func (m *MessageService) Update(ctx context.Context, roomID, messageID string, body UpdateMessageParams, opts ...option.RequestOption) (*MessageUpdatedResponse, error) {
 	opts = slices.Concat(m.Options, opts)
@@ -137,20 +205,8 @@ func (m *MessageService) List(ctx context.Context, roomID string, query MessageL
 		return nil, err
 	}
 
-	// Decrypt all messages
-	if key != "" {
-		for i := range res.Messages {
-			if res.Messages[i].Encrypted {
-				decrypted, err := DecryptWithKeyB64(res.Messages[i].Content, key)
-				if err != nil {
-					// Log but don't fail - show encrypted content
-					res.Messages[i].Content = "[Decryption failed]"
-					continue
-				}
-				res.Messages[i].Content = decrypted
-				res.Messages[i].Encrypted = false
-			}
-		}
+	for i := range res.Messages {
+		decryptMessage(&res.Messages[i], key)
 	}
 
 	return res, nil
@@ -179,18 +235,8 @@ func (m *MessageService) ListAfter(ctx context.Context, roomID string, query Mes
 		return nil, err
 	}
 
-	if key != "" {
-		for i := range res.Messages {
-			if res.Messages[i].Encrypted {
-				decrypted, err := DecryptWithKeyB64(res.Messages[i].Content, key)
-				if err != nil {
-					res.Messages[i].Content = "[Decryption failed]"
-					continue
-				}
-				res.Messages[i].Content = decrypted
-				res.Messages[i].Encrypted = false
-			}
-		}
+	for i := range res.Messages {
+		decryptMessage(&res.Messages[i], key)
 	}
 
 	return res, nil
@@ -225,6 +271,24 @@ func (m *MessageService) Count(ctx context.Context, roomID string, opts ...optio
 type SendMessageParams struct {
 	Content   string `json:"content"`
 	Encrypted bool   `json:"encrypted,omitempty"`
+	// ReplyToID is the message this one answers, if any.
+	ReplyToID string `json:"reply_to_id,omitempty"`
+}
+
+type SetReactionParams struct {
+	Emoji     string `json:"emoji"`
+	Encrypted bool   `json:"encrypted,omitempty"`
+}
+
+func (r *SetReactionParams) MarshalJSON() ([]byte, error) {
+	return apijson.MarshalRoot(r)
+}
+
+// Reaction is one member's reaction to a message (one per member).
+type Reaction struct {
+	UserID    string `json:"user_id"`
+	Emoji     string `json:"emoji"`
+	Encrypted bool   `json:"encrypted"`
 }
 
 func (r *SendMessageParams) MarshalJSON() ([]byte, error) {
@@ -241,13 +305,15 @@ func (r *UpdateMessageParams) MarshalJSON() ([]byte, error) {
 }
 
 type MessageResponse struct {
-	ID        string    `json:"id"`
-	RoomID    string    `json:"room_id"`
-	UserID    string    `json:"user_id"`
-	Username  string    `json:"username"`
-	Content   string    `json:"content"`
-	Encrypted bool      `json:"encrypted"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        string     `json:"id"`
+	RoomID    string     `json:"room_id"`
+	UserID    string     `json:"user_id"`
+	Username  string     `json:"username"`
+	Content   string     `json:"content"`
+	Encrypted bool       `json:"encrypted"`
+	CreatedAt time.Time  `json:"created_at"`
+	ReplyToID string     `json:"reply_to_id,omitempty"`
+	Reactions []Reaction `json:"reactions,omitempty"`
 }
 
 func (r *MessageResponse) UnmarshalJSON(data []byte) error {

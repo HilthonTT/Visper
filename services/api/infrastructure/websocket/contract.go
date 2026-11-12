@@ -1,5 +1,11 @@
 package websocket
 
+import (
+	"time"
+
+	"github.com/hilthontt/visper/services/api/domain/model"
+)
+
 type WSMessage struct {
 	Type   string `json:"type"`
 	RoomID string `json:"roomId"`
@@ -7,12 +13,40 @@ type WSMessage struct {
 }
 
 type MessagePayload struct {
-	ID        string `json:"id"`
-	Content   string `json:"content"`
+	ID        string            `json:"id"`
+	Content   string            `json:"content"`
+	UserID    string            `json:"userId"`
+	Username  string            `json:"username"`
+	Timestamp string            `json:"timestamp"`
+	Encrypted bool              `json:"encrypted"`
+	ReplyToID string            `json:"replyToId,omitempty"`
+	Reactions []ReactionPayload `json:"reactions,omitempty"`
+}
+
+type ReactionPayload struct {
 	UserID    string `json:"userId"`
-	Username  string `json:"username"`
-	Timestamp string `json:"timestamp"`
+	Emoji     string `json:"emoji"`
 	Encrypted bool   `json:"encrypted"`
+}
+
+type MessageReactionsPayload struct {
+	ID        string            `json:"id"`
+	Reactions []ReactionPayload `json:"reactions"`
+}
+
+type PresencePayload struct {
+	// Online holds the IDs of the members connected right now.
+	Online []string `json:"online"`
+}
+
+type TypingPayload struct {
+	UserID   string `json:"userId"`
+	Username string `json:"username"`
+}
+
+type ReadPayload struct {
+	UserID    string `json:"userId"`
+	MessageID string `json:"messageId"`
 }
 
 type MessageUpdatedPayload struct {
@@ -50,19 +84,59 @@ type ErrorKickedPayload struct {
 	Reason   string `json:"reason"`
 }
 
-func NewMessageReceived(roomID, msgID, content, userID, username, timestamp string, encrypted bool) *WSMessage {
+func NewMessageReceived(roomID string, m *model.Message) *WSMessage {
 	return &WSMessage{
 		Type:   MessageReceived,
 		RoomID: roomID,
 		Data: MessagePayload{
-			ID:        msgID,
-			Content:   content,
-			UserID:    userID,
-			Username:  username,
-			Timestamp: timestamp,
-			Encrypted: encrypted,
+			ID:        m.ID,
+			Content:   m.Content,
+			UserID:    m.UserID,
+			Username:  m.Username,
+			Timestamp: m.CreatedAt.Format(time.RFC3339),
+			Encrypted: m.Encrypted,
+			ReplyToID: m.ReplyToID,
+			Reactions: toReactionPayloads(m.Reactions),
 		},
 	}
+}
+
+func NewMessageReactions(roomID string, m *model.Message) *WSMessage {
+	reactions := toReactionPayloads(m.Reactions)
+	if reactions == nil {
+		reactions = []ReactionPayload{}
+	}
+	return &WSMessage{
+		Type:   MessageReactions,
+		RoomID: roomID,
+		Data:   MessageReactionsPayload{ID: m.ID, Reactions: reactions},
+	}
+}
+
+func toReactionPayloads(reactions []model.Reaction) []ReactionPayload {
+	if len(reactions) == 0 {
+		return nil
+	}
+	out := make([]ReactionPayload, len(reactions))
+	for i, r := range reactions {
+		out[i] = ReactionPayload{UserID: r.UserID, Emoji: r.Emoji, Encrypted: r.Encrypted}
+	}
+	return out
+}
+
+func NewPresenceUpdate(roomID string, online []string) *WSMessage {
+	if online == nil {
+		online = []string{}
+	}
+	return &WSMessage{Type: PresenceUpdate, RoomID: roomID, Data: PresencePayload{Online: online}}
+}
+
+func NewMemberTyping(roomID, userID, username string) *WSMessage {
+	return &WSMessage{Type: MemberTyping, RoomID: roomID, Data: TypingPayload{UserID: userID, Username: username}}
+}
+
+func NewReadUpdate(roomID, userID, messageID string) *WSMessage {
+	return &WSMessage{Type: ReadUpdate, RoomID: roomID, Data: ReadPayload{UserID: userID, MessageID: messageID}}
 }
 
 func NewMessageUpdated(roomID, msgID, content, timestamp string, encrypted bool) *WSMessage {

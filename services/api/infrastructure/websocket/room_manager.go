@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"sort"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -83,6 +84,27 @@ func (rm *RoomManager) ClientCount(roomID string) int {
 		return len(room.clients)
 	}
 	return 0
+}
+
+// OnlineUsers returns the sorted IDs of the users connected to a room.
+func (rm *RoomManager) OnlineUsers(roomID string) []string {
+	rm.mu.RLock()
+	defer rm.mu.RUnlock()
+
+	room, ok := rm.rooms[roomID]
+	if !ok {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(room.clients))
+	for cl := range room.clients {
+		seen[cl.ID] = struct{}{}
+	}
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func (rm *RoomManager) BroadcastToRoom(msg *WSMessage) error {

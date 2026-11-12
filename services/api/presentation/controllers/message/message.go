@@ -24,6 +24,8 @@ type MessageController interface {
 	SendMessage(ctx *gin.Context)
 	UpdateMessage(ctx *gin.Context)
 	DeleteMessage(ctx *gin.Context)
+	SetReaction(ctx *gin.Context)
+	RemoveReaction(ctx *gin.Context)
 	GetMessages(ctx *gin.Context)
 	GetMessagesAfter(ctx *gin.Context)
 	GetMessageCount(ctx *gin.Context)
@@ -57,21 +59,13 @@ func (c *messageController) SendMessage(ctx *gin.Context) {
 		return
 	}
 
-	msg, err := c.usecase.Send(ctx.Request.Context(), roomID, user.ID, user.Username, req.Content, req.Encrypted)
+	msg, err := c.usecase.Send(ctx.Request.Context(), roomID, user.ID, user.Username, req.Content, req.Encrypted, req.ReplyToID)
 	if err != nil {
 		httpx.Error(ctx, err)
 		return
 	}
 
-	c.wsCore.Publish(websocket.NewMessageReceived(
-		roomID,
-		msg.ID,
-		msg.Content,
-		msg.UserID,
-		msg.Username,
-		msg.CreatedAt.Format(time.RFC3339),
-		msg.Encrypted,
-	))
+	c.wsCore.Publish(websocket.NewMessageReceived(roomID, msg))
 
 	ctx.JSON(http.StatusCreated, toMessageResponse(msg))
 }
@@ -223,7 +217,45 @@ func parseLimit(ctx *gin.Context, def int64) int64 {
 	return def
 }
 
+// SetReaction sets the caller's reaction to a message (one per member).
+func (c *messageController) SetReaction(ctx *gin.Context) {
+	var req SetReactionRequest
+	if !httpx.BindJSON(ctx, &req) {
+		return
+	}
+	c.setReaction(ctx, req.Emoji, req.Encrypted)
+}
+
+// RemoveReaction removes the caller's reaction to a message.
+func (c *messageController) RemoveReaction(ctx *gin.Context) {
+	c.setReaction(ctx, "", false)
+}
+
+func (c *messageController) setReaction(ctx *gin.Context, emoji string, encrypted bool) {
+	messageID, ok := httpx.RequireParam(ctx, "messageId", "message ID")
+	if !ok {
+		return
+	}
+	roomID, user, ok := c.requireRoomMember(ctx)
+	if !ok {
+		return
+	}
+
+	msg, err := c.usecase.SetReaction(ctx.Request.Context(), roomID, messageID, user.ID, emoji, encrypted)
+	if err != nil {
+		httpx.Error(ctx, err)
+		return
+	}
+
+	c.wsCore.Publish(websocket.NewMessageReactions(roomID, msg))
+	ctx.JSON(http.StatusOK, toMessageResponse(msg))
+}
+
 func toMessageResponse(msg *model.Message) MessageResponse {
+	reactions := make([]ReactionResponse, len(msg.Reactions))
+	for i, r := range msg.Reactions {
+		reactions[i] = ReactionResponse{UserID: r.UserID, Emoji: r.Emoji, Encrypted: r.Encrypted}
+	}
 	return MessageResponse{
 		ID:        msg.ID,
 		RoomID:    msg.RoomID,
@@ -232,6 +264,8 @@ func toMessageResponse(msg *model.Message) MessageResponse {
 		Content:   msg.Content,
 		CreatedAt: msg.CreatedAt,
 		Encrypted: msg.Encrypted,
+		ReplyToID: msg.ReplyToID,
+		Reactions: reactions,
 	}
 }
 

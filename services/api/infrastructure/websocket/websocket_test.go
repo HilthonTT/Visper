@@ -115,6 +115,9 @@ func (s *stubMessageRepo) GetByID(context.Context, string, string) (*model.Messa
 	return nil, nil
 }
 func (s *stubMessageRepo) Update(context.Context, *model.Message) error { return nil }
+func (s *stubMessageRepo) Mutate(context.Context, string, string, func(*model.Message) error) (*model.Message, error) {
+	return nil, nil
+}
 func (s *stubMessageRepo) Delete(context.Context, string, string) error { return nil }
 func (s *stubMessageRepo) Create(context.Context, *model.Message) error { return nil }
 func (s *stubMessageRepo) Count(context.Context, string) (int64, error) { return 0, nil }
@@ -133,6 +136,17 @@ func receive(t *testing.T, cl *Client) *WSMessage {
 	case <-time.After(2 * time.Second):
 		t.Fatalf("client %s: timed out waiting for a message", cl.ID)
 		return nil
+	}
+}
+
+// receiveType returns the next message of type typ, skipping others (e.g.
+// presence updates, whose order relative to history isn't fixed).
+func receiveType(t *testing.T, cl *Client, typ string) *WSMessage {
+	t.Helper()
+	for {
+		if msg := receive(t, cl); msg.Type == typ {
+			return msg
+		}
 	}
 }
 
@@ -158,7 +172,7 @@ func TestCoreHistoryBroadcastAndKick(t *testing.T) {
 
 	// History is replayed with message IDs.
 	for _, cl := range []*Client{alice, bob} {
-		hist := receive(t, cl)
+		hist := receiveType(t, cl, MessageReceived)
 		p, ok := hist.Data.(MessagePayload)
 		if !ok || p.ID != "m1" {
 			t.Fatalf("history message = %#v, want payload with ID m1", hist.Data)
@@ -168,9 +182,7 @@ func TestCoreHistoryBroadcastAndKick(t *testing.T) {
 	core.Publish(NewErrorKicked("room", "bob", "Bob", "bye"))
 
 	for _, cl := range []*Client{alice, bob} {
-		if msg := receive(t, cl); msg.Type != Kicked {
-			t.Fatalf("client %s got %q, want %q", cl.ID, msg.Type, Kicked)
-		}
+		receiveType(t, cl, Kicked)
 	}
 
 	// The kicked user is removed from the room and their connection drains.
@@ -198,5 +210,111 @@ func TestCoreHistoryBroadcastAndKick(t *testing.T) {
 	core.UnregisterClient(alice)
 	if !alice.IsClosed() {
 		t.Fatal("clients should be closed on shutdown")
+	}
+}
+
+func startCore(t *testing.T, history ...*model.Message) (*Core, *RoomManager) {
+	t.Helper()
+	rm := NewRoomManager(nil)
+	core := NewCore(rm, &stubMessageRepo{history: history})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		core.Run(ctx)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	return core, rm
+}
+
+func TestPresenceFollowsConnections(t *testing.T) {
+	core, _ := startCore(t)
+	alice := newTestClient("alice", "room")
+	bob := newTestClient("bob", "room")
+
+	core.RegisterClient(alice)
+	if p := receiveType(t, alice, PresenceUpdate).Data.(PresencePayload); len(p.Online) != 1 || p.Online[0] != "alice" {
+		t.Fatalf("presence = %v, want [alice]", p.Online)
+	}
+	core.RegisterClient(bob)
+	if p := receiveType(t, alice, PresenceUpdate).Data.(PresencePayload); len(p.Online) != 2 {
+		t.Fatalf("presence = %v, want alice and bob", p.Online)
+	}
+	core.UnregisterClient(bob)
+	if p := receiveType(t, alice, PresenceUpdate).Data.(PresencePayload); len(p.Online) != 1 || p.Online[0] != "alice" {
+		t.Fatalf("presence after bob left = %v, want [alice]", p.Online)
+	}
+}
+
+func TestTypingFramesAreRelayedAndThrottled(t *testing.T) {
+	core, _ := startCore(t)
+	alice := newTestClient("alice", "room")
+	alice.Username = "Alice"
+	core.RegisterClient(alice)
+
+	alice.handleFrame(core, []byte(`{"type":"typing"}`))
+	msg := receiveType(t, alice, MemberTyping)
+	if p := msg.Data.(TypingPayload); p.UserID != "alice" || p.Username != "Alice" {
+		t.Fatalf("typing payload = %+v", p)
+	}
+
+	// A second frame right away is dropped.
+	alice.handleFrame(core, []byte(`{"type":"typing"}`))
+	alice.handleFrame(core, []byte(`{"type":"read","messageId":"m1"}`))
+	if msg := receiveType(t, alice, ReadUpdate); msg == nil {
+		t.Fatal("no read update")
+	}
+	select {
+	case msg := <-alice.Message:
+		t.Fatalf("unexpected %q after a throttled typing frame", msg.Type)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// Raw text used to be broadcast as an unencrypted message, which let anyone
+// in a room inject plaintext; messages must go through REST.
+func TestRawFramesAreNotBroadcastAsMessages(t *testing.T) {
+	core, _ := startCore(t)
+	alice := newTestClient("alice", "room")
+	core.RegisterClient(alice)
+	receiveType(t, alice, PresenceUpdate)
+
+	for _, frame := range []string{"hello", `{"type":"message","content":"hi"}`, `{"type":"read","messageId":""}`} {
+		alice.handleFrame(core, []byte(frame))
+	}
+	select {
+	case msg := <-alice.Message:
+		t.Fatalf("frame produced %q", msg.Type)
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+func TestReadMarkersAreReplayedToNewConnections(t *testing.T) {
+	core, _ := startCore(t)
+	alice := newTestClient("alice", "room")
+	core.RegisterClient(alice)
+	if !core.MarkRead("room", "alice", "m7") {
+		t.Fatal("MarkRead failed")
+	}
+	receiveType(t, alice, ReadUpdate)
+
+	bob := newTestClient("bob", "room")
+	core.RegisterClient(bob)
+	p := receiveType(t, bob, ReadUpdate).Data.(ReadPayload)
+	if p.UserID != "alice" || p.MessageID != "m7" {
+		t.Fatalf("replayed read = %+v", p)
+	}
+
+	core.Publish(NewRoomDeleted("room"))
+	receiveType(t, bob, RoomDeleted)
+	deadline := time.Now().Add(2 * time.Second)
+	for len(core.readsOf("room")) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("read markers outlived the room")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

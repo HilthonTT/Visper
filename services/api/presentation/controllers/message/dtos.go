@@ -5,6 +5,20 @@ import "time"
 type SendMessageRequest struct {
 	Content   string `json:"content" binding:"required,max=1000"`
 	Encrypted bool   `json:"encrypted"`
+	ReplyToID string `json:"reply_to_id" binding:"omitempty,max=64"`
+}
+
+// SetReactionRequest sets the caller's reaction; the emoji is encrypted by
+// the client like message content.
+type SetReactionRequest struct {
+	Emoji     string `json:"emoji" binding:"required,max=256"`
+	Encrypted bool   `json:"encrypted"`
+}
+
+type ReactionResponse struct {
+	UserID    string `json:"user_id"`
+	Emoji     string `json:"emoji"`
+	Encrypted bool   `json:"encrypted"`
 }
 
 type UpdateMessageRequest struct {
@@ -20,6 +34,10 @@ type MessageResponse struct {
 	Content   string    `json:"content"`
 	Encrypted bool      `json:"encrypted"`
 	CreatedAt time.Time `json:"created_at"`
+	ReplyToID string    `json:"reply_to_id,omitempty"`
+	// Reactions are always present (possibly empty) so clients can replace
+	// their list.
+	Reactions []ReactionResponse `json:"reactions"`
 }
 
 type MessagesResponse struct {

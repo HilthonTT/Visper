@@ -12,4 +12,6 @@ func MessageRoutes(router *gin.RouterGroup, controller message.MessageController
 	router.GET("/rooms/:id/messages/count", controller.GetMessageCount)
 	router.DELETE("/rooms/:id/messages/:messageId", controller.DeleteMessage)
 	router.PUT("/rooms/:id/messages/:messageId", controller.UpdateMessage)
+	router.PUT("/rooms/:id/messages/:messageId/reaction", controller.SetReaction)
+	router.DELETE("/rooms/:id/messages/:messageId/reaction", controller.RemoveReaction)
 }

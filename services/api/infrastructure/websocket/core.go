@@ -21,6 +21,11 @@ type Core struct {
 	broadcast         chan *WSMessage
 	messageRepository repository.MessageRepository
 
+	// reads is each room's last-read message per member. It is kept in
+	// memory, like the connections themselves, and dropped with the room.
+	readsMu sync.Mutex
+	reads   map[string]map[string]string // room ID -> user ID -> message ID
+
 	// shutdown is closed when Run stops; the channels above are never closed
 	// so that late senders cannot panic, they observe shutdown instead.
 	shutdown chan struct{}
@@ -35,6 +40,7 @@ func NewCore(roomMgr *RoomManager, messageRepository repository.MessageRepositor
 		unregister:        make(chan *Client),
 		broadcast:         make(chan *WSMessage, 256),
 		messageRepository: messageRepository,
+		reads:             make(map[string]map[string]string),
 		shutdown:          make(chan struct{}),
 	}
 }
@@ -54,6 +60,7 @@ func (c *Core) Run(ctx context.Context) {
 
 		case cl := <-c.register:
 			c.roomMgr.AddClient(cl)
+			c.dispatch(NewPresenceUpdate(cl.RoomID, c.roomMgr.OnlineUsers(cl.RoomID)))
 
 			c.wg.Add(1)
 			go func(client *Client) {
@@ -63,6 +70,7 @@ func (c *Core) Run(ctx context.Context) {
 
 		case cl := <-c.unregister:
 			c.roomMgr.RemoveClient(cl)
+			c.dispatch(NewPresenceUpdate(cl.RoomID, c.roomMgr.OnlineUsers(cl.RoomID)))
 
 		case msg := <-c.broadcast:
 			c.dispatch(msg)
@@ -89,6 +97,9 @@ func (c *Core) dispatch(msg *WSMessage) {
 		}
 	case RoomDeleted:
 		c.roomMgr.CloseRoom(msg.RoomID)
+		c.readsMu.Lock()
+		delete(c.reads, msg.RoomID)
+		c.readsMu.Unlock()
 	}
 }
 
@@ -109,17 +120,16 @@ func (c *Core) loadHistory(cl *Client) {
 	timeout := time.NewTimer(5 * time.Second)
 	defer timeout.Stop()
 
+	replay := make([]*WSMessage, 0, len(messages))
 	for _, m := range messages {
-		hist := NewMessageReceived(
-			cl.RoomID,
-			m.ID,
-			m.Content,
-			m.UserID,
-			m.Username,
-			m.CreatedAt.Format(time.RFC3339),
-			m.Encrypted,
-		)
+		replay = append(replay, NewMessageReceived(cl.RoomID, m))
+	}
+	// Then where everyone has read up to.
+	for userID, messageID := range c.readsOf(cl.RoomID) {
+		replay = append(replay, NewReadUpdate(cl.RoomID, userID, messageID))
+	}
 
+	for _, hist := range replay {
 		select {
 		case cl.Message <- hist:
 		case <-timeout.C:
@@ -134,6 +144,36 @@ func (c *Core) loadHistory(cl *Client) {
 }
 
 // RegisterClient adds cl to its room. It returns false if the hub has shut down.
+// MarkRead records the last message userID has read in a room and tells the
+// room.
+func (c *Core) MarkRead(roomID, userID, messageID string) bool {
+	c.readsMu.Lock()
+	room, ok := c.reads[roomID]
+	if !ok {
+		room = make(map[string]string)
+		c.reads[roomID] = room
+	}
+	changed := room[userID] != messageID
+	room[userID] = messageID
+	c.readsMu.Unlock()
+
+	if !changed {
+		return true
+	}
+	return c.Publish(NewReadUpdate(roomID, userID, messageID))
+}
+
+// readsOf returns a copy of a room's read markers.
+func (c *Core) readsOf(roomID string) map[string]string {
+	c.readsMu.Lock()
+	defer c.readsMu.Unlock()
+	out := make(map[string]string, len(c.reads[roomID]))
+	for userID, messageID := range c.reads[roomID] {
+		out[userID] = messageID
+	}
+	return out
+}
+
 func (c *Core) RegisterClient(cl *Client) bool {
 	select {
 	case c.register <- cl:
