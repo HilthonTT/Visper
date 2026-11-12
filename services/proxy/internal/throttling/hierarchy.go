@@ -3,6 +3,7 @@ package throttling
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -45,15 +46,16 @@ func (h *Hierarchy) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// Buffered so the levels that stop after the first one never block; their
+	// errors are only the consequence of the cancel below and are discarded.
 	errc := make(chan error, len(h.levels))
+	var wg sync.WaitGroup
 	for _, l := range h.levels {
-		go func() { errc <- l.Throttler.Start(ctx) }()
+		wg.Go(func() { errc <- l.Throttler.Start(ctx) })
 	}
 	err := <-errc // first result (including ctx cancellation) wins
 	cancel()
-	for range len(h.levels) - 1 {
-		<-errc
-	}
+	wg.Wait()
 	return err
 }
 
