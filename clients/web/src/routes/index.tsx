@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect } from "react";
 import styled, { ThemeProvider } from "styled-components";
+import { ChatPage } from "@/components/pages/chat-page";
 import { FaqPage } from "@/components/pages/faq-page";
 import { JoinPage } from "@/components/pages/join-page";
 import { SettingsPage } from "@/components/pages/settings-page";
@@ -21,6 +22,12 @@ const pageHints: Record<PageId, KeyHint[]> = {
 		["tab", "complete"],
 		["↑↓", "history"],
 		["ctrl+l", "clear"],
+	],
+	chat: [
+		["enter", "send"],
+		["shift+enter", "new line"],
+		["↑", "edit last"],
+		["esc", "cancel"],
 	],
 	join: [
 		["enter", "send invite"],
@@ -44,8 +51,8 @@ function App() {
 			?.setAttribute("content", theme.colors.body);
 	}, [theme, themeLoaded]);
 
-	// An invite link with room codes lands straight on the join form.
-	const initialPage: PageId = roomParams.joinCode ? "join" : "terminal";
+	// An invite link with room codes lands straight on the chat's join form.
+	const initialPage: PageId = roomParams.joinCode ? "chat" : "terminal";
 
 	return (
 		<UserProvider>
@@ -73,6 +80,10 @@ function Pages({ roomParams }: { roomParams: RoomParams }) {
 			{/* The terminal stays mounted so its scrollback survives tab switches. */}
 			<TerminalSlot hidden={page !== "terminal"}>
 				<Terminal searchParams={roomParams} active={page === "terminal"} />
+			</TerminalSlot>
+			{/* The chat stays mounted too, so its connection survives. */}
+			<TerminalSlot hidden={page !== "chat"}>
+				<ChatPage active={page === "chat"} />
 			</TerminalSlot>
 			{page === "join" && <JoinPage />}
 			{page === "faq" && <FaqPage />}

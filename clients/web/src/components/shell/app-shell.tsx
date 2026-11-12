@@ -9,17 +9,17 @@ import { getCompanion } from "@/lib/companions";
  * page tabs and connection status; the page in the middle, with the
  * companion panel on the right on wide screens; and a footer with key hints.
  *
- *   visper▌  Terminal  j Join room  f FAQ  s Settings            ● online
+ *   visper▌  Terminal  c Chat  j Join room  f FAQ  s Settings    ● online
  *   ─────────────────────────────────────────────────────────────────────
  *   page                                                   │ companion
  *   ─────────────────────────────────────────────────────────────────────
- *   tab complete · alt+1-4 page · alt+w companion       ● e2e encrypted
+ *   tab complete · alt+1-5 page · alt+w companion       ● e2e encrypted
  */
 
 export type KeyHint = readonly [key: string, desc: string];
 
 const globalHints: KeyHint[] = [
-	["alt+1-4", "page"],
+	["alt+1-5", "page"],
 	["alt+w", "companion"],
 ];
 

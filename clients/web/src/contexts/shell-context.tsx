@@ -13,6 +13,7 @@ import { getFromLS, setToLS } from "@/lib/storage";
 /** Top-level pages, in tab order (same order as the CLI's header). */
 export const pages = [
 	{ id: "terminal", key: "t", label: "Terminal" },
+	{ id: "chat", key: "c", label: "Chat" },
 	{ id: "join", key: "j", label: "Join room" },
 	{ id: "faq", key: "f", label: "FAQ" },
 	{ id: "settings", key: "s", label: "Settings" },
