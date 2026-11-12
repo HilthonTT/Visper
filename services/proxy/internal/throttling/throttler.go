@@ -17,7 +17,9 @@ type Throttler struct {
 	now    func() time.Time
 
 	mu      sync.Mutex
-	counts  map[string]int // current-span counts, synced to Redis at span end
+	slot    int                // ring position of the current span
+	windows map[string]*window // local sliding-window usage per key
+	pending map[string]int     // current-span counts not yet synced to Redis
 	blocked map[string]time.Time
 
 	nodes    nodeEstimator
@@ -33,7 +35,8 @@ func New(cfg Config, client redis.UniversalClient) *Throttler {
 		span:    span,
 		client:  client,
 		now:     time.Now,
-		counts:  make(map[string]int),
+		windows: make(map[string]*window),
+		pending: make(map[string]int),
 		blocked: make(map[string]time.Time),
 		nodes:   newNodeEstimator(),
 	}
@@ -43,7 +46,7 @@ func New(cfg Config, client redis.UniversalClient) *Throttler {
 func (t *Throttler) Name() string { return t.cfg.Name }
 
 // Allow records weight requests for key and reports whether they are
-// allowed. When they are not, it also returns the cooldown to wait.
+// allowed. When they are not, it also returns how long key stays blocked.
 func (t *Throttler) Allow(key string, weight int) (bool, time.Duration) {
 	if weight <= 0 {
 		weight = 1
@@ -51,27 +54,46 @@ func (t *Throttler) Allow(key string, weight int) (bool, time.Duration) {
 	limit := max(1, int(float64(t.cfg.MaxRequests)/math.Max(1, t.nodes.get())))
 	now := t.now()
 
-	// A single critical section avoids a check-then-increment race.
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if until, ok := t.blocked[key]; ok {
 		if now.Before(until) {
-			return false, t.cfg.Cooldown
+			return false, until.Sub(now)
 		}
 		delete(t.blocked, key)
 	}
 
-	t.counts[key] += weight
-	if t.counts[key] > limit {
-		t.blocked[key] = now.Add(t.cfg.Cooldown)
-		return false, t.cfg.Cooldown
+	w := t.windows[key]
+	used := 0
+	if w != nil {
+		used = w.total
 	}
+	if used+weight > limit {
+		// Denied requests do not consume quota.
+		return false, t.blockLocked(key, now)
+	}
+	if w == nil {
+		w = newWindow(t.cfg.Spans)
+		t.windows[key] = w
+	}
+	w.add(t.slot, weight)
+	t.pending[key] += weight
 	return true, 0
 }
 
-// Start aligns to span boundaries, then syncs with Redis once per span
-// until ctx is done.
+// blockLocked blocks key for the cooldown and returns the block duration.
+// When the cooldown is shorter than a span the key would be blocked again
+// right away by its window anyway, so a zero cooldown still blocks for one
+// span to give clients a meaningful Retry-After.
+func (t *Throttler) blockLocked(key string, now time.Time) time.Duration {
+	d := max(t.cfg.Cooldown, t.span)
+	t.blocked[key] = now.Add(d)
+	return d
+}
+
+// Start aligns to span boundaries, then rotates the window and syncs with
+// Redis once per span until ctx is done.
 func (t *Throttler) Start(ctx context.Context) error {
 	now := t.now()
 	span := int64(t.span)
@@ -98,14 +120,20 @@ func (t *Throttler) Start(ctx context.Context) error {
 	}
 }
 
-// endSpan runs at a span boundary: it resets the span counts, drops expired
-// blocks and pushes the finished span's counts to Redis.
+// endSpan runs at a span boundary: it advances every key's sliding window,
+// drops expired blocks and pushes the finished span's counts to Redis.
 func (t *Throttler) endSpan(ctx context.Context) {
 	now := t.now()
 
 	t.mu.Lock()
-	counts := t.counts
-	t.counts = make(map[string]int)
+	counts := t.pending
+	t.pending = make(map[string]int)
+	t.slot = (t.slot + 1) % t.cfg.Spans
+	for key, w := range t.windows {
+		if w.clear(t.slot); w.total <= 0 {
+			delete(t.windows, key)
+		}
+	}
 	for key, until := range t.blocked {
 		if !now.Before(until) {
 			delete(t.blocked, key)
@@ -120,21 +148,11 @@ func (t *Throttler) endSpan(ctx context.Context) {
 	lastSpan := (mid/int64(t.span))%int64(t.cfg.Spans) == int64(t.cfg.Spans-1)
 
 	t.updateNodeEstimate(ctx, counts, interval, lastSpan)
-	if len(counts) == 0 || t.sync(ctx, counts, interval) {
-		return
-	}
-
-	// Redis unavailable: fall back to a per-span local threshold.
-	threshold := max(1, t.cfg.MaxRequests/t.cfg.Spans)
-	for key, n := range counts {
-		if n > threshold {
-			t.block(key)
-		}
-	}
+	t.sync(ctx, counts, interval)
 }
 
 func (t *Throttler) block(key string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.blocked[key] = t.now().Add(t.cfg.Cooldown)
+	t.blockLocked(key, t.now())
 }

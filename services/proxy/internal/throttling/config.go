@@ -1,11 +1,12 @@
-// Package throttling implements rate limiting that is enforced locally on
-// every request and, when Redis is available, shared across proxy instances.
+// Package throttling implements sliding-window rate limiting that is
+// enforced locally on every request and, when Redis is available, shared
+// across proxy instances.
 //
-// Requests are counted per key for the current span (Interval / Spans). At
-// every span boundary the counts are added to a per-interval Redis counter;
-// any key whose global count exceeds MaxRequests is blocked for Cooldown.
-// Between syncs each instance limits a key to its estimated share
-// (MaxRequests / number of instances).
+// Each key's local usage is kept in a ring of Spans counters covering one
+// Interval. At every span boundary the counts of the span that just ended are
+// added to a per-interval Redis counter; any key whose global count exceeds
+// MaxRequests is blocked for Cooldown. Between syncs each instance limits a
+// key to its estimated share (MaxRequests / number of instances).
 package throttling
 
 import "time"
@@ -21,10 +22,10 @@ type Config struct {
 	// MaxRequests is the number of requests (weights) allowed per key per Interval.
 	MaxRequests int
 	Interval    time.Duration
-	// Spans is the number of sub-windows per Interval; it sets how often
-	// counts are synced to Redis.
+	// Spans is the number of sub-windows per Interval; it sets both the
+	// sliding-window granularity and how often counts are synced to Redis.
 	Spans int
-	// Cooldown is how long a key stays blocked once over its limit.
+	// Cooldown is the minimum time a key stays blocked once over its limit.
 	Cooldown time.Duration
 }
 

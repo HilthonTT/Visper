@@ -17,11 +17,11 @@ func (t *Throttler) redisKey(key string, interval int64) string {
 }
 
 // sync adds counts to the global per-interval counters in Redis and blocks
-// every key whose global total exceeds the limit. It reports whether Redis
-// was configured and reachable.
-func (t *Throttler) sync(ctx context.Context, counts map[string]int, interval int64) bool {
-	if t.client == nil {
-		return false
+// every key whose global total exceeds the limit. When Redis is unreachable
+// the local sliding windows keep enforcing each node's share of the limit.
+func (t *Throttler) sync(ctx context.Context, counts map[string]int, interval int64) {
+	if t.client == nil || len(counts) == 0 {
+		return
 	}
 
 	keys := make([]string, 0, len(counts))
@@ -35,14 +35,13 @@ func (t *Throttler) sync(ctx context.Context, counts map[string]int, interval in
 	}
 	_, err := pipe.Exec(ctx)
 	if t.redisErr.report(t.cfg.Name, err) {
-		return false
+		return
 	}
 	for i, cmd := range cmds {
 		if total, err := cmd.Result(); err == nil && total > int64(t.cfg.MaxRequests) {
 			t.block(keys[i])
 		}
 	}
-	return true
 }
 
 // updateNodeEstimate infers how many proxy instances share the limit by
@@ -136,7 +135,7 @@ func (h *redisHealth) report(name string, err error) bool {
 	defer h.mu.Unlock()
 	switch {
 	case err != nil && !h.down:
-		log.Printf("throttler %q: redis unavailable, falling back to local limits: %v", name, err)
+		log.Printf("throttler %q: redis unavailable, enforcing local limits only: %v", name, err)
 	case err == nil && h.down:
 		log.Printf("throttler %q: redis available again", name)
 	}

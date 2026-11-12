@@ -20,6 +20,12 @@ func newTestThrottler(cfg Config) (*Throttler, *fakeClock) {
 	return th, clock
 }
 
+// nextSpan advances the clock by one span and runs the span boundary work.
+func nextSpan(th *Throttler, clock *fakeClock) {
+	clock.Advance(th.span)
+	th.endSpan(context.Background())
+}
+
 func TestConfigNormalize(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -74,61 +80,82 @@ func TestAllow(t *testing.T) {
 	}
 }
 
-func TestCooldownExpires(t *testing.T) {
-	th, clock := newTestThrottler(Config{MaxRequests: 1, Interval: time.Minute, Spans: 1, Cooldown: 10 * time.Second})
-	ctx := context.Background()
+// Regression: the local limit used to apply to a single span, so a client
+// could send MaxRequests every span (Spans times the limit per interval).
+func TestLimitCoversWholeInterval(t *testing.T) {
+	th, clock := newTestThrottler(Config{MaxRequests: 6, Interval: time.Minute, Spans: 6})
+	for i := range 6 {
+		if ok, _ := th.Allow("ip", 1); !ok {
+			t.Fatalf("request %d denied under limit", i)
+		}
+	}
+	for span := 1; span < 6; span++ {
+		nextSpan(th, clock)
+		if ok, _ := th.Allow("ip", 1); ok {
+			t.Fatalf("span %d: request allowed although the interval's quota is used up", span)
+		}
+	}
+	nextSpan(th, clock) // the span holding the original requests slides out
+	if ok, _ := th.Allow("ip", 1); !ok {
+		t.Fatal("request denied after the window slid past the old requests")
+	}
+}
+
+func TestCooldownAndRetryAfter(t *testing.T) {
+	th, clock := newTestThrottler(Config{MaxRequests: 1, Interval: 2 * time.Second, Spans: 2, Cooldown: 10 * time.Second})
 
 	if ok, _ := th.Allow("ip", 1); !ok {
 		t.Fatal("first request should pass")
 	}
-	if ok, retry := th.Allow("ip", 1); ok || retry != 10*time.Second {
-		t.Fatalf("second request: ok=%v retry=%v, want throttled for 10s", ok, retry)
+	ok, retry := th.Allow("ip", 1)
+	if ok || retry != 10*time.Second {
+		t.Fatalf("second request: ok=%v retry=%v, want denied for 10s", ok, retry)
 	}
 	if ok, _ := th.Allow("other", 1); !ok {
 		t.Fatal("other keys must not be affected")
 	}
 
-	clock.Advance(5 * time.Second)
-	if ok, _ := th.Allow("ip", 1); ok {
-		t.Fatal("still in cooldown")
+	clock.Advance(4 * time.Second)
+	if ok, retry := th.Allow("ip", 1); ok || retry != 6*time.Second {
+		t.Fatalf("in cooldown: ok=%v retry=%v, want denied for 6s", ok, retry)
 	}
 
-	clock.Advance(time.Minute)
-	// Resets counters; the span total for "ip" (2) exceeded the local
-	// fallback threshold, so it is blocked for one more cooldown.
-	th.endSpan(ctx)
-	if ok, _ := th.Allow("ip", 1); ok {
-		t.Fatal("over-limit key should be re-blocked at span end")
+	// The window has long drained; only the cooldown remained.
+	for range 6 {
+		nextSpan(th, clock)
 	}
-
-	clock.Advance(time.Minute)
-	th.endSpan(ctx) // nothing counted this span; cleans expired blocks
 	if ok, _ := th.Allow("ip", 1); !ok {
-		t.Fatal("request should pass after cooldown and span reset")
-	}
-	th.mu.Lock()
-	defer th.mu.Unlock()
-	if len(th.blocked) != 0 {
-		t.Fatalf("blocked map not cleaned: %v", th.blocked)
+		t.Fatal("request should pass after cooldown")
 	}
 }
 
-func TestEndSpanLocalFallbackBlocks(t *testing.T) {
-	// No Redis: a key that exceeds MaxRequests/Spans within a span is blocked.
-	th, _ := newTestThrottler(Config{MaxRequests: 60, Interval: time.Minute, Spans: 6, Cooldown: time.Minute})
-	for range 11 {
-		th.Allow("busy", 1)
+func TestDeniedRequestsDoNotConsumeQuota(t *testing.T) {
+	th, clock := newTestThrottler(Config{MaxRequests: 2, Interval: time.Minute, Spans: 6, Cooldown: 0})
+	th.Allow("ip", 1)
+	th.Allow("ip", 1)
+	for range 50 {
+		th.Allow("ip", 1) // denied
 	}
-	for range 5 {
-		th.Allow("quiet", 1)
+	for range 6 {
+		nextSpan(th, clock)
 	}
-	th.endSpan(context.Background())
+	if ok, _ := th.Allow("ip", 1); !ok {
+		t.Fatal("denied requests kept the key over its limit")
+	}
+}
 
-	if ok, _ := th.Allow("busy", 1); ok {
-		t.Fatal("busy key should be blocked after span")
+func TestEndSpanForgetsIdleKeys(t *testing.T) {
+	th, clock := newTestThrottler(Config{MaxRequests: 1, Interval: time.Minute, Spans: 3, Cooldown: time.Second})
+	th.Allow("a", 1)
+	th.Allow("a", 1) // blocked
+	th.Allow("b", 1)
+	for range 3 {
+		nextSpan(th, clock)
 	}
-	if ok, _ := th.Allow("quiet", 1); !ok {
-		t.Fatal("quiet key should not be blocked")
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	if len(th.windows) != 0 || len(th.blocked) != 0 || len(th.pending) != 0 {
+		t.Fatalf("state not cleaned: windows=%v blocked=%v pending=%v", th.windows, th.blocked, th.pending)
 	}
 }
 
