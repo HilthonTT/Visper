@@ -60,10 +60,10 @@ func TestProxyForwardsRequest(t *testing.T) {
 	}
 }
 
-func TestProxyTrustedForwardedFor(t *testing.T) {
-	got := make(chan string, 1)
+func TestProxyKeepsTrustedForwardedHeaders(t *testing.T) {
+	got := make(chan http.Header, 1)
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got <- r.Header.Get("X-Forwarded-For")
+		got <- r.Header.Clone()
 	}))
 	defer backend.Close()
 
@@ -73,13 +73,22 @@ func TestProxyTrustedForwardedFor(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodGet, front.URL, nil)
 	req.Header.Set("X-Forwarded-For", "198.51.100.9")
+	req.Header.Set("X-Forwarded-Proto", "https") // set by a TLS terminator in front
+	req.Header.Set("X-Forwarded-Host", "visper.example")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if xff := <-got; xff != "198.51.100.9, 127.0.0.1" {
-		t.Fatalf("X-Forwarded-For = %q", xff)
+	h := <-got
+	if xff := h.Get("X-Forwarded-For"); xff != "198.51.100.9, 127.0.0.1" {
+		t.Errorf("X-Forwarded-For = %q", xff)
+	}
+	if p := h.Get("X-Forwarded-Proto"); p != "https" {
+		t.Errorf("X-Forwarded-Proto = %q, want https", p)
+	}
+	if host := h.Get("X-Forwarded-Host"); host != "visper.example" {
+		t.Errorf("X-Forwarded-Host = %q, want visper.example", host)
 	}
 }
 

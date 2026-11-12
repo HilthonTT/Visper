@@ -41,14 +41,27 @@ func (lb *LoadBalancer) newReverseProxy(b *Backend) *httputil.ReverseProxy {
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(b.URL) // also sets the outbound Host to the target host
 			pr.SetXForwarded()
-			if prior := pr.In.Header.Values("X-Forwarded-For"); len(prior) > 0 && lb.trustForwarded(pr.In) {
-				pr.Out.Header.Set("X-Forwarded-For",
-					strings.Join(prior, ", ")+", "+pr.Out.Header.Get("X-Forwarded-For"))
+			if lb.trustForwarded(pr.In) {
+				keepForwarded(pr)
 			}
 			pr.Out.Header.Set("X-Real-IP", lb.clientIP(pr.In))
 		},
 		Transport:    lb.transport,
 		ErrorHandler: lb.proxyErrorHandler(b),
+	}
+}
+
+// keepForwarded preserves the X-Forwarded-* headers set by a trusted proxy in
+// front of this one (e.g. a TLS terminator) instead of overwriting them.
+func keepForwarded(pr *httputil.ProxyRequest) {
+	in, out := pr.In.Header, pr.Out.Header
+	if prior := in.Values("X-Forwarded-For"); len(prior) > 0 {
+		out.Set("X-Forwarded-For", strings.Join(prior, ", ")+", "+out.Get("X-Forwarded-For"))
+	}
+	for _, h := range []string{"X-Forwarded-Proto", "X-Forwarded-Host"} {
+		if v := in.Get(h); v != "" {
+			out.Set(h, v)
+		}
 	}
 }
 
