@@ -1,20 +1,13 @@
+// Package balancer implements the HTTP(S)/WebSocket load balancer: backend
+// selection strategies, active health checks, passive failure detection and
+// hot reloading of the backend set.
 package balancer
 
 import (
-	"context"
-	"errors"
-	"fmt"
-	"hash/fnv"
-	"io"
 	"log"
-	"math/rand/v2"
 	"net"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
-	"slices"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -22,135 +15,40 @@ import (
 	"github.com/hilthontt/visper/services/proxy/internal/metrics"
 )
 
-// Strategy represents a load balancing strategy
-type Strategy int
-
-const (
-	RoundRobin Strategy = iota
-	LeastConnections
-	IPHash
-	Random
-	WeightedRoundRobin
-)
-
-// ParseStrategy converts a strategy string to a Strategy enum
-func ParseStrategy(s string) (Strategy, error) {
-	switch s {
-	case "round_robin":
-		return RoundRobin, nil
-	case "least_connections":
-		return LeastConnections, nil
-	case "ip_hash":
-		return IPHash, nil
-	case "random":
-		return Random, nil
-	case "weighted_round_robin":
-		return WeightedRoundRobin, nil
-	default:
-		return 0, fmt.Errorf("unknown strategy: %s", s)
-	}
-}
-
-// Backend represents a server to forward requests to
-type Backend struct {
-	URL          *url.URL
-	ReverseProxy *httputil.ReverseProxy
-
-	mux         sync.RWMutex
-	alive       bool
-	failCount   int
-	connections int
-	weight      int // guarded by LoadBalancer.mux
-}
-
-// SetAlive updates the alive status of the backend
-func (b *Backend) SetAlive(alive bool) {
-	b.mux.Lock()
-	b.alive = alive
-	if alive {
-		b.failCount = 0
-	}
-	b.mux.Unlock()
-}
-
-// IsAlive returns true if the backend is alive
-func (b *Backend) IsAlive() bool {
-	b.mux.RLock()
-	defer b.mux.RUnlock()
-	return b.alive
-}
-
-// ResetFailCount resets the failure count of the backend
-func (b *Backend) ResetFailCount() {
-	b.mux.Lock()
-	b.failCount = 0
-	b.mux.Unlock()
-}
-
-// IncreaseFailCount increases the failure count of the backend
-func (b *Backend) IncreaseFailCount() int {
-	b.mux.Lock()
-	defer b.mux.Unlock()
-	b.failCount++
-	return b.failCount
-}
-
-// Connections returns the number of in-flight requests to the backend.
-func (b *Backend) Connections() int {
-	b.mux.RLock()
-	defer b.mux.RUnlock()
-	return b.connections
-}
-
-func (b *Backend) addConnections(delta int) {
-	b.mux.Lock()
-	b.connections += delta
-	b.mux.Unlock()
-}
-
-// Options configures a LoadBalancer.
+// Options holds the load balancer's collaborators. All fields are optional.
 type Options struct {
-	Strategy            Strategy
-	HealthCheckInterval time.Duration
-	HealthCheckPath     string
-	MaxFailCount        int
-	Metrics             *metrics.Metrics
+	Metrics *metrics.Metrics
 	// ClientIP returns the real client IP (used by IPHash and X-Real-IP).
+	// Defaults to the host part of RemoteAddr.
 	ClientIP func(*http.Request) string
-	// TrustForwarded reports whether the request's X-Forwarded-For header
-	// came from a trusted proxy and may be extended rather than replaced.
+	// TrustForwarded reports whether the request's X-Forwarded-* headers
+	// came from a trusted proxy and may be kept rather than replaced.
 	TrustForwarded func(*http.Request) bool
 }
 
-// LoadBalancer represents the load balancer
+// LoadBalancer is an http.Handler that proxies each request to a backend.
 type LoadBalancer struct {
-	mux                 sync.Mutex
-	backends            []*Backend
-	current             int
-	healthCheckInterval time.Duration
-	healthCheckPath     string
-	maxFailCount        int
-	strategy            Strategy
-
 	metrics        *metrics.Metrics
 	clientIP       func(*http.Request) string
 	trustForwarded func(*http.Request) bool
 	transport      http.RoundTripper
 	healthClient   *http.Client
-	intervalReset  chan struct{}
+	// intervalReset wakes the health-check loop when a reload changes the
+	// interval.
+	intervalReset chan struct{}
+
+	mu                  sync.Mutex
+	backends            []*Backend
+	next                int // round-robin cursor
+	strategy            Strategy
+	healthCheckInterval time.Duration
+	healthCheckPath     string
+	maxFailCount        int
 }
 
-// New creates a new load balancer. Call RunHealthChecks to start health checks.
-func New(backends []config.BackendConfig, opts Options) (*LoadBalancer, error) {
-	if opts.HealthCheckInterval <= 0 {
-		opts.HealthCheckInterval = config.DefaultHealthCheckInterval
-	}
-	if opts.HealthCheckPath == "" {
-		opts.HealthCheckPath = config.DefaultHealthCheckPath
-	}
-	if opts.MaxFailCount <= 0 {
-		opts.MaxFailCount = config.DefaultMaxFailCount
-	}
+// New creates a load balancer for cfg. Call RunHealthChecks to start active
+// health checks.
+func New(cfg *config.Config, opts Options) (*LoadBalancer, error) {
 	if opts.Metrics == nil {
 		opts.Metrics = metrics.New("loadBalancer", nil)
 	}
@@ -162,242 +60,77 @@ func New(backends []config.BackendConfig, opts Options) (*LoadBalancer, error) {
 	}
 
 	lb := &LoadBalancer{
-		healthCheckInterval: opts.HealthCheckInterval,
-		healthCheckPath:     opts.HealthCheckPath,
-		maxFailCount:        opts.MaxFailCount,
-		strategy:            opts.Strategy,
-		metrics:             opts.Metrics,
-		clientIP:            opts.ClientIP,
-		trustForwarded:      opts.TrustForwarded,
-		transport:           newTransport(),
-		healthClient: &http.Client{
-			Transport: &http.Transport{
-				Proxy: http.ProxyFromEnvironment,
-				DialContext: (&net.Dialer{
-					Timeout:   2 * time.Second,
-					KeepAlive: 30 * time.Second,
-				}).DialContext,
-				MaxIdleConns:          100,
-				IdleConnTimeout:       90 * time.Second,
-				TLSHandshakeTimeout:   2 * time.Second,
-				ExpectContinueTimeout: 1 * time.Second,
-			},
-			Timeout: 3 * time.Second,
-		},
-		intervalReset: make(chan struct{}, 1),
+		metrics:        opts.Metrics,
+		clientIP:       opts.ClientIP,
+		trustForwarded: opts.TrustForwarded,
+		transport:      newProxyTransport(),
+		healthClient:   newHealthClient(),
+		intervalReset:  make(chan struct{}, 1),
 	}
-
-	built, err := lb.buildBackends(backends, nil)
-	if err != nil {
+	if err := lb.apply(cfg); err != nil {
 		return nil, err
 	}
-	lb.backends = built
 	return lb, nil
-}
-
-// buildBackends creates backends for cfgs, reusing entries from existing that
-// have the same URL so their health state and connections are preserved.
-func (lb *LoadBalancer) buildBackends(cfgs []config.BackendConfig, existing []*Backend) ([]*Backend, error) {
-	if len(cfgs) == 0 {
-		return nil, errors.New("at least one backend is required")
-	}
-	byURL := make(map[string]*Backend, len(existing))
-	for _, b := range existing {
-		byURL[b.URL.String()] = b
-	}
-
-	backends := make([]*Backend, len(cfgs))
-	weights := make([]int, len(cfgs))
-	for i, c := range cfgs {
-		weight := c.Weight
-		if weight <= 0 {
-			weight = 1 // Default weight
-		}
-		u, err := url.Parse(c.URL)
-		if err != nil {
-			return nil, fmt.Errorf("invalid backend url %q: %w", c.URL, err)
-		}
-		if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return nil, fmt.Errorf("invalid backend url %q: must be absolute http(s) URL", c.URL)
-		}
-		weights[i] = weight
-		if b, ok := byURL[u.String()]; ok {
-			backends[i] = b
-			continue
-		}
-		b := &Backend{URL: u, alive: true}
-		b.ReverseProxy = lb.newReverseProxy(b)
-		backends[i] = b
-	}
-	// Only touch shared state once the whole config is known to be valid, so
-	// a failed Reload leaves live backends' weights and metrics untouched.
-	for i, b := range backends {
-		b.weight = weights[i]
-		if _, reused := byURL[b.URL.String()]; !reused {
-			lb.metrics.BackendUpGauge.WithLabelValues(b.URL.Host).Set(1)
-		}
-	}
-	return backends, nil
-}
-
-// Reload replaces the load balancer configuration, keeping backends whose URL
-// is unchanged.
-func (lb *LoadBalancer) Reload(cfg *config.Config) error {
-	strategy, err := ParseStrategy(cfg.Strategy)
-	if err != nil {
-		return fmt.Errorf("invalid strategy: %w", err)
-	}
-
-	lb.mux.Lock()
-	backends, err := lb.buildBackends(cfg.Backends, lb.backends)
-	if err != nil {
-		lb.mux.Unlock()
-		return err
-	}
-	removed := make(map[*Backend]struct{}, len(lb.backends))
-	for _, b := range lb.backends {
-		removed[b] = struct{}{}
-	}
-	for _, b := range backends {
-		delete(removed, b)
-	}
-	lb.backends = backends
-	lb.current = 0
-	lb.strategy = strategy
-	if cfg.MaxFailCount > 0 {
-		lb.maxFailCount = cfg.MaxFailCount
-	}
-	if cfg.HealthCheckPath != "" {
-		lb.healthCheckPath = cfg.HealthCheckPath
-	}
-	if d := time.Duration(cfg.HealthCheckInterval); d > 0 && d != lb.healthCheckInterval {
-		lb.healthCheckInterval = d
-		select {
-		case lb.intervalReset <- struct{}{}:
-		default:
-		}
-	}
-	lb.mux.Unlock()
-
-	for b := range removed {
-		lb.metrics.BackendUpGauge.DeleteLabelValues(b.URL.Host)
-	}
-
-	log.Printf("Configuration reloaded with %d backends and strategy: %s", len(backends), cfg.Strategy)
-	return nil
 }
 
 // Backends returns a snapshot of the current backends.
 func (lb *LoadBalancer) Backends() []*Backend {
-	lb.mux.Lock()
-	defer lb.mux.Unlock()
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
 	return append([]*Backend(nil), lb.backends...)
 }
 
-func (lb *LoadBalancer) chooseBackendByStrategy(r *http.Request) *Backend {
-	lb.mux.Lock()
-	defer lb.mux.Unlock()
-
-	switch lb.strategy {
-	case LeastConnections:
-		return lb.leastConnectionsSelect()
-	case IPHash:
-		return lb.ipHashSelect(r)
-	case Random:
-		return lb.randomSelect()
-	case WeightedRoundRobin:
-		return lb.weightedSelect()
-	default:
-		return lb.roundRobinSelect()
-	}
-}
-
-// roundRobinSelect selects a backend using round-robin algorithm.
-// Must be called with lb.mux held.
-func (lb *LoadBalancer) roundRobinSelect() *Backend {
-	n := len(lb.backends)
-	for i := range n {
-		idx := (lb.current + i) % n
-		if lb.backends[idx].IsAlive() {
-			lb.current = (idx + 1) % n
-			return lb.backends[idx]
-		}
-	}
-	return nil
-}
-
-// leastConnectionsSelect selects the backend with the least active connections
-func (lb *LoadBalancer) leastConnectionsSelect() *Backend {
-	var leastConnBackend *Backend
-	leastConn := -1
-
-	for _, b := range lb.backends {
-		if !b.IsAlive() {
-			continue
-		}
-		if connCount := b.Connections(); leastConn == -1 || connCount < leastConn {
-			leastConn = connCount
-			leastConnBackend = b
-		}
+// ServeHTTP proxies r to a backend chosen by the configured strategy.
+func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	backend := lb.pick(r)
+	if backend == nil {
+		lb.metrics.RequestCount.WithLabelValues("none", "503", r.Method).Inc()
+		w.Header().Set("Retry-After", "5")
+		http.Error(w, "No available backends", http.StatusServiceUnavailable)
+		return
 	}
 
-	return leastConnBackend
-}
+	label := backend.label()
+	start := time.Now()
 
-// ipHashSelect selects a backend based on client IP hash
-func (lb *LoadBalancer) ipHashSelect(r *http.Request) *Backend {
-	hash := fnv.New32a()
-	hash.Write([]byte(lb.clientIP(r)))
-	n := uint32(len(lb.backends))
-	idx := hash.Sum32() % n
+	backend.addConnections(1)
+	lb.metrics.ActiveConnections.WithLabelValues(label).Inc()
+	defer func() {
+		// Runs for WebSockets too, once the upgraded connection closes.
+		backend.addConnections(-1)
+		lb.metrics.ActiveConnections.WithLabelValues(label).Dec()
+	}()
 
-	// Find the selected backend or next available
-	for i := range n {
-		if b := lb.backends[(idx+i)%n]; b.IsAlive() {
-			return b
-		}
-	}
-	return nil
-}
-
-// randomSelect randomly selects an alive backend
-func (lb *LoadBalancer) randomSelect() *Backend {
-	var alive []*Backend
-	for _, b := range lb.backends {
-		if b.IsAlive() {
-			alive = append(alive, b)
-		}
-	}
-	if len(alive) == 0 {
-		return nil
-	}
-	return alive[rand.IntN(len(alive))]
-}
-
-// weightedSelect picks an alive backend with probability proportional to its
-// weight (weighted random).
-func (lb *LoadBalancer) weightedSelect() *Backend {
-	totalWeight := 0
-	for _, b := range lb.backends {
-		if b.IsAlive() {
-			totalWeight += b.weight
-		}
-	}
-	if totalWeight == 0 {
-		return nil
+	websocket := isWebSocketRequest(r)
+	if websocket {
+		// Long-lived connection: clear the server's read/write deadlines,
+		// which would otherwise survive the hijack and kill the socket.
+		rc := http.NewResponseController(w)
+		_ = rc.SetReadDeadline(time.Time{})
+		_ = rc.SetWriteDeadline(time.Time{})
 	}
 
-	target := rand.IntN(totalWeight)
-	for _, b := range lb.backends {
-		if !b.IsAlive() {
-			continue
-		}
-		target -= b.weight
-		if target < 0 {
-			return b
-		}
+	rec := newStatusRecorder(w)
+	backend.proxy.ServeHTTP(rec, r)
+
+	status := rec.status
+	if websocket && !rec.wroteHeader {
+		// ReverseProxy writes the 101 directly to the hijacked connection.
+		status = http.StatusSwitchingProtocols
 	}
-	return nil
+
+	lb.metrics.RequestCount.WithLabelValues(label, strconv.Itoa(status), r.Method).Inc()
+	if !websocket {
+		d := time.Since(start).Seconds()
+		lb.metrics.RequestDuration.WithLabelValues(label).Observe(d)
+		lb.metrics.BackendResponseTime.WithLabelValues(label).Observe(d)
+	}
+
+	if status < http.StatusInternalServerError {
+		backend.resetFailures()
+	} else {
+		lb.metrics.BackendErrors.WithLabelValues(label, "response_error").Inc()
+	}
 }
 
 // remoteIP returns the host part of r.RemoteAddr.
@@ -409,211 +142,4 @@ func remoteIP(r *http.Request) string {
 	return ip
 }
 
-// RunHealthChecks performs health checks on all backends until ctx is done.
-func (lb *LoadBalancer) RunHealthChecks(ctx context.Context) {
-	lb.mux.Lock()
-	interval := lb.healthCheckInterval
-	lb.mux.Unlock()
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	lb.checkAll(ctx)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-lb.intervalReset:
-			lb.mux.Lock()
-			ticker.Reset(lb.healthCheckInterval)
-			lb.mux.Unlock()
-		case <-ticker.C:
-			lb.checkAll(ctx)
-		}
-	}
-}
-
-func (lb *LoadBalancer) checkAll(ctx context.Context) {
-	lb.mux.Lock()
-	backends := append([]*Backend(nil), lb.backends...)
-	path := lb.healthCheckPath
-	lb.mux.Unlock()
-
-	var wg sync.WaitGroup
-	for _, backend := range backends {
-		wg.Go(func() {
-			alive := lb.isBackendAlive(ctx, backend.URL, path)
-			backend.SetAlive(alive)
-			lb.setBackendUp(backend, alive)
-			if !alive {
-				lb.metrics.BackendErrors.WithLabelValues(backend.URL.Host, "health_check").Inc()
-			}
-		})
-	}
-	wg.Wait()
-}
-
-// setBackendUp records b's health in the backend_up gauge, unless a
-// concurrent Reload has removed b. Reload deletes a removed backend's series;
-// setting it afterwards (from an in-flight health check or proxied request)
-// would resurrect a stale series that is never cleaned up.
-func (lb *LoadBalancer) setBackendUp(b *Backend, up bool) {
-	lb.mux.Lock()
-	defer lb.mux.Unlock()
-	if !slices.Contains(lb.backends, b) {
-		return
-	}
-	v := 0.0
-	if up {
-		v = 1
-	}
-	lb.metrics.BackendUpGauge.WithLabelValues(b.URL.Host).Set(v)
-}
-
-// isBackendAlive checks if a backend is alive by making an HTTP request
-func (lb *LoadBalancer) isBackendAlive(ctx context.Context, u *url.URL, path string) bool {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.JoinPath(path).String(), nil)
-	if err != nil {
-		return false
-	}
-	resp, err := lb.healthClient.Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10)) // allow conn reuse
-	return resp.StatusCode < http.StatusInternalServerError       // Consider any non-5xx response as alive
-}
-
-// newTransport creates a transport with optimized connection pooling.
-func newTransport() *http.Transport {
-	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   10 * time.Second,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
-		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   100, // Important for load balancers
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		// HTTP/1.1 only so Upgrade (WebSocket) requests can be proxied.
-		ForceAttemptHTTP2: false,
-	}
-}
-
-// newReverseProxy builds the reverse proxy for b. Rewrite (unlike Director)
-// strips client-supplied Forwarded/X-Forwarded-* headers before they reach
-// the backend, and ReverseProxy itself removes hop-by-hop headers while
-// passing Connection: Upgrade through for WebSockets.
-func (lb *LoadBalancer) newReverseProxy(b *Backend) *httputil.ReverseProxy {
-	target := b.URL
-	return &httputil.ReverseProxy{
-		Rewrite: func(pr *httputil.ProxyRequest) {
-			pr.SetURL(target) // also sets the outbound Host to the target host
-			pr.SetXForwarded()
-			if prior := pr.In.Header.Values("X-Forwarded-For"); len(prior) > 0 && lb.trustForwarded(pr.In) {
-				pr.Out.Header.Set("X-Forwarded-For",
-					strings.Join(prior, ", ")+", "+pr.Out.Header.Get("X-Forwarded-For"))
-			}
-			pr.Out.Header.Set("X-Real-IP", lb.clientIP(pr.In))
-		},
-		Transport: lb.transport,
-		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			label := b.URL.Host
-			if errors.Is(err, context.Canceled) && r.Context().Err() != nil {
-				// The client went away; not the backend's fault.
-				w.WriteHeader(499)
-				return
-			}
-			log.Printf("proxy error for %s: %v", label, err)
-			lb.metrics.BackendErrors.WithLabelValues(label, "proxy_error").Inc()
-
-			lb.mux.Lock()
-			maxFail := lb.maxFailCount
-			lb.mux.Unlock()
-			if b.IncreaseFailCount() >= maxFail {
-				b.SetAlive(false)
-				lb.setBackendUp(b, false)
-				log.Printf("backend %s marked down after %d failures", label, maxFail)
-			}
-
-			status := http.StatusBadGateway
-			if errors.Is(err, context.DeadlineExceeded) {
-				status = http.StatusGatewayTimeout
-			}
-			http.Error(w, http.StatusText(status), status)
-		},
-	}
-}
-
-// isWebSocketRequest reports whether r asks for a WebSocket upgrade.
-func isWebSocketRequest(r *http.Request) bool {
-	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
-		return false
-	}
-	for _, v := range r.Header.Values("Connection") {
-		for _, tok := range strings.Split(v, ",") {
-			if strings.EqualFold(strings.TrimSpace(tok), "upgrade") {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// ServeHTTP implements the http.Handler interface
-func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	backend := lb.chooseBackendByStrategy(r)
-	if backend == nil {
-		lb.metrics.RequestCount.WithLabelValues("none", "503", r.Method).Inc()
-		w.Header().Set("Retry-After", "5")
-		http.Error(w, "No available backends", http.StatusServiceUnavailable)
-		return
-	}
-
-	start := time.Now()
-	backendLabel := backend.URL.Host
-
-	backend.addConnections(1)
-	lb.metrics.ActiveConnections.WithLabelValues(backendLabel).Inc()
-	defer func() {
-		// Runs for WebSockets too, once the upgraded connection closes.
-		backend.addConnections(-1)
-		lb.metrics.ActiveConnections.WithLabelValues(backendLabel).Dec()
-	}()
-
-	websocket := isWebSocketRequest(r)
-	if websocket {
-		log.Printf("WebSocket upgrade request to: %s", backendLabel)
-		// Long-lived connection: clear the server's read/write deadlines,
-		// which would otherwise survive the hijack and kill the socket.
-		rc := http.NewResponseController(w)
-		_ = rc.SetReadDeadline(time.Time{})
-		_ = rc.SetWriteDeadline(time.Time{})
-	}
-
-	wrappedWriter := metrics.NewResponseWriter(w)
-	backend.ReverseProxy.ServeHTTP(wrappedWriter, r)
-
-	statusCode := wrappedWriter.StatusCode
-	if websocket && !wrappedWriter.WroteHeader() {
-		// ReverseProxy writes the 101 directly to the hijacked connection.
-		statusCode = http.StatusSwitchingProtocols
-	}
-
-	lb.metrics.RequestCount.WithLabelValues(backendLabel, strconv.Itoa(statusCode), r.Method).Inc()
-	if !websocket {
-		duration := time.Since(start).Seconds()
-		lb.metrics.RequestDuration.WithLabelValues(backendLabel).Observe(duration)
-		lb.metrics.BackendResponseTime.WithLabelValues(backendLabel).Observe(duration)
-	}
-
-	// Reset fail count on successful request
-	if statusCode < http.StatusInternalServerError {
-		backend.ResetFailCount()
-	} else {
-		lb.metrics.BackendErrors.WithLabelValues(backendLabel, "response_error").Inc()
-	}
-}
+func logf(format string, args ...any) { log.Printf("balancer: "+format, args...) }

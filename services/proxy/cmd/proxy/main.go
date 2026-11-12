@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/hilthontt/visper/services/proxy/internal/balancer"
 	"github.com/hilthontt/visper/services/proxy/internal/clientip"
@@ -34,11 +33,6 @@ func run() error {
 		return err
 	}
 
-	strategy, err := balancer.ParseStrategy(cfg.LB.Strategy)
-	if err != nil {
-		return err
-	}
-
 	ipResolver, err := clientip.NewResolver(cfg.TrustedProxies)
 	if err != nil {
 		return err
@@ -47,14 +41,10 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	lb, err := balancer.New(cfg.LB.Backends, balancer.Options{
-		Strategy:            strategy,
-		HealthCheckInterval: time.Duration(cfg.LB.HealthCheckInterval),
-		HealthCheckPath:     cfg.LB.HealthCheckPath,
-		MaxFailCount:        cfg.LB.MaxFailCount,
-		Metrics:             metrics.New("loadBalancer", prometheus.DefaultRegisterer),
-		ClientIP:            ipResolver.ClientIP,
-		TrustForwarded:      ipResolver.TrustsPeer,
+	lb, err := balancer.New(&cfg.LB, balancer.Options{
+		Metrics:        metrics.New("loadBalancer", prometheus.DefaultRegisterer),
+		ClientIP:       ipResolver.ClientIP,
+		TrustForwarded: ipResolver.TrustsPeer,
 	})
 	if err != nil {
 		return err
