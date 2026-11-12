@@ -24,7 +24,8 @@ var helpSections = []helpSection{
 	{"In a room", []keyHint{
 		{"enter", "send message"},
 		{"pgup/pgdn", "scroll history"},
-		{"ctrl+e", "edit / delete your messages"},
+		{"ctrl+e", "select a message: reply, react, edit"},
+		{"ctrl+f", "search messages"},
 		{"ctrl+u", "share an image"},
 		{"ctrl+a", "rewrite draft with AI"},
 		{"ctrl+s", "search members"},

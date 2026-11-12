@@ -80,17 +80,19 @@ func (m model) sendMessage() (model, tea.Cmd) {
 		return m.toast(theme.ToneWarning, limitText)
 	}
 
+	replyTo := m.state.chat.social.replyTo
+	m.state.chat.social.replyTo = ""
 	m.state.chat.messageInput.SetValue("")
 	m.state.chat.viewport.GotoBottom()
 	m.state.chat.unread = 0
-	return m, m.sendContent("send message", content)
+	return m, m.sendContent("send message", content, replyTo)
 }
 
-// sendContent posts a message; the SDK encrypts it (and sets the encrypted
-// flag) when the room has a key.
-func (m model) sendContent(action, content string) tea.Cmd {
+// sendContent posts a message, answering replyTo if set; the SDK encrypts it
+// (and sets the encrypted flag) when the room has a key.
+func (m model) sendContent(action, content, replyTo string) tea.Cmd {
 	return m.roomRequest(action, func(ctx context.Context, c *apisdk.Client, roomID string, opts []option.RequestOption) error {
-		_, err := c.Message.Send(ctx, roomID, apisdk.SendMessageParams{Content: content}, opts...)
+		_, err := c.Message.Send(ctx, roomID, apisdk.SendMessageParams{Content: content, ReplyToID: replyTo}, opts...)
 		return err
 	})
 }

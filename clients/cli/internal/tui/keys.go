@@ -26,6 +26,7 @@ type keyMap struct {
 	NewJoinCode     key.Binding
 	ToggleSearch    key.Binding
 	EditMessages    key.Binding
+	SearchMessages  key.Binding
 	ShareImage      key.Binding
 	AIRewrite       key.Binding
 	Invite          key.Binding
@@ -53,7 +54,8 @@ var keys = keyMap{
 	LeaveRoom:       key.NewBinding(key.WithKeys("ctrl+b"), key.WithHelp("ctrl+b", "leave room")),
 	NewJoinCode:     key.NewBinding(key.WithKeys("ctrl+n"), key.WithHelp("ctrl+n", "new join code")),
 	ToggleSearch:    key.NewBinding(key.WithKeys("ctrl+s"), key.WithHelp("ctrl+s", "search members")),
-	EditMessages:    key.NewBinding(key.WithKeys("ctrl+e"), key.WithHelp("ctrl+e", "edit messages")),
+	EditMessages:    key.NewBinding(key.WithKeys("ctrl+e"), key.WithHelp("ctrl+e", "select a message")),
+	SearchMessages:  key.NewBinding(key.WithKeys("ctrl+f"), key.WithHelp("ctrl+f", "search messages")),
 	ShareImage:      key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("ctrl+u", "share an image")),
 	AIRewrite:       key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("ctrl+a", "rewrite with AI")),
 	Invite:          key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "QR invite")),

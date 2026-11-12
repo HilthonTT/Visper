@@ -24,39 +24,6 @@ func (m model) messageContent(messageID string) string {
 	return ""
 }
 
-// lastOwnMessage returns the index of the user's latest message, or -1.
-func (m model) lastOwnMessage() int {
-	msgs := m.state.chat.messages
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if m.isCurrentUser(msgs[i].UserID) {
-			return i
-		}
-	}
-	return -1
-}
-
-// nextOwnMessage returns the index of the user's first message after i, or i.
-func (m model) nextOwnMessage(i int) int {
-	msgs := m.state.chat.messages
-	for j := i + 1; j < len(msgs); j++ {
-		if m.isCurrentUser(msgs[j].UserID) {
-			return j
-		}
-	}
-	return i
-}
-
-// prevOwnMessage returns the index of the user's last message before i, or i.
-func (m model) prevOwnMessage(i int) int {
-	msgs := m.state.chat.messages
-	for j := min(i, len(msgs)) - 1; j >= 0; j-- {
-		if m.isCurrentUser(msgs[j].UserID) {
-			return j
-		}
-	}
-	return i
-}
-
 // ---------------------------------------------------------------------------
 // Rendering
 
@@ -101,7 +68,14 @@ func (m model) renderMessagesWithSelection() (string, int, int) {
 	for i := range c.messages {
 		msg := c.messages[i]
 		isOwn := m.isCurrentUser(msg.UserID)
-		selected := c.edit.active && isOwn && i == c.edit.selected
+		var label string
+		switch {
+		case c.edit.active && i == c.edit.selected:
+			label = "◂ selected"
+		case i == c.social.search.current():
+			label = "◂ " + c.social.search.status()
+		}
+		selected := label != ""
 		newDay := prev == nil || dayLabel(prev.CreatedAt) != dayLabel(msg.CreatedAt)
 
 		if newDay {
@@ -122,16 +96,16 @@ func (m model) renderMessagesWithSelection() (string, int, int) {
 			if prev != nil {
 				lines = append(lines, "")
 			}
-			lines = append(lines, m.messageHeader(msg, isOwn, selected))
+			lines = append(lines, m.messageHeader(msg, isOwn, label))
 		case selected:
-			lines = append(lines, " "+m.theme.TextSecondary().Bold(true).Render("◂ editing"))
+			lines = append(lines, " "+m.theme.TextSecondary().Bold(true).Render(label))
 		}
 
 		barColor := m.theme.UserColor(msg.Username)
 		switch {
 		case selected:
 			barColor = m.theme.Secondary()
-		case c.edit.active:
+		case c.edit.active || c.social.search.active:
 			barColor = m.theme.Border()
 		}
 		block := m.theme.Base().
@@ -140,7 +114,7 @@ func (m model) renderMessagesWithSelection() (string, int, int) {
 			BorderForeground(barColor).
 			PaddingLeft(1).
 			MarginLeft(1).
-			Render(m.messageContentView(msg, contentWidth-1))
+			Render(m.messageBlockView(msg, contentWidth-1))
 
 		blockLines := strings.Split(block, "\n")
 		if selected {
@@ -155,18 +129,43 @@ func (m model) renderMessagesWithSelection() (string, int, int) {
 	return strings.Join(lines, "\n"), selTop, selBottom
 }
 
-// messageHeader is the "name (you)  3:04 PM" line above a group of messages.
-func (m model) messageHeader(msg apisdk.MessageResponse, isOwn, selected bool) string {
+// messageHeader is the "name (you)  3:04 PM" line above a group of messages;
+// label marks a selected message.
+func (m model) messageHeader(msg apisdk.MessageResponse, isOwn bool, label string) string {
 	name := m.theme.Base().Foreground(m.theme.UserColor(msg.Username)).Bold(true).Render(msg.Username)
 	header := " " + name
 	if isOwn {
 		header += m.theme.TextSubtle().Render(" (you)")
 	}
 	header += m.theme.TextSubtle().Render("  " + msg.CreatedAt.Format("3:04 PM"))
-	if selected {
-		header += m.theme.TextSecondary().Bold(true).Render("  ◂ editing")
+	if label != "" {
+		header += m.theme.TextSecondary().Bold(true).Render("  " + label)
 	}
 	return header
+}
+
+// messageBlockView is a message's content with the message it replies to
+// above it, and its reactions and read receipts below.
+func (m model) messageBlockView(msg apisdk.MessageResponse, width int) string {
+	var parts []string
+	if msg.ReplyToID != "" {
+		text := "↳ a message that's no longer here"
+		for _, original := range m.state.chat.messages {
+			if original.ID == msg.ReplyToID {
+				text = "↳ " + quote(original, width-2)
+				break
+			}
+		}
+		parts = append(parts, m.theme.TextSubtle().Italic(true).Render(truncate(text, width)))
+	}
+	parts = append(parts, m.messageContentView(msg, width))
+	if line := m.reactionsLine(msg); line != "" {
+		parts = append(parts, line)
+	}
+	if names := m.seenBy(msg); len(names) > 0 {
+		parts = append(parts, m.theme.TextSubtle().Render(truncate("✓ seen by "+strings.Join(names, ", "), width)))
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func (m model) messageContentView(msg apisdk.MessageResponse, width int) string {

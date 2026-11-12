@@ -183,6 +183,7 @@ func parseRoomEvent(wsMsg apisdk.WSMessage, decrypt func(content string, encrypt
 				createdAt = t
 			}
 		}
+		replyTo, _ := stringField(data, "replyToId")
 		return messageReceivedMsg{message: apisdk.MessageResponse{
 			ID:        id,
 			RoomID:    wsMsg.RoomID,
@@ -191,7 +192,42 @@ func parseRoomEvent(wsMsg apisdk.WSMessage, decrypt func(content string, encrypt
 			Content:   decrypt(content, encrypted),
 			Encrypted: encrypted,
 			CreatedAt: createdAt.Local(),
+			ReplyToID: replyTo,
+			Reactions: parseReactions(data["reactions"], decrypt),
 		}}, true
+
+	case apisdk.MessageReactions:
+		id, ok := stringField(data, "id")
+		if !ok {
+			return nil, false
+		}
+		return messageReactionsMsg{messageID: id, reactions: parseReactions(data["reactions"], decrypt)}, true
+
+	case apisdk.PresenceUpdate:
+		raw, _ := data["online"].([]any)
+		online := make([]string, 0, len(raw))
+		for _, r := range raw {
+			if id, ok := r.(string); ok && id != "" {
+				online = append(online, id)
+			}
+		}
+		return presenceMsg{online: online}, true
+
+	case apisdk.MemberTyping:
+		userID, okID := stringField(data, "userId")
+		username, okName := stringField(data, "username")
+		if !okID || !okName {
+			return nil, false
+		}
+		return memberTypingMsg{userID: userID, username: username}, true
+
+	case apisdk.ReadUpdate:
+		userID, okID := stringField(data, "userId")
+		messageID, okMsg := stringField(data, "messageId")
+		if !okID || !okMsg {
+			return nil, false
+		}
+		return readUpdateMsg{userID: userID, messageID: messageID}, true
 
 	case apisdk.MessageUpdated:
 		id, okID := stringField(data, "id", "ID")
@@ -277,6 +313,26 @@ func parseRoomEvent(wsMsg apisdk.WSMessage, decrypt func(content string, encrypt
 		return roomErrorMsg{code: code, message: message}, true
 	}
 	return nil, false
+}
+
+// parseReactions reads a reaction list, decrypting each emoji.
+func parseReactions(raw any, decrypt func(content string, encrypted bool) string) []apisdk.Reaction {
+	list, _ := raw.([]any)
+	var reactions []apisdk.Reaction
+	for _, r := range list {
+		fields, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		userID, okID := stringField(fields, "userId")
+		emoji, okEmoji := stringField(fields, "emoji")
+		if !okID || !okEmoji {
+			continue
+		}
+		encrypted, _ := fields["encrypted"].(bool)
+		reactions = append(reactions, apisdk.Reaction{UserID: userID, Emoji: decrypt(emoji, encrypted)})
+	}
+	return reactions
 }
 
 // parseMember reads a member's ID and username.

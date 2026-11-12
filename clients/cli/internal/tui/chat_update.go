@@ -4,6 +4,7 @@ import (
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 	"github.com/hilthontt/visper/clients/cli/internal/tui/theme"
+	apisdk "github.com/hilthontt/visper/sdk/go"
 )
 
 func (m model) chatUpdate(msg tea.Msg) (model, tea.Cmd) {
@@ -36,6 +37,9 @@ func (m model) chatKeyUpdate(msg tea.KeyPressMsg) (_ model, _ tea.Cmd, handled b
 		return mm, cmd, true
 	case c.edit.active:
 		mm, cmd := m.editModeUpdate(msg)
+		return mm, cmd, true
+	case c.social.search.active:
+		mm, cmd := m.messageSearchKeyUpdate(msg)
 		return mm, cmd, true
 	case c.members.searching:
 		if mm, cmd, handled := m.memberSearchKeyUpdate(msg); handled {
@@ -70,11 +74,16 @@ func (m model) chatKeyUpdate(msg tea.KeyPressMsg) (_ model, _ tea.Cmd, handled b
 		}
 	case key.Matches(msg, keys.EditMessages):
 		m, cmd = m.enterEditMode()
+	case key.Matches(msg, keys.SearchMessages) && !c.members.searching:
+		m, cmd = m.openMessageSearch()
+	case key.Matches(msg, keys.Back) && c.social.replyTo != "" && !c.members.searching:
+		m.state.chat.social.replyTo = ""
 	case key.Matches(msg, keys.Enter) && !c.members.searching:
 		m, cmd = m.sendMessage()
 	case key.Matches(msg, keys.JumpToBottom):
 		m.state.chat.viewport.GotoBottom()
 		m.state.chat.unread = 0
+		m, cmd = m.markReadSoon()
 	default:
 		return m, nil, false
 	}
@@ -90,7 +99,10 @@ func (m model) updateChatInputs(msg tea.Msg) (model, tea.Cmd) {
 	if m.state.chat.members.searching {
 		m, cmd = m.updateMemberSearchInput(msg)
 	} else {
+		before := m.state.chat.messageInput.Value()
 		m.state.chat.messageInput, cmd = m.state.chat.messageInput.Update(msg)
+		cmds = append(cmds, cmd)
+		m, cmd = m.noteTyping(before)
 	}
 	cmds = append(cmds, cmd)
 
@@ -99,6 +111,8 @@ func (m model) updateChatInputs(msg tea.Msg) (model, tea.Cmd) {
 		cmds = append(cmds, cmd)
 		if m.state.chat.viewport.AtBottom() {
 			m.state.chat.unread = 0
+			m, cmd = m.markReadSoon()
+			cmds = append(cmds, cmd)
 		}
 	}
 	return m, tea.Batch(cmds...)
@@ -108,9 +122,9 @@ func (m model) updateChatInputs(msg tea.Msg) (model, tea.Cmd) {
 // Edit mode
 
 func (m model) enterEditMode() (model, tea.Cmd) {
-	selected := m.lastOwnMessage()
+	selected := len(m.state.chat.messages) - 1
 	if selected < 0 {
-		return m.toast(theme.ToneInfo, "You haven't sent any messages yet")
+		return m.toast(theme.ToneInfo, "No messages yet")
 	}
 	m.state.chat.edit = editState{active: true, selected: selected}
 	return m.refreshMessages(), nil
@@ -122,29 +136,62 @@ func (m model) exitEditMode() model {
 	return m.refreshMessages()
 }
 
-// editModeUpdate handles keys while picking one of your messages.
+// editModeUpdate handles keys while a message is selected.
 func (m model) editModeUpdate(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	c := m.state.chat
-	valid := c.edit.selected >= 0 && c.edit.selected < len(c.messages)
+	n := len(c.messages)
+	valid := c.edit.selected >= 0 && c.edit.selected < n
+	var selected apisdk.MessageResponse
+	if valid {
+		selected = c.messages[c.edit.selected]
+	}
+	own := valid && m.isCurrentUser(selected.UserID)
 
-	switch msg.String() {
+	switch key := msg.String(); key {
 	case "up", "k":
-		m.state.chat.edit.selected = m.prevOwnMessage(c.edit.selected)
+		if n > 0 {
+			m.state.chat.edit.selected = min(max(c.edit.selected-1, 0), n-1)
+		}
 		return m.refreshMessages(), nil
 	case "down", "j":
-		m.state.chat.edit.selected = m.nextOwnMessage(c.edit.selected)
+		if n > 0 {
+			m.state.chat.edit.selected = min(c.edit.selected+1, n-1)
+		}
 		return m.refreshMessages(), nil
 	case "delete", "ctrl+d":
-		if valid {
-			selected := c.messages[c.edit.selected]
+		switch {
+		case own:
 			m.state.chat.edit.messageID = selected.ID
 			return m.openDeleteMessageDialog(selected.Content), nil
+		case valid:
+			return m.toastNotOwn("delete")
 		}
 	case "enter":
-		if valid {
-			selected := c.messages[c.edit.selected]
+		switch {
+		case own && isImageURL(selected.Content):
+			return m.toast(theme.ToneInfo, "Images can't be edited, only deleted.")
+		case own:
 			m.state.chat.edit.messageID = selected.ID
 			return m.openEditMessageDialog(selected.Content), nil
+		case valid:
+			return m.toastNotOwn("edit")
+		}
+	case "r":
+		if valid {
+			m.state.chat.social.replyTo = selected.ID
+			return m.exitEditMode(), nil
+		}
+	case "0":
+		if valid {
+			for _, r := range selected.Reactions {
+				if m.isCurrentUser(r.UserID) {
+					return m, m.react(c.edit.selected, r.Emoji) // toggles it off
+				}
+			}
+		}
+	case "1", "2", "3", "4", "5", "6":
+		if valid {
+			return m, m.react(c.edit.selected, quickReactions[key[0]-'1'])
 		}
 	case "esc", "ctrl+e":
 		return m.exitEditMode(), nil

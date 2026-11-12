@@ -219,7 +219,11 @@ func (m model) membersPanelView(width, height int) string {
 		}
 		nameWidth := inner - 2 - lipgloss.Width(badges)
 		name := m.theme.Base().Foreground(m.theme.UserColor(p.Username)).Render(truncate(p.Username, nameWidth))
-		row := m.theme.TextSuccess().Render("●") + " " + name + badges
+		dot := m.theme.TextSuccess().Render("●")
+		if c.social.online != nil && !c.social.online[p.ID] {
+			dot = m.theme.TextSubtle().Render("○") // known to be offline
+		}
+		row := dot + " " + name + badges
 
 		if s.searching && i == s.cursor {
 			row = m.theme.Base().Background(m.theme.Surface()).Width(inner).Render(row)
@@ -273,8 +277,11 @@ func (m model) chatCenterView(width int) string {
 	if !c.members.searching && !c.edit.active && !m.state.dialog.open {
 		inputBorder = m.theme.Brand()
 	}
+	inputView := c.messageInput.View()
 	var counter string
-	if n, limit := m.messageLength(); n > 0 {
+	if c.social.search.active {
+		inputView = c.social.search.input.View()
+	} else if n, limit := m.messageLength(); n > 0 {
 		style := m.theme.TextSubtle()
 		switch {
 		case n > limit:
@@ -284,7 +291,7 @@ func (m model) chatCenterView(width int) string {
 		}
 		counter = style.Render(fmt.Sprintf("%d/%d", n, limit))
 	}
-	inputLine := spread(width-4, c.messageInput.View(), counter)
+	inputLine := spread(width-4, inputView, counter)
 	input := m.theme.Base().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(inputBorder).
@@ -300,7 +307,8 @@ func (m model) chatCenterView(width int) string {
 // chatHints are the status line hints when nothing else is going on.
 var chatHints = []keyHint{
 	{"enter", "send"},
-	{"ctrl+e", "edit"},
+	{"ctrl+e", "select"},
+	{"ctrl+f", "find"},
 	{"ctrl+u", "image"},
 	{"ctrl+a", "AI"},
 	{"ctrl+p", "invite"},
@@ -316,18 +324,34 @@ func (m model) chatStatusLine(width int) string {
 
 	switch {
 	case c.edit.active:
-		return mode("EDIT") + m.keyHints([]keyHint{
-			{"↑↓", "select"}, {"enter", "edit"}, {"ctrl+d", "delete"}, {"esc", "done"},
-		}, width-7)
+		return mode("SELECT") + m.keyHints([]keyHint{
+			{"↑↓", "move"}, {"r", "reply"}, {"1-6", "react"}, {"enter", "edit"}, {"ctrl+d", "delete"}, {"esc", "done"},
+		}, width-9)
+	case c.social.search.active:
+		found := m.theme.TextBody().Render(c.social.search.status()) + " "
+		return mode("FIND") + found + m.keyHints([]keyHint{{"↑↓", "older/newer"}, {"esc", "close"}}, width-7-lipgloss.Width(found))
 	case c.members.searching:
 		return mode("SEARCH") + m.keyHints([]keyHint{{"↑↓", "select"}, {"esc", "close"}}, width-9)
 	case c.uploading:
 		return m.spinner() + " " + m.theme.TextBrand().Render("Uploading image…")
 	case c.aiEnhancing:
 		return m.spinner() + " " + m.theme.TextBrand().Render("Rewriting your draft with AI…")
+	case c.social.replyTo != "":
+		label := mode("REPLY")
+		hint := m.keyHints([]keyHint{{"esc", "cancel"}}, 14)
+		target := "a message that's no longer here"
+		if original, ok := m.replyTarget(); ok {
+			target = quote(original, width)
+		}
+		room := max(width-lipgloss.Width(label)-lipgloss.Width(hint)-3, 4)
+		return label + m.theme.TextBody().Render("↳ "+truncate(target, room-2)) + " " + hint
 	case c.unread > 0:
 		unread := m.theme.Pill(m.theme.Brand(), m.theme.OnBrand()).Render(fmt.Sprintf("↓ %d new", c.unread)) + " "
 		return unread + m.keyHints(append([]keyHint{{"end", "jump"}}, chatHints...), width-lipgloss.Width(unread))
+	}
+	if typing := c.social.typingText(); typing != "" {
+		t := m.theme.TextBrand().Italic(true).Render(typing) + "  "
+		return t + m.keyHints(chatHints, max(width-lipgloss.Width(t), 0))
 	}
 	return m.keyHints(chatHints, width)
 }

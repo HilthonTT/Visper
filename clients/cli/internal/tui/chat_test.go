@@ -81,8 +81,9 @@ func TestEditSelectionSurvivesDeletions(t *testing.T) {
 
 	// An out-of-range selection must not panic when moving up.
 	m.state.chat.edit.selected = 10
-	if got := m.prevOwnMessage(10); got != 2 {
-		t.Fatalf("prevOwnMessage(10) = %d, want 2", got)
+	m, _ = m.editModeUpdate(tea.KeyPressMsg{Code: tea.KeyUp})
+	if got := m.state.chat.edit.selected; got != 2 {
+		t.Fatalf("selection after up from 10 = %d, want 2", got)
 	}
 }
 

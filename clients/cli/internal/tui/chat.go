@@ -48,6 +48,7 @@ type chatState struct {
 	unread int
 
 	edit         editState
+	social       socialState
 	members      memberState
 	companion    companionPanelState
 	expiry       expiryState
@@ -59,7 +60,8 @@ type chatState struct {
 	uploading   bool
 }
 
-// editState is edit mode: picking one of your messages to edit or delete.
+// editState is select mode (ctrl+e): picking a message to reply to, react to,
+// or, if it is yours, edit or delete.
 type editState struct {
 	active bool
 	// selected is the index in messages of the highlighted message, or -1.
@@ -152,6 +154,7 @@ func (m model) enterChat(room *apisdk.RoomResponse, roomKey string) (model, tea.
 		messageInput: messageInput,
 		editInput:    m.newTextInput("Edit your message…"),
 		edit:         editState{selected: -1},
+		social:       newSocialState(m.newTextInput("search messages")),
 		members:      newMemberState(m.newTextInput("search"), room.Members),
 		companion:    companionPanelState{mood: "your waifu approves ♡"},
 		expiry:       newExpiryState(session, room.ExpiresAt),

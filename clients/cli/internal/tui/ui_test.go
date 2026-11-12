@@ -211,7 +211,7 @@ func TestEditModeScrollsToSelection(t *testing.T) {
 	if m.state.chat.edit.selected != 0 {
 		t.Fatalf("selected %d, want 0", m.state.chat.edit.selected)
 	}
-	if !strings.Contains(m.state.chat.viewport.View(), "editing") {
+	if !strings.Contains(m.state.chat.viewport.View(), "selected") {
 		t.Fatal("selected message is not visible in the viewport")
 	}
 }

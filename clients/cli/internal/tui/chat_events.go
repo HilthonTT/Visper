@@ -153,7 +153,7 @@ func (m model) chatEventUpdate(msg tea.Msg) (_ model, _ tea.Cmd, handled bool) {
 		m = m.imageFetchedUpdate(msg)
 
 	default:
-		return m, nil, false
+		return m.socialEventUpdate(msg)
 	}
 	return m, cmd, true
 }
@@ -173,6 +173,8 @@ func (m model) messageReceivedUpdate(msg messageReceivedMsg) (model, tea.Cmd) {
 	c := &m.state.chat
 	atBottom := c.viewport.AtBottom()
 	c.messages = append(c.messages, msg.message)
+	// A message ends its author's "typing…".
+	delete(c.social.typing, msg.message.UserID)
 
 	m, fetchCmd := m.fetchImageFor(msg.message.ID, msg.message.Content)
 
@@ -184,15 +186,20 @@ func (m model) messageReceivedUpdate(msg messageReceivedMsg) (model, tea.Cmd) {
 	m = m.refreshMessages()
 	// Follow the conversation unless the user scrolled up to read history.
 	c = &m.state.chat
+	var readCmd tea.Cmd
 	if atBottom || own || c.edit.active {
 		if !c.edit.active {
 			c.viewport.GotoBottom()
 		}
 		c.unread = 0
+		m, readCmd = m.markReadSoon()
 	} else {
 		c.unread++
 	}
-	return m, tea.Batch(fetchCmd, m.waitForRoomEvent())
+	if m.state.chat.social.search.active {
+		m = m.findMessages()
+	}
+	return m, tea.Batch(fetchCmd, readCmd, m.waitForRoomEvent())
 }
 
 // removeMessage drops a message, keeping the edit-mode selection on the same
@@ -211,10 +218,16 @@ func (m model) removeMessage(messageID string) model {
 		case sel == i:
 			c.edit.selected = -1
 			if c.edit.active {
-				c.edit.selected = m.lastOwnMessage()
-				// Nothing of ours is left to select.
+				c.edit.selected = min(i, len(c.messages)-1)
+				// Nothing is left to select.
 				c.edit.active = c.edit.selected >= 0
 			}
+		}
+		if c.social.replyTo == messageID {
+			c.social.replyTo = ""
+		}
+		if c.social.search.active {
+			m = m.findMessages()
 		}
 		break
 	}
@@ -260,5 +273,5 @@ func (m model) uploadResultUpdate(msg uploadResultMsg) (model, tea.Cmd) {
 		return m, nil
 	}
 	m.state.chat.companion.mood = "cute pic!"
-	return m, m.sendContent("send image message", msg.fileURL)
+	return m, m.sendContent("send image message", msg.fileURL, "")
 }
