@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hilthontt/visper/services/proxy/internal/balancer"
+	"github.com/hilthontt/visper/services/proxy/internal/clientip"
 	"github.com/hilthontt/visper/services/proxy/internal/config"
 	"github.com/hilthontt/visper/services/proxy/internal/metrics"
 	"github.com/hilthontt/visper/services/proxy/internal/middleware"
@@ -38,7 +39,7 @@ func run() error {
 		return err
 	}
 
-	ipResolver, err := middleware.NewClientIPResolver(cfg.TrustedProxies)
+	ipResolver, err := clientip.NewResolver(cfg.TrustedProxies)
 	if err != nil {
 		return err
 	}
