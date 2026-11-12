@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"time"
 )
 
@@ -22,6 +23,7 @@ const (
 
 // App is the complete runtime configuration.
 type App struct {
+	// ConfigPath is the optional JSON file overriding the LB section.
 	ConfigPath     string
 	LB             Config
 	Server         Server
@@ -29,6 +31,10 @@ type App struct {
 	Throttle       Throttle
 	TrustedProxies []string
 	AdminToken     string
+
+	// lbBase is the LB section from defaults, env and flags only; the JSON
+	// file is overlaid on it both at startup and on every reload.
+	lbBase Config
 }
 
 // Config is the load-balancer configuration. It is the part that can be
@@ -121,4 +127,9 @@ func ParseBackendURL(s string) (*url.URL, error) {
 		return nil, fmt.Errorf("invalid backend url %q: must be absolute http(s) URL", s)
 	}
 	return u, nil
+}
+
+func (c Config) clone() Config {
+	c.Backends = slices.Clone(c.Backends)
+	return c
 }

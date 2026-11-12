@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -9,7 +10,8 @@ import (
 )
 
 // Load builds the configuration from env vars, then args (flags), then the
-// JSON file named by -config / PROXY_CONFIG if any.
+// JSON file named by -config / PROXY_CONFIG, if any. Settings the file omits
+// keep their env/flag values.
 func Load(args []string, getenv func(string) string) (*App, error) {
 	if getenv == nil {
 		getenv = os.Getenv
@@ -23,14 +25,14 @@ func Load(args []string, getenv func(string) string) (*App, error) {
 	strategy := fs.String("strategy", env.str("PROXY_STRATEGY", DefaultStrategy), "Load balancing strategy (env PROXY_STRATEGY)")
 	healthCheckInterval := fs.Duration("health-check-interval", env.duration("PROXY_HEALTH_CHECK_INTERVAL", DefaultHealthCheckInterval), "Health check interval (env PROXY_HEALTH_CHECK_INTERVAL)")
 	healthCheckPath := fs.String("health-check-path", env.str("PROXY_HEALTH_CHECK_PATH", DefaultHealthCheckPath), "Backend health check path (env PROXY_HEALTH_CHECK_PATH)")
-	maxFailCount := fs.Int("max-fail-count", env.int("PROXY_MAX_FAIL_COUNT", DefaultMaxFailCount), "Maximum failure count before marking backend as down (env PROXY_MAX_FAIL_COUNT)")
+	maxFailCount := fs.Int("max-fail-count", env.int("PROXY_MAX_FAIL_COUNT", DefaultMaxFailCount), "Consecutive proxy errors before a backend is marked down (env PROXY_MAX_FAIL_COUNT)")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
 
 	app := &App{
 		ConfigPath: *configPath,
-		LB: Config{
+		lbBase: Config{
 			ListenAddr:          *listenAddr,
 			HealthCheckInterval: Duration(*healthCheckInterval),
 			HealthCheckPath:     *healthCheckPath,
@@ -62,38 +64,64 @@ func Load(args []string, getenv func(string) string) (*App, error) {
 		AdminToken:     env.str("PROXY_ADMIN_TOKEN", ""),
 	}
 	for _, u := range splitList(*backends) {
-		app.LB.Backends = append(app.LB.Backends, BackendConfig{URL: u, Weight: 1})
+		app.lbBase.Backends = append(app.lbBase.Backends, BackendConfig{URL: u, Weight: 1})
 	}
-
 	if env.err != nil {
 		return nil, env.err
 	}
 
-	if app.ConfigPath != "" {
-		lb, err := LoadFile(app.ConfigPath)
-		if err != nil {
-			return nil, err
-		}
-		app.LB = *lb
-	} else if err := app.LB.Validate(); err != nil {
+	lb, err := app.LoadLB()
+	if err != nil {
 		return nil, err
 	}
-
+	app.LB = *lb
 	return app, nil
 }
 
-// LoadFile reads and validates a JSON load-balancer config file.
-func LoadFile(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("error reading config file: %w", err)
-	}
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("error parsing config file: %w", err)
+// LoadLB returns a fresh, validated load-balancer configuration: the
+// env/flag settings with the JSON config file (if any) overlaid. It re-reads
+// the file on every call, so it is also what a reload uses.
+func (a *App) LoadLB() (*Config, error) {
+	cfg := a.lbBase.clone()
+	if a.ConfigPath != "" {
+		if err := overlayFile(a.ConfigPath, &cfg); err != nil {
+			return nil, err
+		}
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// LoadFile reads and validates a standalone JSON load-balancer config file;
+// omitted settings take their defaults.
+func LoadFile(path string) (*Config, error) {
+	var cfg Config
+	if err := overlayFile(path, &cfg); err != nil {
+		return nil, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// overlayFile decodes the JSON file at path over cfg. Fields the file omits
+// are left unchanged; a "backends" list replaces cfg's list entirely.
+func overlayFile(path string, cfg *Config) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("error reading config file: %w", err)
+	}
+	base := cfg.Backends
+	cfg.Backends = nil // decode into a fresh slice rather than over base's elements
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if err := dec.Decode(cfg); err != nil {
+		return fmt.Errorf("error parsing config file %s: %w", path, err)
+	}
+	if cfg.Backends == nil {
+		cfg.Backends = base
+	}
+	return nil
 }

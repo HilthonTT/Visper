@@ -103,7 +103,7 @@ func run() error {
 				http.Error(w, "no config file provided", http.StatusConflict)
 				return
 			}
-			lbCfg, err := config.LoadFile(cfg.ConfigPath)
+			lbCfg, err := cfg.LoadLB()
 			if err == nil {
 				err = lb.Reload(lbCfg)
 			}
