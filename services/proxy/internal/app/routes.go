@@ -11,14 +11,17 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// routes builds the top-level handler. Every route is throttled.
+// routes builds the top-level handler. Proxied traffic and the admin API are
+// throttled; /metrics is not, so scrapes keep working under overload.
 func routes(cfg *config.App, lb *balancer.LoadBalancer, throttle *throttling.Hierarchy) http.Handler {
+	throttled := middleware.Throttle(throttle)
+
 	mux := http.NewServeMux()
-	mux.Handle("/", lb)
+	mux.Handle("/", middleware.Chain(lb, throttled))
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.Handle("POST /admin/reload", middleware.Chain(reloadHandler(cfg, lb),
-		middleware.RequireBearerToken(cfg.AdminToken)))
-	return middleware.Chain(mux, middleware.Throttle(throttle))
+		throttled, middleware.RequireBearerToken(cfg.AdminToken)))
+	return mux
 }
 
 // reloadHandler re-reads the config file (overlaid on the env/flag settings)

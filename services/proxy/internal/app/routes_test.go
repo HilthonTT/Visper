@@ -37,6 +37,17 @@ func serve(h http.Handler, method, path, auth string) *httptest.ResponseRecorder
 	return w
 }
 
+func TestMetricsAreNotThrottled(t *testing.T) {
+	h, _ := newTestRoutes(t, map[string]string{"PROXY_THROTTLE_IP_MAX": "1", "PROXY_BACKENDS": "http://127.0.0.1:1"})
+	serve(h, http.MethodGet, "/x", "") // uses the client's quota (502: nothing listens there)
+	if w := serve(h, http.MethodGet, "/x", ""); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("proxied route: status %d, want 429", w.Code)
+	}
+	if w := serve(h, http.MethodGet, "/metrics", ""); w.Code != http.StatusOK {
+		t.Fatalf("/metrics: status %d, want 200", w.Code)
+	}
+}
+
 func TestAdminReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lb.json")
 	write := func(s string) {
