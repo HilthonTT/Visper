@@ -1,4 +1,5 @@
-package middleware
+// Package clientip resolves the real client IP of a request behind trusted proxies.
+package clientip
 
 import (
 	"fmt"
@@ -8,17 +9,17 @@ import (
 	"strings"
 )
 
-// ClientIPResolver extracts the real client IP from a request. Forwarding
+// Resolver extracts the real client IP from a request. Forwarding
 // headers are only honoured when the direct peer is a trusted proxy;
 // otherwise any client could spoof X-Forwarded-For to dodge per-IP limits.
-type ClientIPResolver struct {
+type Resolver struct {
 	trusted []netip.Prefix
 }
 
-// NewClientIPResolver parses trusted proxy CIDRs or bare IPs
+// NewResolver parses trusted proxy CIDRs or bare IPs
 // (e.g. "10.0.0.0/8", "127.0.0.1").
-func NewClientIPResolver(trustedProxies []string) (*ClientIPResolver, error) {
-	res := &ClientIPResolver{}
+func NewResolver(trustedProxies []string) (*Resolver, error) {
+	res := &Resolver{}
 	for _, s := range trustedProxies {
 		s = strings.TrimSpace(s)
 		if s == "" {
@@ -41,7 +42,7 @@ func NewClientIPResolver(trustedProxies []string) (*ClientIPResolver, error) {
 	return res, nil
 }
 
-func (c *ClientIPResolver) isTrusted(addr netip.Addr) bool {
+func (c *Resolver) isTrusted(addr netip.Addr) bool {
 	addr = addr.Unmap()
 	for _, p := range c.trusted {
 		if p.Contains(addr) {
@@ -62,14 +63,14 @@ func peer(r *http.Request) (string, netip.Addr, bool) {
 }
 
 // TrustsPeer reports whether the direct peer of r is a trusted proxy.
-func (c *ClientIPResolver) TrustsPeer(r *http.Request) bool {
+func (c *Resolver) TrustsPeer(r *http.Request) bool {
 	_, addr, ok := peer(r)
 	return ok && c.isTrusted(addr)
 }
 
 // ClientIP returns the client IP for r. When the peer is trusted, it walks
 // X-Forwarded-For from right to left and returns the first untrusted hop.
-func (c *ClientIPResolver) ClientIP(r *http.Request) string {
+func (c *Resolver) ClientIP(r *http.Request) string {
 	host, last, ok := peer(r)
 	if !ok || !c.isTrusted(last) {
 		return host
