@@ -5,12 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"slices"
 	"time"
 
@@ -49,28 +47,49 @@ func (r *FileResponse) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*plain)(r))
 }
 
-// Upload uploads the file at filePath to the room. If userID is non-empty it
-// is sent as the X-User-ID header.
-func (s *FileService) Upload(ctx context.Context, roomID, filePath, userID string, opts ...option.RequestOption) (*FileResponse, error) {
+// MaxUploadSize is the largest file the API stores, after encryption.
+const MaxUploadSize = 5 << 20
+
+// ErrFileTooLarge is returned for files that would exceed MaxUploadSize once
+// encrypted.
+var ErrFileTooLarge = fmt.Errorf("file is larger than %d bytes", MaxUploadSize-encryptedFileOverhead)
+
+// UploadEncrypted encrypts the file at filePath with the room key keyB64 and
+// uploads it to the room. The API only stores the ciphertext and never sees
+// the file's name: the caller shares the returned URL (and any name) in an
+// encrypted message, and readers decrypt the download with DecryptFile. If
+// userID is non-empty it is sent as the X-User-ID header.
+func (s *FileService) UploadEncrypted(ctx context.Context, roomID, filePath, keyB64, userID string, opts ...option.RequestOption) (*FileResponse, error) {
 	if roomID == "" {
 		return nil, ErrMissingIDParameter
 	}
 	opts = slices.Concat(s.Options, opts)
 
-	f, err := os.Open(filePath)
+	info, err := os.Stat(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
-	defer f.Close()
+	if info.Size() > MaxUploadSize-encryptedFileOverhead {
+		return nil, ErrFileTooLarge
+	}
+	plaintext, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read file: %w", err)
+	}
+	ciphertext, err := EncryptFile(plaintext, keyB64)
+	if err != nil {
+		return nil, fmt.Errorf("encryption failed: %w", err)
+	}
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
-	part, err := writer.CreateFormFile("file", filepath.Base(filePath))
+	// A fixed name: the real one would leak to the server.
+	part, err := writer.CreateFormFile("file", "file.enc")
 	if err != nil {
 		return nil, fmt.Errorf("failed to create form file: %w", err)
 	}
-	if _, err := io.Copy(part, f); err != nil {
+	if _, err := part.Write(ciphertext); err != nil {
 		return nil, fmt.Errorf("failed to write file to form: %w", err)
 	}
 	if err := writer.Close(); err != nil {

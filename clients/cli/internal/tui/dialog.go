@@ -138,7 +138,7 @@ func (m model) openQRCodeDialog() model {
 	return m.openDialog(dialogState{
 		kind:    dialogQRCode,
 		title:   "Invite to this room",
-		content: m.state.chat.roomCode, // shown under the QR code
+		content: m.state.chat.inviteCode(), // shown under the QR code
 		qrCode:  code,
 		qrSize:  size,
 	})
@@ -259,18 +259,22 @@ func (m model) editMessageDialogView() string {
 
 func (m model) qrCodeDialogView() string {
 	d := m.state.dialog
-	width := max(d.qrSize+8, 40)
+	width := min(max(d.qrSize+8, lipgloss.Width(d.content)+8, 40), max(m.viewportWidth-2, 24))
 
-	code := m.theme.Pill(m.theme.Brand(), m.theme.OnBrand()).Render(d.content)
+	pill := m.theme.Pill(m.theme.Brand(), m.theme.OnBrand())
+	if lipgloss.Width(d.content)+6 > width {
+		pill = pill.Width(width - 6) // wrap rather than cut the code
+	}
+	code := pill.Render(d.content)
 	parts := []string{
 		m.theme.TextAccent().Bold(true).Render(d.title),
-		m.theme.TextSubtle().Render("scan to join, or share the code"),
+		m.theme.TextSubtle().Render("scan to join, or share the invite code"),
 		"",
 		d.qrCode,
 		"",
 		code,
 		"",
-		m.theme.TextSubtle().Render("press any key to close"),
+		m.theme.TextSubtle().Render("c copy invite code · any other key to close"),
 	}
 
 	return m.theme.Base().

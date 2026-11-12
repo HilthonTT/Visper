@@ -9,9 +9,10 @@ import { Help } from "./commands/help";
 import { History } from "./commands/history";
 import { JoinRoom } from "./commands/join-room";
 import {
+	SetDeviceCode,
 	SetJoinCode,
+	SetRoomKey,
 	SetSecureCode,
-	SetUserId,
 } from "./commands/set-credential";
 import { Themes } from "./commands/themes";
 import { Welcome } from "./commands/welcome";
@@ -21,9 +22,10 @@ import { OutputContainer, UsageDiv } from "./styles/output-styled";
 const commandsWithArgs: readonly string[] = [
 	"themes",
 	"echo",
-	"setuserid",
+	"setdevicecode",
 	"setsecurecode",
 	"setjoincode",
+	"setroomkey",
 ];
 
 const renderers: Record<string, () => ReactNode> = {
@@ -35,9 +37,10 @@ const renderers: Record<string, () => ReactNode> = {
 	history: () => <History />,
 	joinroom: () => <JoinRoom />,
 	pwd: () => <GeneralOutput>/home/visper</GeneralOutput>,
+	setdevicecode: () => <SetDeviceCode />,
 	setjoincode: () => <SetJoinCode />,
+	setroomkey: () => <SetRoomKey />,
 	setsecurecode: () => <SetSecureCode />,
-	setuserid: () => <SetUserId />,
 	themes: () => <Themes />,
 	welcome: () => <Welcome />,
 	whoami: () => <GeneralOutput>anonymous</GeneralOutput>,

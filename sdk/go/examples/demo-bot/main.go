@@ -1,5 +1,5 @@
 // Command demo-bot is a scripted second participant for recording demos (see
-// docs/demos). It creates a room, writes the room's join code to a file, waits
+// docs/demos). It creates a room, writes the room's invite code to a file, waits
 // for someone to join and then answers each of their messages with the next
 // line of its script. It is also a compact end-to-end example of the SDK:
 // creating a room, end-to-end encrypted sending and reading messages.
@@ -29,7 +29,7 @@ var script = []string{
 }
 
 func main() {
-	codeFile := flag.String("code-file", "", "file to write the room's join code to")
+	codeFile := flag.String("code-file", "", "file to write the room's invite code (join code and key) to")
 	userID := flag.String("user-id", "visper-demo-bot", "X-User-ID the bot identifies as")
 	timeout := flag.Duration("timeout", 10*time.Minute, "give up after this long")
 	silent := flag.Bool("silent", false, "join the conversation as a quiet member: never reply")
@@ -45,15 +45,25 @@ func main() {
 	// VISPER_BASE_URL is read by NewClient (default http://localhost:5005).
 	client := apisdk.NewClient(option.WithHeader("X-User-ID", *userID))
 
+	// The room key never leaves the clients: the server only stores
+	// ciphertext. Guests get it inside the invite code.
+	key, err := apisdk.NewRoomKey()
+	if err != nil {
+		log.Fatalf("create room key: %v", err)
+	}
 	room, err := client.Room.Create(ctx, apisdk.RoomCreateParams{ExpiryHours: 1})
 	if err != nil {
 		log.Fatalf("create room: %v", err)
 	}
-	client.Message.SetEncryptionKey(room.EncryptionKey)
+	client.Message.SetEncryptionKey(key)
+	inviteCode, err := apisdk.FormatInviteCode(room.JoinCode, key)
+	if err != nil {
+		log.Fatalf("format invite code: %v", err)
+	}
 	log.Printf("room %s created, join code %s", room.ID, room.JoinCode)
 
 	if *codeFile != "" {
-		if err := os.WriteFile(*codeFile, []byte(room.JoinCode), 0o600); err != nil {
+		if err := os.WriteFile(*codeFile, []byte(inviteCode), 0o600); err != nil {
 			log.Fatalf("write code file: %v", err)
 		}
 	}

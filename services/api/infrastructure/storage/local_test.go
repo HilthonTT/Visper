@@ -107,6 +107,9 @@ func TestSaveFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// What the SDK's EncryptFile produces: magic, nonce, sealed content.
+	encrypted := append(append([]byte{}, EncryptedFileMagic...), bytes.Repeat([]byte{0xA5}, 24+16+100)...)
+
 	tests := []struct {
 		name     string
 		roomID   string
@@ -114,10 +117,13 @@ func TestSaveFile(t *testing.T) {
 		content  []byte
 		wantErr  error
 	}{
-		{"valid png", "room-1", "photo.PNG", pngBytes(t), nil},
-		{"html disguised as png", "room-1", "x.png", []byte("<html><script>alert(1)</script></html>"), ErrInvalidFileType},
-		{"disallowed extension", "room-1", "x.svg", pngBytes(t), ErrInvalidFileType},
-		{"room traversal", "../escape", "photo.png", pngBytes(t), ErrInvalidPath},
+		{"encrypted file", "room-1", "file.enc", encrypted, nil},
+		{"client file name is ignored", "room-1", "photo.png", encrypted, nil},
+		{"plaintext image", "room-1", "photo.png", pngBytes(t), ErrInvalidFileType},
+		{"html", "room-1", "x.enc", []byte("<html><script>alert(1)</script></html>"), ErrInvalidFileType},
+		{"magic only", "room-1", "x.enc", EncryptedFileMagic, ErrInvalidFileType},
+		{"empty", "room-1", "x.enc", nil, ErrInvalidFileType},
+		{"room traversal", "../escape", "file.enc", encrypted, ErrInvalidPath},
 	}
 
 	for _, tt := range tests {
@@ -133,10 +139,10 @@ func TestSaveFile(t *testing.T) {
 				t.Fatalf("SaveFile: %v", err)
 			}
 
-			if mime != "image/png" {
-				t.Errorf("mime = %q, want image/png", mime)
+			if mime != EncryptedFileMIME {
+				t.Errorf("mime = %q, want %q", mime, EncryptedFileMIME)
 			}
-			if want := tt.roomID + "/" + id + ".png"; rel != want {
+			if want := tt.roomID + "/" + id + EncryptedFileExt; rel != want {
 				t.Errorf("relative path = %q, want %q", rel, want)
 			}
 			if strings.Contains(rel, `\`) {

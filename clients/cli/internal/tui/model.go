@@ -69,8 +69,10 @@ type visibleError struct {
 }
 
 // roomJoinedMsg reports a room that was created or joined; it opens the chat.
+// roomKey is the room's encryption key; the server never has it.
 type roomJoinedMsg struct {
-	room *apisdk.RoomResponse
+	room    *apisdk.RoomResponse
+	roomKey string
 }
 
 type model struct {
@@ -79,6 +81,10 @@ type model struct {
 	// userID identifies this client to the API (the X-User-ID header). The
 	// server may assign a different one when a room is joined.
 	userID string
+	// deviceKey lets the web client send this terminal a room key through the
+	// API without the API being able to read it (see the device code on the
+	// settings page). It lives only as long as the process.
+	deviceKey *apisdk.DeviceKey
 
 	page page
 	// switched is set by a key that changed the page during this Update, so
@@ -105,9 +111,15 @@ func NewModel() (tea.Model, error) {
 	userID := uuid.NewString()
 	log.Printf("USERID: %s\n", userID)
 
+	deviceKey, err := apisdk.NewDeviceKey()
+	if err != nil {
+		return nil, err
+	}
+
 	return model{
 		ctx:             context.Background(),
 		userID:          userID,
+		deviceKey:       deviceKey,
 		page:            splashPage,
 		theme:           theme.BasicTheme(true, nil),
 		faqs:            loadFaqs(),

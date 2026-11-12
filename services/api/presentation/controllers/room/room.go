@@ -93,8 +93,7 @@ func (c *roomController) GetRoom(ctx *gin.Context) {
 		httpx.Error(ctx, err)
 		return
 	}
-	// The response carries the room's encryption key and join code, so only
-	// members may read it.
+	// The response carries the room's join code, so only members may read it.
 	if !room.IsMember(user.ID) {
 		httpx.Fail(ctx, http.StatusForbidden, httpx.CodeForbidden, "you are not a member of this room")
 		return
@@ -376,15 +375,14 @@ func (c *roomController) toRoomResponse(room *model.Room, currentUser *model.Use
 	}
 
 	return RoomResponse{
-		ID:            room.ID,
-		JoinCode:      room.JoinCode,
-		QRCodeURL:     room.GetQRCodeURL(c.config.GetFrontEndURL()),
-		Owner:         toUserResponse(room.Owner),
-		CreatedAt:     room.CreatedAt,
-		ExpiresAt:     room.ExpiresAt(),
-		Members:       members,
-		CurrentUser:   toUserResponse(*currentUser),
-		EncryptionKey: room.EncryptionKey,
+		ID:          room.ID,
+		JoinCode:    room.JoinCode,
+		QRCodeURL:   room.GetQRCodeURL(c.config.GetFrontEndURL()),
+		Owner:       toUserResponse(room.Owner),
+		CreatedAt:   room.CreatedAt,
+		ExpiresAt:   room.ExpiresAt(),
+		Members:     members,
+		CurrentUser: toUserResponse(*currentUser),
 	}
 }
 

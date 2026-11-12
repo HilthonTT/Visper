@@ -5,11 +5,11 @@
   },
   {
     "question": "How do I start a new chat room?",
-    "answer": "Simply create a room from the main menu. You'll get a room code to share with others."
+    "answer": "Simply create a room from the main menu. Press ctrl+p in the room for its invite code (and a QR code) to share with others."
   },
   {
     "question": "How do people join my room?",
-    "answer": "Share the room code with anyone you want to chat with. They enter the code and they're in."
+    "answer": "Share the invite code with anyone you want to chat with. They paste it on the Join page and they're in. The invite code carries the room's encryption key, which the server never sees, so share it only with people you invite."
   },
   {
     "question": "What information do I need to provide?",
@@ -25,7 +25,7 @@
   },
   {
     "question": "Can I use this on multiple devices?",
-    "answer": "Yes, just enter the same room code on any device running the terminal app."
+    "answer": "Yes, just paste the same invite code on any device running the terminal app."
   },
   {
     "question": "Is my chat private?",

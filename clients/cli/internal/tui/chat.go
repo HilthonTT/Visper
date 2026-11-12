@@ -30,8 +30,11 @@ type chatState struct {
 	session    context.Context
 	endSession context.CancelFunc
 
-	room        *apisdk.RoomResponse
-	roomCode    string
+	room     *apisdk.RoomResponse
+	roomCode string
+	// roomKey encrypts the room's messages and files. It is created by the
+	// room's owner and travels only inside invites.
+	roomKey     string
 	isRoomOwner bool
 
 	ws     *apisdk.RoomWebSocket
@@ -88,8 +91,9 @@ func (c chatState) closeConnections() {
 	}
 }
 
-// enterChat opens the chat page for a room that was just created or joined.
-func (m model) enterChat(room *apisdk.RoomResponse) (model, tea.Cmd) {
+// enterChat opens the chat page for a room that was just created or joined;
+// roomKey is the room's encryption key.
+func (m model) enterChat(room *apisdk.RoomResponse, roomKey string) (model, tea.Cmd) {
 	if m.page == chatPage && m.state.chat.room != nil {
 		// A second create/join finished while we are already in a room (e.g.
 		// enter on the join page, tab to New room, enter again). Swapping
@@ -100,6 +104,25 @@ func (m model) enterChat(room *apisdk.RoomResponse) (model, tea.Cmd) {
 		return m, func() tea.Msg { leave(); return nil }
 	}
 
+	if roomKey == "" {
+		// Without the key we could neither read the room nor write to it
+		// without sending plaintext, so don't go in.
+		isOwner := room.CurrentUser.ID != "" && room.CurrentUser.ID == room.Owner.ID
+		leave := leaveRoomFunc(m.client, room.ID, isOwner, m.requestOpts())
+		return m, func() tea.Msg {
+			leave()
+			return visibleError{message: "That room can't be opened without its key. Ask for the full invite code."}
+		}
+	}
+	if room.QRCodeURL != "" {
+		// The key rides in the link's fragment, which browsers never send.
+		if u, err := apisdk.WithRoomKeyFragment(room.QRCodeURL, roomKey); err == nil {
+			r := *room // copy: don't mutate the caller's room
+			r.QRCodeURL = u
+			room = &r
+		}
+	}
+
 	m = m.stopNotificationListener()
 	// Never let a previous room's listener or countdown outlive it.
 	m = m.clearChat()
@@ -108,7 +131,7 @@ func (m model) enterChat(room *apisdk.RoomResponse) (model, tea.Cmd) {
 	m.state.menu = menuState{}
 
 	// Always reset the key so a previous room's key is never reused.
-	m.client.Message.SetEncryptionKey(room.EncryptionKey)
+	m.client.Message.SetEncryptionKey(roomKey)
 
 	if room.CurrentUser.ID != "" {
 		m.userID = room.CurrentUser.ID
@@ -123,6 +146,7 @@ func (m model) enterChat(room *apisdk.RoomResponse) (model, tea.Cmd) {
 		endSession:   endSession,
 		room:         room,
 		roomCode:     room.JoinCode,
+		roomKey:      roomKey,
 		isRoomOwner:  room.CurrentUser.ID == room.Owner.ID,
 		viewport:     newMessagesViewport(),
 		messageInput: messageInput,
@@ -230,5 +254,14 @@ func (m model) withJoinCodeInQRURL(joinCode string) model {
 
 // encrypted reports whether the room encrypts its messages.
 func (c chatState) encrypted() bool {
-	return c.room != nil && c.room.EncryptionKey != ""
+	return c.room != nil && c.roomKey != ""
+}
+
+// inviteCode is the code to share for the room: its join code and its key.
+func (c chatState) inviteCode() string {
+	code, err := apisdk.FormatInviteCode(c.roomCode, c.roomKey)
+	if err != nil {
+		return c.roomCode
+	}
+	return code
 }

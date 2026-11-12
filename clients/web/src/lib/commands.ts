@@ -10,7 +10,11 @@ export const commands: Command[] = [
 	{ cmd: "clear", desc: "clear the terminal" },
 	{ cmd: "echo", desc: "print out anything" },
 	{ cmd: "env", desc: "print environment variables" },
-	{ cmd: "setuserid", desc: "sets the user id", special: true },
+	{
+		cmd: "setdevicecode",
+		desc: "sets your CLI's device code (from its settings page)",
+		special: true,
+	},
 	{
 		cmd: "setjoincode",
 		desc: "sets the room join code",
@@ -19,6 +23,11 @@ export const commands: Command[] = [
 	{
 		cmd: "setsecurecode",
 		desc: "sets the room secure code",
+		special: true,
+	},
+	{
+		cmd: "setroomkey",
+		desc: "sets the room key (from the invite link)",
 		special: true,
 	},
 	{

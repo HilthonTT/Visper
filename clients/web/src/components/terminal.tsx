@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShell } from "@/contexts/shell-context";
 import { useUser } from "@/contexts/user-context";
-import type { RoomParams } from "@/hooks/use-room-params";
+import { type RoomParams, useRoomKeyFromHash } from "@/hooks/use-room-params";
 import { commandNames, isValidCommand } from "@/lib/commands";
 import { moodForCommand } from "@/lib/companions";
 import { autocomplete, parseCommand } from "@/lib/funcs";
@@ -27,7 +27,8 @@ export const Terminal = ({ searchParams, active }: TerminalProps) => {
 	const inputRef = useRef<HTMLInputElement>(null);
 	const nextId = useRef(1);
 
-	const { setJoinCode, setSecureCode } = useUser();
+	const { setJoinCode, setSecureCode, setRoomKey } = useUser();
+	useRoomKeyFromHash(setRoomKey);
 	const { setMood } = useShell();
 
 	const [inputVal, setInputVal] = useState("");

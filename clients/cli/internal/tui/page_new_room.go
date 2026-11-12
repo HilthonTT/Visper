@@ -54,12 +54,18 @@ func (m model) createRoom() (model, tea.Cmd) {
 
 	client, ctx, opts := m.client, m.ctx, m.requestOpts()
 	return m, tea.Batch(animTick(animFastInterval), func() tea.Msg {
+		// The key is made here and never sent to the server.
+		key, err := apisdk.NewRoomKey()
+		if err != nil {
+			log.Printf("Failed to create room key: %v", err)
+			return createRoomFailedMsg{err: err}
+		}
 		room, err := client.Room.Create(ctx, apisdk.RoomCreateParams{ExpiryHours: roomExpiryHours}, opts...)
 		if err != nil {
 			log.Printf("Failed to create room: %v", err)
 			return createRoomFailedMsg{err: err}
 		}
-		return roomJoinedMsg{room: room}
+		return roomJoinedMsg{room: room, roomKey: key}
 	})
 }
 

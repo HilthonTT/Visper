@@ -1,6 +1,7 @@
 package apisdk
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -109,7 +110,7 @@ func TestJoinByCodeWithToken(t *testing.T) {
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"id":"r1","join_code":"ABC123","encryption_key":"k"}`)
+		io.WriteString(w, `{"id":"r1","join_code":"ABC123"}`)
 	}))
 	room, err := client.Room.JoinByCodeWithToken(context.Background(), JoinByCodeWithTokenParams{JoinCode: "ABC123", SecureToken: "tok"})
 	if err != nil {
@@ -118,7 +119,7 @@ func TestJoinByCodeWithToken(t *testing.T) {
 	if body["join_code"] != "ABC123" || body["secure_token"] != "tok" {
 		t.Fatalf("request body = %v", body)
 	}
-	if room.ID != "r1" || room.EncryptionKey != "k" {
+	if room.ID != "r1" || room.JoinCode != "ABC123" {
 		t.Fatalf("room = %+v", room)
 	}
 	if _, err := client.Room.JoinByCodeWithToken(context.Background(), JoinByCodeWithTokenParams{JoinCode: "x"}); !errors.Is(err, ErrMissingSecureTokenParameter) {
@@ -126,7 +127,8 @@ func TestJoinByCodeWithToken(t *testing.T) {
 	}
 }
 
-func TestFileUploadDecodesServerFields(t *testing.T) {
+func TestFileUploadEncryptsContentAndHidesName(t *testing.T) {
+	keyB64, _ := NewRoomKey()
 	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/rooms/r1/files/upload" {
 			t.Errorf("path = %s", r.URL.Path)
@@ -139,24 +141,30 @@ func TestFileUploadDecodesServerFields(t *testing.T) {
 			t.Error(err)
 		} else {
 			b, _ := io.ReadAll(f)
-			if string(b) != "png-bytes" || hdr.Filename != "pic.png" {
-				t.Errorf("file = %q %q", hdr.Filename, b)
+			if hdr.Filename != "file.enc" {
+				t.Errorf("filename sent to the server = %q", hdr.Filename)
+			}
+			if bytes.Contains(b, []byte("png-bytes")) || !IsEncryptedFile(b) {
+				t.Errorf("file was not encrypted: %q", b)
+			}
+			if plain, err := DecryptFile(b, keyB64); err != nil || string(plain) != "png-bytes" {
+				t.Errorf("DecryptFile = %q, %v", plain, err)
 			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		io.WriteString(w, `{"id":"f1","filename":"pic.png","mimetype":"image/png","size":9,"url":"http://x/p/pic.png","createdAt":"2026-01-01T00:00:00Z","uploader":{"id":"u1"}}`)
+		io.WriteString(w, `{"id":"f1","filename":"file.enc","mimetype":"application/octet-stream","size":9,"url":"http://x/d/r1/f1.enc","createdAt":"2026-01-01T00:00:00Z","uploader":{"id":"u1"}}`)
 	}))
 
 	path := filepath.Join(t.TempDir(), "pic.png")
 	if err := os.WriteFile(path, []byte("png-bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	res, err := client.File.Upload(context.Background(), "r1", path, "u1")
+	res, err := client.File.UploadEncrypted(context.Background(), "r1", path, keyB64, "u1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.MimeType != "image/png" || res.CreatedAt.IsZero() || res.Uploader.ID != "u1" {
+	if res.URL != "http://x/d/r1/f1.enc" || res.CreatedAt.IsZero() || res.Uploader.ID != "u1" {
 		t.Fatalf("unexpected response %+v", res)
 	}
 }

@@ -13,8 +13,9 @@
 </div>
 
 Spin up a throwaway room, share the join code or QR invite, and chat without an
-account. Messages are encrypted on the client, so the server only stores
-ciphertext. Visper has a [Bubble Tea](https://github.com/charmbracelet/bubbletea)
+account. Messages and shared files are encrypted on the client with a room key
+that travels only inside invites, so the server only stores ciphertext and
+never sees the key. Visper has a [Bubble Tea](https://github.com/charmbracelet/bubbletea)
 TUI, a terminal-style web client, file and image sharing with inline previews,
 and an optional "enhance my message" feature backed by a local
 [Ollama](https://ollama.com) model.

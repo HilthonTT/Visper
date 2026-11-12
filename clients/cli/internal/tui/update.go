@@ -28,7 +28,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case roomJoinedMsg:
-		return m.enterChat(msg.room)
+		return m.enterChat(msg.room, msg.roomKey)
 	case tea.BackgroundColorMsg:
 		m.theme = theme.BasicTheme(msg.IsDark(), nil)
 		return m, nil

@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/hilthontt/visper/services/api/domain/model"
 	"github.com/hilthontt/visper/services/api/domain/repository"
-	"github.com/hilthontt/visper/services/api/infrastructure/crypto"
 	"github.com/hilthontt/visper/services/api/infrastructure/events"
 	"github.com/hilthontt/visper/services/api/infrastructure/logger"
 	"go.uber.org/zap"
@@ -63,20 +62,16 @@ func NewRoomUseCase(
 // Rooms
 
 func (uc *roomUseCase) Create(ctx context.Context, owner model.User, expiry time.Duration) (*model.Room, error) {
-	encryptionKey, err := crypto.GenerateKeyBase64()
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate encryption key: %w", err)
-	}
-
+	// Rooms have no server-side key: clients create the room key and share
+	// it in invites, so the server only ever stores ciphertext.
 	room := &model.Room{
-		ID:            uuid.NewString(),
-		JoinCode:      generateJoinCode(),
-		Owner:         owner,
-		CreatedAt:     time.Now(),
-		Expiry:        expiry,
-		Members:       []model.User{owner}, // the owner is a member too
-		SecureCode:    generateSecureCode(),
-		EncryptionKey: encryptionKey,
+		ID:         uuid.NewString(),
+		JoinCode:   generateJoinCode(),
+		Owner:      owner,
+		CreatedAt:  time.Now(),
+		Expiry:     expiry,
+		Members:    []model.User{owner}, // the owner is a member too
+		SecureCode: generateSecureCode(),
 	}
 
 	if err := uc.repository.Create(ctx, room); err != nil {

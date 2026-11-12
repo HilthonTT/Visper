@@ -36,6 +36,12 @@ func TestIsImageURL(t *testing.T) {
 		{"https://x/a.png?x=1", false},
 		{"https://x/a.txt", false},
 		{"", false},
+		// Encrypted images: the stored file, named by the fragment.
+		{"https://x/api/v1/d/r/f.enc#cat.png", true},
+		{"https://x/api/v1/d/r/f.enc#My%20Cat.JPG", true},
+		{"https://x/api/v1/d/r/f.enc#notes.txt", false},
+		{"https://x/api/v1/d/r/f.enc", false},
+		{"https://x/a.txt#cat.png", false},
 	}
 	for _, tt := range tests {
 		if got := isImageURL(tt.in); got != tt.want {

@@ -12,8 +12,9 @@ type Status =
 	| { kind: "success"; text: string };
 
 /**
- * Form version of `setuserid` + `setjoincode` + `setsecurecode` + `joinroom`.
- * Shares the same credentials as the terminal commands.
+ * Form version of `setdevicecode` + `setjoincode` + `setsecurecode` +
+ * `setroomkey` + `joinroom`. Shares the same credentials as the terminal
+ * commands. An invite link fills in everything but the device code.
  */
 export const JoinPage = () => {
 	const user = useUser();
@@ -27,11 +28,11 @@ export const JoinPage = () => {
 
 	const fields = [
 		{
-			id: "userId",
-			label: "user id",
-			hint: "the id shown in your CLI's settings",
-			value: user.userId,
-			set: user.setUserId,
+			id: "deviceCode",
+			label: "device code",
+			hint: "from your CLI's settings page (press c there to copy)",
+			value: user.deviceCode,
+			set: user.setDeviceCode,
 		},
 		{
 			id: "joinCode",
@@ -43,9 +44,16 @@ export const JoinPage = () => {
 		{
 			id: "secureCode",
 			label: "secure code",
-			hint: "unlocks the room's encryption",
+			hint: "from the invite link",
 			value: user.secureCode,
 			set: user.setSecureCode,
+		},
+		{
+			id: "roomKey",
+			label: "room key",
+			hint: "from the invite link; sealed to your CLI before sending",
+			value: user.roomKey,
+			set: user.setRoomKey,
 		},
 	] as const;
 
@@ -64,9 +72,10 @@ export const JoinPage = () => {
 
 		notifySelfRoomInvite(
 			{
-				userId: user.userId.trim(),
+				deviceCode: user.deviceCode.trim(),
 				joinCode: user.joinCode.trim(),
 				secureCode: user.secureCode.trim(),
+				roomKey: user.roomKey.trim(),
 			},
 			c.signal,
 		)
@@ -102,8 +111,8 @@ export const JoinPage = () => {
 		<PageContent>
 			<PageTitle>Join a room</PageTitle>
 			<Lead>
-				Send a room invite to your own CLI sessions. Accept it there and you're
-				in.
+				Send a room invite to your CLI. The room key is encrypted to your CLI
+				before it leaves this page, so the server can't read it.
 			</Lead>
 
 			<Form

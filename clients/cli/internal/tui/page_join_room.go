@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"log"
 	"strings"
 
@@ -26,8 +27,8 @@ type joinRoomFailedMsg struct {
 func (m model) gotoJoinRoom() (model, tea.Cmd) {
 	m = m.switchPage(joinRoomPage)
 
-	input := m.newTextInput("room code")
-	input.CharLimit = 32
+	input := m.newTextInput("invite code")
+	input.CharLimit = 96
 	input.SetWidth(max(min(m.widthContainer-4, joinRoomMaxWidth)-6, 10))
 	styles := input.Styles()
 	styles.Focused.Text = styles.Focused.Text.Bold(true)
@@ -61,7 +62,7 @@ func (m model) joinRoomUpdate(msg tea.Msg) (model, tea.Cmd) {
 			return m.joinRoom()
 		}
 	case joinRoomFailedMsg:
-		s.error = "No room matches that code. It may have expired, or the code changed."
+		s.error = "No room matches that invite code. It may have expired, or the code changed."
 		s.joining = false
 		return m, nil
 	}
@@ -76,9 +77,18 @@ func (m model) joinRoomUpdate(msg tea.Msg) (model, tea.Cmd) {
 }
 
 func (m model) joinRoom() (model, tea.Cmd) {
-	code := strings.TrimSpace(m.state.joinRoom.input.Value())
-	if code == "" {
-		m.state.joinRoom.error = "Enter a room code first."
+	input := strings.TrimSpace(m.state.joinRoom.input.Value())
+	if input == "" {
+		m.state.joinRoom.error = "Paste an invite code first."
+		return m, nil
+	}
+	code, key, err := apisdk.ParseInviteCode(input)
+	switch {
+	case errors.Is(err, apisdk.ErrMissingRoomKey):
+		m.state.joinRoom.error = "That's only the join code. Ask for the full invite code (ctrl+p in their room): it carries the room's key."
+		return m, nil
+	case err != nil:
+		m.state.joinRoom.error = "That invite code is incomplete or mistyped. Copy it again."
 		return m, nil
 	}
 	m.state.joinRoom.error = ""
@@ -91,7 +101,7 @@ func (m model) joinRoom() (model, tea.Cmd) {
 			log.Printf("Failed to join room: %v", err)
 			return joinRoomFailedMsg{err: err}
 		}
-		return roomJoinedMsg{room: room}
+		return roomJoinedMsg{room: room, roomKey: key}
 	})
 }
 
@@ -100,7 +110,7 @@ func (m model) joinRoomView(height int) string {
 	width := min(m.widthContainer-4, joinRoomMaxWidth)
 
 	title := m.theme.TextAccent().Bold(true).Render("Join a room")
-	lead := m.theme.TextBody().Width(width).Render("Type or paste the code someone shared with you.")
+	lead := m.theme.TextBody().Width(width).Render("Paste the invite code someone shared with you. It carries the room's key, which the server never sees.")
 
 	borderColor := m.theme.Brand()
 	if s.error != "" {

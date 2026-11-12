@@ -6,8 +6,8 @@ the scripts.
 
 ## Chat in an encrypted room
 
-Join with a room code and talk. Messages are encrypted on the client, so the
-server only stores ciphertext.
+Join with an invite code and talk. Messages are encrypted on the client with a
+key carried by the invite code, so the server only stores ciphertext.
 
 ![Joining a room and chatting](../assets/demos/chat.gif)
 

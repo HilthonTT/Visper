@@ -5,13 +5,20 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	apisdk "github.com/hilthontt/visper/sdk/go"
 )
 
 // A message whose content is an image URL is shown as the image itself.
+//
+// Images shared in a room are encrypted with the room key (see uploadImage):
+// their message is the stored file's URL, ending in ".enc", with the image's
+// file name as the fragment, e.g. "https://host/api/v1/d/room/id.enc#cat.png".
+// Plain image URLs (e.g. pasted links) are shown too.
 
 const (
 	imagePreviewHeight = 15
@@ -60,8 +67,12 @@ func (m model) fetchImageFor(messageID, content string) (model, tea.Cmd) {
 		return m, nil
 	}
 	c.fetching[messageID] = true
+	key := m.state.chat.roomKey
 	return m, func() tea.Msg {
 		bytes, err := fetchImageBytes(content)
+		if err == nil && isEncryptedImageURL(content) {
+			bytes, err = apisdk.DecryptFile(bytes, key)
+		}
 		return imageFetchedMsg{messageID: messageID, bytes: bytes, err: err}
 	}
 }
@@ -117,12 +128,41 @@ func (m model) rerenderImagePreviews() model {
 	return m
 }
 
-// isImageURL reports whether s is an http(s) URL of an image file.
+// encryptedImageContent is the message content for an encrypted image stored
+// at fileURL.
+func encryptedImageContent(fileURL, name string) string {
+	return fileURL + "#" + url.PathEscape(name)
+}
+
+// isImageURL reports whether s is an http(s) URL of an image file, encrypted
+// or not.
 func isImageURL(s string) bool {
+	return isEncryptedImageURL(s) || isPlainImageURL(s)
+}
+
+// isPlainImageURL reports whether s is an http(s) URL ending in an image
+// extension.
+func isPlainImageURL(s string) bool {
+	file, _, _ := strings.Cut(strings.ToLower(s), "#")
+	return isHTTPURL(file) && hasImageExtension(file)
+}
+
+// isEncryptedImageURL reports whether s is the URL of an encrypted image: an
+// encrypted file whose fragment names an image.
+func isEncryptedImageURL(s string) bool {
 	lower := strings.ToLower(s)
-	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
-		return false
-	}
+	file, name, ok := strings.Cut(lower, "#")
+	return ok && isHTTPURL(file) && strings.HasSuffix(file, encryptedFileExt) && hasImageExtension(name)
+}
+
+// encryptedFileExt ends the URLs of files encrypted with the room key.
+const encryptedFileExt = ".enc"
+
+func isHTTPURL(lower string) bool {
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+}
+
+func hasImageExtension(lower string) bool {
 	for _, ext := range imageExtensions {
 		if strings.HasSuffix(lower, ext) {
 			return true
@@ -131,8 +171,10 @@ func isImageURL(s string) bool {
 	return false
 }
 
-func fetchImageBytes(url string) ([]byte, error) {
-	resp, err := imageHTTPClient.Get(url)
+func fetchImageBytes(rawURL string) ([]byte, error) {
+	// The fragment is ours (the file name); never send it.
+	rawURL, _, _ = strings.Cut(rawURL, "#")
+	resp, err := imageHTTPClient.Get(rawURL)
 	if err != nil {
 		return nil, err
 	}

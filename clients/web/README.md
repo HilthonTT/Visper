@@ -1,6 +1,6 @@
 # Visper Web
 
-Terminal-style web client for [Visper](https://github.com/HilthonTT/Visper), the anonymous, encrypted real-time chat app. You type shell-like commands (`help`, `setuserid`, `setjoincode`, `joinroom`, `themes`, ...) to send a room invite to your own Visper CLI sessions through the Go API.
+Terminal-style web client for [Visper](https://github.com/HilthonTT/Visper), the anonymous, encrypted real-time chat app. You type shell-like commands (`help`, `setdevicecode`, `setjoincode`, `setroomkey`, `joinroom`, `themes`, ...) to send a room invite to your own Visper CLI through the Go API. The room key is sealed to your CLI's device key (X25519 + AES-GCM, via WebCrypto) before it is sent, so the API relays it without being able to read it.
 
 Built with React 19, TanStack Start/Router, Vite and styled-components. Every colour comes from the active theme (`src/lib/themes.ts`).
 
@@ -29,7 +29,7 @@ Screenshots are taken at 2× with Playwright against `pnpm dev`. Retake them aft
 | Page | Key | What it does |
 | --- | --- | --- |
 | Terminal | `t` / `alt+1` | Shell-style commands (`help` lists them). Scrollback survives tab switches. |
-| Join room | `j` / `alt+2` | Form version of `setuserid` + `setjoincode` + `setsecurecode` + `joinroom`. Opens first when the URL carries `?joinCode=`. |
+| Join room | `j` / `alt+2` | Form version of `setdevicecode` + `setjoincode` + `setsecurecode` + `setroomkey` + `joinroom`. Opens first when the URL carries `?joinCode=`. |
 | FAQ | `f` / `alt+3` | Same questions as the CLI's FAQ page. |
 | Settings | `s` / `alt+4` | Pick the companion and the colour theme. Both are saved in the browser. |
 
@@ -47,7 +47,7 @@ cp .env.example .env   # then edit the values
 pnpm dev               # http://localhost:3000
 ```
 
-Room credentials can be prefilled from the URL: `/?joinCode=...&secureCode=...`.
+Room credentials can be prefilled from an invite link: `/?joinCode=...&secureCode=...#key=...`. The room key sits in the fragment, which browsers never send to a server; the page reads it, keeps it in memory only and removes it from the address bar. The device code comes from the CLI's settings page (press `c` there to copy it).
 
 ## Environment variables
 

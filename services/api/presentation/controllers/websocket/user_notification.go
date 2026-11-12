@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"encoding/base64"
 	"log"
 	"net/http"
 	"time"
@@ -73,7 +74,11 @@ func (c *userNotificationController) NotifySelfRoomInvite(ctx *gin.Context) {
 
 	var req NotifySelfRoomInviteRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
-		httpx.BadRequest(ctx, "user_id is required in request body")
+		httpx.BadRequest(ctx, "user_id and sealed_key are required in request body")
+		return
+	}
+	if sealed, err := base64.RawURLEncoding.DecodeString(req.SealedKey); err != nil || len(sealed) != sealedKeySize {
+		httpx.BadRequest(ctx, "sealed_key is not a sealed room key")
 		return
 	}
 
@@ -106,6 +111,7 @@ func (c *userNotificationController) NotifySelfRoomInvite(ctx *gin.Context) {
 			"room_id":     room.ID,
 			"join_code":   joinCode,
 			"secure_code": secureCode,
+			"sealed_key":  req.SealedKey,
 			"timestamp":   time.Now().Unix(),
 			"expires_at":  formatExpiresAt(room),
 		},

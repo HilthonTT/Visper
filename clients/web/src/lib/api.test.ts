@@ -12,7 +12,13 @@ describe("buildSelfRoomInviteUrl", () => {
 });
 
 describe("notifySelfRoomInvite", () => {
-	const params = { userId: "u", joinCode: "j", secureCode: "s" };
+	// A device code and room key as the CLI and an invite link produce them.
+	const params = {
+		deviceCode: "u.E75P6uryBMf9M1j8nAByGIHRdCeBKCJ-xnTzf3_pe20",
+		joinCode: "j",
+		secureCode: "s",
+		roomKey: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+	};
 
 	const mockFetch = (body: string, init: ResponseInit) => {
 		vi.stubEnv("VITE_BACKEND_API_URL", "http://api.test/");
@@ -57,5 +63,27 @@ describe("notifySelfRoomInvite", () => {
 		await expect(notifySelfRoomInvite(params)).rejects.toThrow(
 			"Unexpected response from server",
 		);
+	});
+
+	it("sends the user id and a sealed key, never the room key", async () => {
+		mockFetch(JSON.stringify({ message: "ok", room_id: "r" }), {
+			status: 200,
+			headers: { "content-type": "application/json" },
+		});
+		await notifySelfRoomInvite(params);
+
+		const [, init] = vi.mocked(fetch).mock.calls[0];
+		const body = JSON.parse(String(init?.body));
+		expect(body.user_id).toBe("u");
+		expect(body.sealed_key).toMatch(/^[A-Za-z0-9_-]{123}$/);
+		expect(String(init?.body)).not.toContain(params.roomKey);
+	});
+
+	it("rejects a bad device code before sending anything", async () => {
+		mockFetch("{}", { status: 200 });
+		await expect(
+			notifySelfRoomInvite({ ...params, deviceCode: "u" }),
+		).rejects.toThrow("device code");
+		expect(fetch).not.toHaveBeenCalled();
 	});
 });

@@ -8,12 +8,15 @@ import {
 	parseCommand,
 } from "./funcs";
 
-const commands = ["echo", "env", "help", "history", "themes", "setuserid"];
+const commands = ["echo", "env", "help", "history", "themes", "setdevicecode"];
 const themes = ["dark", "light", "ubuntu", "blue-matrix"];
 
 describe("parseCommand", () => {
 	it("splits on any whitespace", () => {
-		expect(parseCommand("  setuserid   abc ")).toEqual(["setuserid", "abc"]);
+		expect(parseCommand("  setdevicecode   abc ")).toEqual([
+			"setdevicecode",
+			"abc",
+		]);
 		expect(parseCommand("echo\thi  there")).toEqual(["echo", "hi", "there"]);
 	});
 

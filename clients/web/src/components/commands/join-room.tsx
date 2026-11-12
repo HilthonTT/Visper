@@ -13,15 +13,17 @@ export const JoinRoom = () => {
 	const [message, setMessage] = useState("");
 
 	useEffect(() => {
-		const { userId, joinCode, secureCode } = credentials;
+		const { deviceCode, joinCode, secureCode, roomKey } = credentials;
 
-		const missing = !userId
-			? "User ID not set. Use 'setuserid <your-id>' first."
+		const missing = !deviceCode
+			? "Device code not set. Use 'setdevicecode <code>' first (from your CLI's settings page)."
 			: !joinCode
 				? "Join code not set. Use 'setjoincode <code>' first."
 				: !secureCode
 					? "Secure code not set. Use 'setsecurecode <code>' first."
-					: null;
+					: !roomKey
+						? "Room key not set. Open the invite link, or use 'setroomkey <key>'."
+						: null;
 
 		if (missing) {
 			setStatus("error");
@@ -33,7 +35,10 @@ export const JoinRoom = () => {
 		setStatus("loading");
 		setMessage("Sending notification to your devices...");
 
-		notifySelfRoomInvite({ userId, joinCode, secureCode }, controller.signal)
+		notifySelfRoomInvite(
+			{ deviceCode, joinCode, secureCode, roomKey },
+			controller.signal,
+		)
 			.then((data) => {
 				setStatus("success");
 				setMessage(

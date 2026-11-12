@@ -210,15 +210,14 @@ type UserResponse struct {
 }
 
 type RoomResponse struct {
-	ID            string         `json:"id"`
-	JoinCode      string         `json:"join_code"`
-	QRCodeURL     string         `json:"qr_code_url"`
-	Owner         UserResponse   `json:"owner"`
-	CreatedAt     time.Time      `json:"created_at"`
-	ExpiresAt     time.Time      `json:"expires_at"`
-	Members       []UserResponse `json:"members"`
-	CurrentUser   UserResponse   `json:"current_user"`
-	EncryptionKey string         `json:"encryption_key"`
+	ID          string         `json:"id"`
+	JoinCode    string         `json:"join_code"`
+	QRCodeURL   string         `json:"qr_code_url"`
+	Owner       UserResponse   `json:"owner"`
+	CreatedAt   time.Time      `json:"created_at"`
+	ExpiresAt   time.Time      `json:"expires_at"`
+	Members     []UserResponse `json:"members"`
+	CurrentUser UserResponse   `json:"current_user"`
 }
 
 func (r *RoomResponse) UnmarshalJSON(data []byte) error {

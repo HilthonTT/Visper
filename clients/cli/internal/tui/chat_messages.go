@@ -184,12 +184,11 @@ func (m model) messageContentView(msg apisdk.MessageResponse, width int) string 
 }
 
 func (m model) emptyChatView(width, height int) string {
-	code := m.theme.Pill(m.theme.Surface(), m.theme.Brand()).Render(m.state.chat.roomCode)
 	content := lipgloss.JoinVertical(lipgloss.Center,
 		m.theme.TextAccent().Bold(true).Render("No messages yet"),
 		"",
-		m.theme.TextBody().Render("Share the code ")+code+m.theme.TextBody().Render(" to invite people,"),
-		m.theme.TextBody().Render("or press ")+m.theme.Key().Render("ctrl+p")+m.theme.TextBody().Render(" for a QR code."),
+		m.theme.TextBody().Render("Press ")+m.theme.Key().Render("ctrl+p")+m.theme.TextBody().Render(" for the invite code and QR code."),
+		m.theme.TextBody().Render("They carry the room's key: share them only with people you invite."),
 		"",
 		m.theme.TextSubtle().Render("Messages are encrypted before they leave this terminal."),
 	)

@@ -11,6 +11,16 @@ import (
 	apisdk "github.com/hilthontt/visper/sdk/go"
 )
 
+// testRoomKey returns a fresh room key.
+func testRoomKey(t *testing.T) string {
+	t.Helper()
+	key, err := apisdk.NewRoomKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
 func newChatModel(t *testing.T) model {
 	t.Helper()
 	tm, err := NewModel()
@@ -19,7 +29,7 @@ func newChatModel(t *testing.T) model {
 	}
 	m := tm.(model)
 	m.client = apisdk.NewClient()
-	m, _ = m.enterChat(&apisdk.RoomResponse{ID: "r", JoinCode: "ABC", ExpiresAt: time.Now().Add(time.Hour)})
+	m, _ = m.enterChat(&apisdk.RoomResponse{ID: "r", JoinCode: "ABC", ExpiresAt: time.Now().Add(time.Hour)}, testRoomKey(t))
 	t.Cleanup(func() { m.clearChat() })
 	return m
 }
@@ -108,7 +118,7 @@ func TestChatViewportIsSizedWhenRoomOpens(t *testing.T) {
 	tm, _ = m.Update(tea.WindowSizeMsg{Width: 131, Height: 33})
 	m = tm.(model)
 
-	m, _ = m.enterChat(&apisdk.RoomResponse{ID: "r", JoinCode: "ABC", ExpiresAt: time.Now().Add(time.Hour)})
+	m, _ = m.enterChat(&apisdk.RoomResponse{ID: "r", JoinCode: "ABC", ExpiresAt: time.Now().Add(time.Hour)}, testRoomKey(t))
 	t.Cleanup(func() { m.clearChat() })
 
 	vp := m.state.chat.viewport
@@ -124,7 +134,7 @@ func TestStaleLeaveTimerDoesNotEjectFromNewRoom(t *testing.T) {
 	old := m.state.chat.session
 	m = m.clearChat()
 	m.page = newRoomPage
-	m, _ = m.enterChat(&apisdk.RoomResponse{ID: "r2", JoinCode: "DEF", ExpiresAt: time.Now().Add(time.Hour)})
+	m, _ = m.enterChat(&apisdk.RoomResponse{ID: "r2", JoinCode: "DEF", ExpiresAt: time.Now().Add(time.Hour)}, testRoomKey(t))
 
 	tm, _ := m.Update(roomClosedMsg{session: old})
 	if mm := tm.(model); mm.page != chatPage || mm.state.chat.roomCode != "DEF" {
@@ -204,5 +214,50 @@ func TestQRCodeFollowsNewJoinCode(t *testing.T) {
 	m, _ = m.chatUpdate(roomUpdatedMsg{joinCode: "NEW"})
 	if got := m.state.chat.room.QRCodeURL; !strings.Contains(got, "joinCode=NEW") || !strings.Contains(got, "secureCode=s3") {
 		t.Fatalf("QR URL = %q", got)
+	}
+	if code := m.state.chat.inviteCode(); !strings.HasPrefix(code, "NEW.") {
+		t.Fatalf("invite code = %q, want the new join code", code)
+	}
+}
+
+// The room key must reach invitees only through the invite: in the QR link's
+// fragment (never sent to a server) and in the invite code.
+func TestInviteCarriesRoomKey(t *testing.T) {
+	tm, err := NewModel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := tm.(model)
+	m.client = apisdk.NewClient()
+	key := testRoomKey(t)
+	room := &apisdk.RoomResponse{ID: "r", JoinCode: "ABC123", QRCodeURL: "https://visper.example/?joinCode=ABC123&secureCode=s3", ExpiresAt: time.Now().Add(time.Hour)}
+	m, _ = m.enterChat(room, key)
+	t.Cleanup(func() { m.clearChat() })
+
+	urlKey, _ := apisdk.RoomKeyToURL(key)
+	if got := m.state.chat.room.QRCodeURL; got != room.QRCodeURL+"#key="+urlKey {
+		t.Fatalf("QR URL = %q", got)
+	}
+	if room.QRCodeURL != "https://visper.example/?joinCode=ABC123&secureCode=s3" {
+		t.Fatal("enterChat modified the caller's room")
+	}
+	joinCode, gotKey, err := apisdk.ParseInviteCode(m.state.chat.inviteCode())
+	if err != nil || joinCode != "ABC123" || gotKey != key {
+		t.Fatalf("invite code %q parses to %q, %q, %v", m.state.chat.inviteCode(), joinCode, gotKey, err)
+	}
+}
+
+// Without the room key the chat would show ciphertext and send plaintext.
+func TestEnterChatWithoutKeyStaysOut(t *testing.T) {
+	tm, err := NewModel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := tm.(model)
+	m.client = apisdk.NewClient()
+	m.page = joinRoomPage
+	m, cmd := m.enterChat(&apisdk.RoomResponse{ID: "r", JoinCode: "ABC"}, "")
+	if m.page == chatPage || m.state.chat.room != nil || cmd == nil {
+		t.Fatal("entered a room without its key")
 	}
 }

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/hilthontt/visper/clients/cli/internal/tui/theme"
@@ -143,7 +144,9 @@ func (m model) rewriteDraft() (model, tea.Cmd) {
 	})
 }
 
-// uploadImage uploads an image file; the result sends its URL as a message.
+// uploadImage encrypts and uploads an image file; the result sends its URL as
+// a message. The message (encrypted like any other) also carries the file's
+// name in the URL fragment, which tells readers it is an image to decrypt.
 func (m model) uploadImage(path string) (model, tea.Cmd) {
 	if m.state.chat.room == nil {
 		return m, nil
@@ -151,11 +154,12 @@ func (m model) uploadImage(path string) (model, tea.Cmd) {
 	m.state.chat.uploading = true
 
 	client, ctx, roomID, userID, session := m.client, m.ctx, m.state.chat.room.ID, m.userID, m.state.chat.session
+	key := m.state.chat.roomKey
 	return m, tea.Batch(animTick(animFastInterval), func() tea.Msg {
-		result, err := client.File.Upload(ctx, roomID, path, userID)
+		result, err := client.File.UploadEncrypted(ctx, roomID, path, key, userID)
 		if err != nil {
 			return uploadResultMsg{err: err, session: session}
 		}
-		return uploadResultMsg{fileURL: result.URL, session: session}
+		return uploadResultMsg{fileURL: encryptedImageContent(result.URL, filepath.Base(path)), session: session}
 	})
 }

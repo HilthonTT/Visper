@@ -36,11 +36,7 @@ func (m model) chatEventUpdate(msg tea.Msg) (_ model, _ tea.Cmd, handled bool) {
 			return m, nil, true
 		}
 		m.state.chat.ws = msg.conn
-		var key string
-		if m.state.chat.room != nil {
-			key = m.state.chat.room.EncryptionKey
-		}
-		return m, listenRoom(msg.session, msg.conn, key), true
+		return m, listenRoom(msg.session, msg.conn, m.state.chat.roomKey), true
 	case roomConnectFailedMsg:
 		if msg.session != m.state.chat.session || msg.session.Err() != nil {
 			return m, nil, true // we already left this room
@@ -121,7 +117,7 @@ func (m model) chatEventUpdate(msg tea.Msg) (_ model, _ tea.Cmd, handled bool) {
 		m.state.chat.roomCode = msg.joinCode
 		m = m.withJoinCodeInQRURL(msg.joinCode)
 		if changed {
-			m, cmd = m.toast(theme.ToneSuccess, "New join code: "+msg.joinCode)
+			m, cmd = m.toast(theme.ToneSuccess, "New join code: "+msg.joinCode+". Press ctrl+p for the new invite.")
 		}
 		cmd = tea.Batch(cmd, m.waitForRoomEvent())
 	case roomDeletedMsg:

@@ -9,9 +9,11 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/hilthontt/visper/clients/cli/internal/settings"
 	"github.com/hilthontt/visper/clients/cli/internal/tui/theme"
+	apisdk "github.com/hilthontt/visper/sdk/go"
 )
 
-// The settings page picks the chat companion.
+// The settings page picks the chat companion and shows this terminal's
+// device code, which the web client needs to send it invites.
 
 type settingsState struct {
 	selectedID int
@@ -33,7 +35,7 @@ func (m model) gotoSettings() (model, tea.Cmd) {
 			m.state.settings.cursor = i
 		}
 	}
-	m = m.setFooterHints(keyHint{"↑↓", "browse"}, keyHint{"enter", "choose"})
+	m = m.setFooterHints(keyHint{"↑↓", "browse"}, keyHint{"enter", "choose"}, keyHint{"c", "copy device code"})
 	m = m.switchPage(settingsPage)
 	return m.withSettingsPreview(), nil
 }
@@ -43,6 +45,9 @@ func (m model) settingsUpdate(msg tea.Msg) (model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		return m.withSettingsPreview(), nil
 	case tea.KeyPressMsg:
+		if msg.String() == "c" {
+			return m.copyDeviceCode()
+		}
 		n := len(m.companions)
 		if n == 0 {
 			return m, nil
@@ -75,6 +80,25 @@ func (m model) chooseCompanion(c companion) (model, tea.Cmd) {
 		return m.toast(theme.ToneDanger, "Couldn't save your choice")
 	}
 	return m.toast(theme.ToneSuccess, c.Title+" will keep you company ♡")
+}
+
+// deviceCode is what the web client's Join page asks for: this terminal's
+// user ID and the public key the room key is sealed to. Both change on every
+// start (and the user ID may change when a room is joined).
+func (m model) deviceCode() string {
+	if m.deviceKey == nil || m.userID == "" {
+		return ""
+	}
+	return apisdk.FormatDeviceCode(m.userID, m.deviceKey)
+}
+
+func (m model) copyDeviceCode() (model, tea.Cmd) {
+	code := m.deviceCode()
+	if code == "" {
+		return m, nil
+	}
+	m, cmd := m.toast(theme.ToneSuccess, "Device code copied. Paste it into the web Join page.")
+	return m, tea.Batch(tea.SetClipboard(code), cmd)
 }
 
 // settingsPreviewSize is the size of the companion preview, or 0x0 when the
@@ -121,6 +145,14 @@ func (m model) settingsView(height int) string {
 	}
 
 	content := lipgloss.JoinVertical(lipgloss.Left, title, lead, "", strings.Join(options, "\n"))
+	if code := m.deviceCode(); code != "" {
+		content = lipgloss.JoinVertical(lipgloss.Left, content, "",
+			m.theme.TextAccent().Bold(true).Render("Device code"),
+			m.theme.TextBody().Width(listWidth).Render("Paste it into the web client's Join page to send invites here. The room key is sealed to this terminal, so the server can't read it."),
+			m.theme.TextSecondary().Width(listWidth).Render(code),
+			m.theme.TextSubtle().Render("c copy · changes every time Visper starts"),
+		)
+	}
 	if m.state.settings.preview != "" {
 		preview := m.theme.Base().
 			Border(lipgloss.RoundedBorder()).

@@ -161,6 +161,11 @@ func (m model) chatDialogUpdate(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	case dialogFileExplorer:
 		return m.fileExplorerUpdate(msg)
 	case dialogQRCode:
+		if msg.String() == "c" {
+			code := m.state.dialog.content
+			m, cmd := m.closeDialog().toast(theme.ToneSuccess, "Invite code copied. It unlocks the room: share it only with people you invite.")
+			return m, tea.Batch(tea.SetClipboard(code), cmd)
+		}
 		return m.closeDialog(), nil
 	case dialogAlert:
 		switch msg.String() {

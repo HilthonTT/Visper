@@ -12,8 +12,8 @@ export const About = () => (
 		</p>
 		<p>
 			<Subtle>
-				No accounts, no profiles. Join a room with its join code, unlock it with
-				the secure code, and talk.
+				No accounts, no profiles. Messages and files are encrypted with a room
+				key that never leaves your devices: the server only stores ciphertext.
 			</Subtle>
 		</p>
 		<p>

@@ -36,12 +36,21 @@ const SetCredential = ({
 	return <StatusLine $status="success">{success(arg[0])}</StatusLine>;
 };
 
-export const SetUserId = () => (
+export const SetDeviceCode = () => (
 	<SetCredential
-		cmd="setuserid"
-		placeholder="user_id"
-		setValue={useUser().setUserId}
-		success={(id) => `User ID set to: ${id}`}
+		cmd="setdevicecode"
+		placeholder="device_code"
+		setValue={useUser().setDeviceCode}
+		success={() => "Device code set"}
+	/>
+);
+
+export const SetRoomKey = () => (
+	<SetCredential
+		cmd="setroomkey"
+		placeholder="room_key"
+		setValue={useUser().setRoomKey}
+		success={() => "Room key set (kept in memory, sealed to your CLI on send)"}
 	/>
 );
 

@@ -45,6 +45,8 @@ type (
 		roomID     string
 		joinCode   string
 		secureCode string
+		// sealedKey is the room key, encrypted to this terminal's device key.
+		sealedKey string
 	}
 )
 
@@ -155,8 +157,13 @@ func (m model) roomInviteDialogUpdate(msg tea.KeyPressMsg) (model, tea.Cmd) {
 }
 
 func (m model) joinFromInvite(invite roomInviteMsg) tea.Cmd {
-	client, ctx, opts := m.client, m.ctx, m.requestOpts()
+	client, ctx, opts, deviceKey := m.client, m.ctx, m.requestOpts(), m.deviceKey
 	return func() tea.Msg {
+		key, err := deviceKey.OpenRoomKey(invite.sealedKey)
+		if err != nil {
+			log.Printf("Failed to open the invite's room key: %v", err)
+			return visibleError{message: "Couldn't unlock this invite. Send it again with the device code from this terminal's settings page (it changes every time Visper starts)."}
+		}
 		room, err := client.Room.JoinByCodeWithToken(ctx, apisdk.JoinByCodeWithTokenParams{
 			JoinCode:    invite.joinCode,
 			SecureToken: invite.secureCode,
@@ -165,7 +172,7 @@ func (m model) joinFromInvite(invite roomInviteMsg) tea.Cmd {
 			log.Printf("Failed to join room from invite: %v", err)
 			return visibleError{message: fmt.Sprintf("Failed to join room: %v", err)}
 		}
-		return roomJoinedMsg{room: room}
+		return roomJoinedMsg{room: room, roomKey: key}
 	}
 }
 
@@ -211,11 +218,12 @@ func parseNotification(wsMsg apisdk.NotificationWSMessage) (tea.Msg, bool) {
 		roomID, _ := data["room_id"].(string)
 		joinCode, _ := data["join_code"].(string)
 		secureCode, _ := data["secure_code"].(string)
-		if roomID == "" || joinCode == "" || secureCode == "" {
-			log.Printf("Invalid room invite payload: %+v", data)
+		sealedKey, _ := data["sealed_key"].(string)
+		if roomID == "" || joinCode == "" || secureCode == "" || sealedKey == "" {
+			log.Printf("Invalid room invite payload for room %q", roomID)
 			return nil, false
 		}
-		return roomInviteMsg{roomID: roomID, joinCode: joinCode, secureCode: secureCode}, true
+		return roomInviteMsg{roomID: roomID, joinCode: joinCode, secureCode: secureCode, sealedKey: sealedKey}, true
 
 	case apisdk.NotificationError:
 		code, _ := data["code"].(string)

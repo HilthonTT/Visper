@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -21,7 +20,7 @@ const (
 
 var (
 	ErrFileTooLarge    = errors.New("file size exceeds maximum allowed size of 5MB")
-	ErrInvalidFileType = errors.New("invalid file type, only images are allowed")
+	ErrInvalidFileType = errors.New("invalid file: uploads must be encrypted on the client")
 	// ErrInvalidPath is returned for paths that are absolute or escape the
 	// uploads directory (e.g. "../config.yml").
 	ErrInvalidPath = errors.New("invalid file path")
@@ -64,9 +63,26 @@ func isSingleSegment(name string) bool {
 		!strings.ContainsAny(name, `/\`) && filepath.IsLocal(name)
 }
 
-// SaveFile validates and stores an uploaded image. It returns the path of the
-// stored file relative to the uploads directory (slash separated), the file
-// ID and the MIME type detected from the file content.
+// EncryptedFileMagic starts every file a client encrypted for a room (see
+// the SDK's EncryptFile). The server cannot decrypt uploads and only stores
+// ones carrying it, so a client that forgot to encrypt is refused instead of
+// leaking the file.
+var EncryptedFileMagic = []byte("VISPER\x00\x01")
+
+// EncryptedFileExt is the extension of stored files; they are opaque.
+const EncryptedFileExt = ".enc"
+
+// minEncryptedFileSize is the size of an encrypted empty file: the magic, a
+// 24-byte nonce and a 16-byte authentication tag.
+var minEncryptedFileSize = len(EncryptedFileMagic) + 24 + 16
+
+// EncryptedFileMIME is the MIME type of stored files.
+const EncryptedFileMIME = "application/octet-stream"
+
+// SaveFile validates and stores an uploaded encrypted file. It returns the
+// path of the stored file relative to the uploads directory (slash
+// separated), the file ID and the MIME type. The uploaded file name is
+// ignored: clients keep real names inside their encrypted messages.
 func (s *LocalStorage) SaveFile(file *multipart.FileHeader, roomID string) (relativePath, fileID, mimeType string, err error) {
 	if file.Size > MaxFileSize {
 		return "", "", "", ErrFileTooLarge
@@ -76,31 +92,23 @@ func (s *LocalStorage) SaveFile(file *multipart.FileHeader, roomID string) (rela
 		return "", "", "", ErrInvalidPath
 	}
 
-	ext := strings.ToLower(filepath.Ext(file.Filename))
-	expectedType := extensionToMIME(ext)
-	if expectedType == "" {
-		return "", "", "", ErrInvalidFileType
-	}
-
 	src, err := file.Open()
 	if err != nil {
 		return "", "", "", fmt.Errorf("failed to open uploaded file: %w", err)
 	}
 	defer src.Close()
 
-	// Check the actual content, not just the extension, so that e.g. HTML
-	// cannot be uploaded as "image.png".
-	head := make([]byte, 512)
+	head := make([]byte, minEncryptedFileSize)
 	n, err := io.ReadFull(src, head)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
 		return "", "", "", fmt.Errorf("failed to read uploaded file: %w", err)
 	}
 	head = head[:n]
-
-	mimeType = http.DetectContentType(head)
-	if !strings.HasPrefix(mimeType, "image/") {
+	if n < minEncryptedFileSize || !bytes.HasPrefix(head, EncryptedFileMagic) {
 		return "", "", "", ErrInvalidFileType
 	}
+	mimeType = EncryptedFileMIME
+	ext := EncryptedFileExt
 
 	fileID = uuid.NewString()
 	filename := fileID + ext
@@ -192,8 +200,9 @@ func (s *LocalStorage) GetFilePath(relativePath string) (string, error) {
 	return s.resolve(relativePath)
 }
 
-// MIMETypeFromExtension returns the image MIME type for a file extension
-// (including the dot), or "" if the extension is not an allowed image type.
+// MIMETypeFromExtension returns the MIME type served for a stored file's
+// extension (including the dot), or "" if it is unknown. Image types remain
+// for files uploaded before uploads were encrypted.
 func MIMETypeFromExtension(ext string) string {
 	return extensionToMIME(strings.ToLower(ext))
 }
@@ -210,6 +219,8 @@ func extensionToMIME(ext string) string {
 		return "image/webp"
 	case ".bmp":
 		return "image/bmp"
+	case EncryptedFileExt:
+		return EncryptedFileMIME
 	default:
 		return ""
 	}

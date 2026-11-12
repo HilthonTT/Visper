@@ -1,3 +1,5 @@
+import { parseDeviceCode, parseRoomKey, sealRoomKey } from "./room-key";
+
 /** Base URL of the Visper API, from `VITE_BACKEND_API_URL` (no trailing slash). */
 export function getBackendUrl(): string {
 	const url = import.meta.env.VITE_BACKEND_API_URL;
@@ -37,16 +39,36 @@ export type SelfRoomInviteResponse =
 
 type ApiError = { error?: string; message?: string };
 
+export type SelfRoomInviteParams = {
+	/** The CLI's device code: its user id and the public key to seal to. */
+	deviceCode: string;
+	joinCode: string;
+	secureCode: string;
+	/** The room key from the invite link; only its sealed form is sent. */
+	roomKey: string;
+};
+
+/**
+ * Sends a room invite to your CLI. The room key is sealed to the CLI's device
+ * key first, so the API relays it without being able to read it. Invalid
+ * codes throw a RoomKeyError before anything is sent.
+ */
 export async function notifySelfRoomInvite(
-	params: { userId: string; joinCode: string; secureCode: string },
+	params: SelfRoomInviteParams,
 	signal?: AbortSignal,
 ): Promise<SelfRoomInviteResponse> {
+	const device = parseDeviceCode(params.deviceCode);
+	const sealedKey = await sealRoomKey(
+		parseRoomKey(params.roomKey),
+		device.publicKey,
+	);
+
 	const response = await fetch(
 		buildSelfRoomInviteUrl(getBackendUrl(), params.joinCode, params.secureCode),
 		{
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ user_id: params.userId }),
+			body: JSON.stringify({ user_id: device.userId, sealed_key: sealedKey }),
 			signal,
 		},
 	);
