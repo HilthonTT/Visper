@@ -69,19 +69,19 @@ func run() error {
 	}
 
 	t := cfg.Throttle
-	ht := throttling.NewHierarchicalThrottler(
+	ht := throttling.NewHierarchy(
 		// Most specific level first so a blocked client does not burn global quota.
-		&throttling.ThrottleLevel{
-			Name:         "per-ip",
-			KeyExtractor: ipResolver.ClientIP,
-			Throttler: throttling.NewThrottler(throttling.ThrottleConfig{
+		&throttling.Level{
+			Name: "per-ip",
+			Key:  ipResolver.ClientIP,
+			Throttler: throttling.New(throttling.Config{
 				Name: "ip", MaxRequests: t.IPMaxRequests, Interval: t.Interval, Spans: t.Spans, Cooldown: t.Cooldown,
 			}, redisClient),
 		},
-		&throttling.ThrottleLevel{
-			Name:         "global",
-			KeyExtractor: func(r *http.Request) string { return "global" },
-			Throttler: throttling.NewThrottler(throttling.ThrottleConfig{
+		&throttling.Level{
+			Name: "global",
+			Key:  func(r *http.Request) string { return "global" },
+			Throttler: throttling.New(throttling.Config{
 				Name: "global", MaxRequests: t.GlobalMaxRequests, Interval: t.Interval, Spans: t.Spans, Cooldown: t.Cooldown,
 			}, redisClient),
 		},
@@ -97,7 +97,7 @@ func run() error {
 	mux := http.NewServeMux()
 	mux.Handle("/", lb)
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.Handle("POST /admin/reload", middleware.RequireBearerToken(cfg.AdminToken, http.HandlerFunc(
+	mux.Handle("POST /admin/reload", middleware.RequireBearerToken(cfg.AdminToken)(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
 			if cfg.ConfigPath == "" {
 				http.Error(w, "no config file provided", http.StatusConflict)
@@ -118,7 +118,7 @@ func run() error {
 
 	server := &http.Server{
 		Addr:              cfg.LB.ListenAddr,
-		Handler:           middleware.Chain(mux, middleware.HierarchicalThrottling(ht)),
+		Handler:           middleware.Chain(mux, middleware.Throttle(ht)),
 		ReadHeaderTimeout: cfg.Server.ReadHeaderTimeout,
 		ReadTimeout:       cfg.Server.ReadTimeout,
 		WriteTimeout:      cfg.Server.WriteTimeout,
