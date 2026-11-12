@@ -3,6 +3,7 @@ package balancer
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -161,6 +162,61 @@ func TestClientDisconnectKeepsFailureCount(t *testing.T) {
 	defer b.mu.Unlock()
 	if b.failCount != 1 {
 		t.Fatalf("failCount = %d, want 1 (unchanged)", b.failCount)
+	}
+}
+
+// Regression: a TLS handshake timeout is a net.Error timeout but does not
+// match context.DeadlineExceeded, so it was answered with 502.
+func TestTLSHandshakeTimeoutIs504(t *testing.T) {
+	// Accepts TCP connections but never speaks TLS.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+		}
+	}()
+
+	lb := newTestLB(t, testConfig("", "https://"+ln.Addr().String()), Options{})
+	lb.backends[0].proxy.Transport = &http.Transport{TLSHandshakeTimeout: 50 * time.Millisecond}
+
+	w := httptest.NewRecorder()
+	lb.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/", nil))
+	if w.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status %d, want 504", w.Code)
+	}
+}
+
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "i/o timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
+func TestIsTimeout(t *testing.T) {
+	tests := []struct {
+		err  error
+		want bool
+	}{
+		{context.DeadlineExceeded, true},
+		// net.Error timeouts that don't match context.DeadlineExceeded,
+		// like http.Transport's TLS handshake timeout.
+		{fmt.Errorf("proxy: %w", timeoutErr{}), true},
+		{&net.OpError{Op: "read", Err: timeoutErr{}}, true},
+		{context.Canceled, false},
+		{io.ErrUnexpectedEOF, false},
+	}
+	for _, tt := range tests {
+		if got := isTimeout(tt.err); got != tt.want {
+			t.Errorf("isTimeout(%v) = %v, want %v", tt.err, got, tt.want)
+		}
 	}
 }
 

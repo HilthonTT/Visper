@@ -76,11 +76,16 @@ func (lb *LoadBalancer) proxyErrorHandler(b *Backend) func(http.ResponseWriter, 
 		}
 
 		status := http.StatusBadGateway
-		if errors.Is(err, context.DeadlineExceeded) {
+		if isTimeout(err) {
 			status = http.StatusGatewayTimeout
 		}
 		http.Error(w, http.StatusText(status), status)
 	}
+}
+
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &ne) && ne.Timeout())
 }
 
 // isWebSocketRequest reports whether r asks for a WebSocket upgrade.
