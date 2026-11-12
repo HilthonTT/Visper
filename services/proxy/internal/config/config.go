@@ -105,11 +105,18 @@ func (c *Config) Validate() error {
 	if len(c.Backends) == 0 {
 		return errors.New("at least one backend is required")
 	}
+	seen := make(map[string]struct{}, len(c.Backends))
 	for i := range c.Backends {
 		b := &c.Backends[i]
-		if _, err := ParseBackendURL(b.URL); err != nil {
+		u, err := ParseBackendURL(b.URL)
+		if err != nil {
 			return err
 		}
+		key := u.String()
+		if _, dup := seen[key]; dup {
+			return fmt.Errorf("duplicate backend url %q", b.URL)
+		}
+		seen[key] = struct{}{}
 		if b.Weight <= 0 {
 			b.Weight = 1
 		}

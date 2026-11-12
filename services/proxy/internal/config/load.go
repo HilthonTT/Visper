@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"time"
 )
@@ -117,8 +118,12 @@ func overlayFile(path string, cfg *Config) error {
 	base := cfg.Backends
 	cfg.Backends = nil // decode into a fresh slice rather than over base's elements
 	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields() // catch typos instead of silently ignoring them
 	if err := dec.Decode(cfg); err != nil {
 		return fmt.Errorf("error parsing config file %s: %w", path, err)
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return fmt.Errorf("error parsing config file %s: unexpected data after the JSON object", path)
 	}
 	if cfg.Backends == nil {
 		cfg.Backends = base

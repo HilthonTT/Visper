@@ -103,3 +103,20 @@ func TestFileOverlaysEnvAndFlags(t *testing.T) {
 		t.Fatal("reload mutated the running config")
 	}
 }
+
+func TestLoadFileRejects(t *testing.T) {
+	tests := map[string]string{
+		"unknown field":   `{"backends":[{"url":"http://a:1"}],"helth_check_path":"/x"}`,
+		"duplicate url":   `{"backends":[{"url":"http://a:1"},{"url":"http://a:1"}]}`,
+		"empty backends":  `{"backends":[]}`,
+		"bad duration":    `{"health_check_interval":"soon","backends":[{"url":"http://a:1"}]}`,
+		"trailing object": `{"backends":[{"url":"http://a:1"}]} {}`,
+	}
+	for name, data := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := LoadFile(writeFile(t, data)); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
