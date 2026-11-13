@@ -95,7 +95,8 @@ func (m model) joinRoom() (model, tea.Cmd) {
 	m.state.joinRoom.joining = true
 
 	client, ctx, opts := m.client, m.ctx, m.requestOpts()
-	return m, tea.Batch(animTick(animFastInterval), func() tea.Msg {
+	anim := m.restartAnim()
+	return m, tea.Batch(anim, func() tea.Msg {
 		room, err := client.Room.GetByJoinCode(ctx, apisdk.JoinByCodeParams{JoinCode: code}, opts...)
 		if err != nil {
 			log.Printf("Failed to join room: %v", err)

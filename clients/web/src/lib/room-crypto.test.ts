@@ -7,12 +7,14 @@ import {
 	encryptedImageContent,
 	encryptFile,
 	encryptText,
+	fitsMessage,
 	InviteCodeError,
 	imageMimeType,
 	imageName,
 	isEncryptedFile,
 	isEncryptedImageUrl,
 	isPlainImageUrl,
+	MAX_MESSAGE_BYTES,
 	parseInviteCode,
 	type RoomKey,
 	readField,
@@ -114,5 +116,29 @@ describe("image messages", () => {
 		expect(isEncryptedImageUrl(content)).toBe(true);
 		expect(imageName(content)).toBe("my cat.png");
 		expect(imageMimeType("my cat.PNG")).toBe("image/png");
+	});
+});
+
+describe("message size limit", () => {
+	it("keeps the largest allowed message under the API's 1000 characters", () => {
+		expect(
+			encryptText("a".repeat(MAX_MESSAGE_BYTES), key).length,
+		).toBeLessThanOrEqual(1000);
+		expect(
+			encryptText("a".repeat(MAX_MESSAGE_BYTES + 1), key).length,
+		).toBeGreaterThan(1000);
+	});
+
+	it("counts UTF-8 bytes, not characters", () => {
+		expect(fitsMessage("a".repeat(700))).toBe(true);
+		expect(fitsMessage("漢".repeat(300))).toBe(false);
+	});
+
+	it("shortens long image names so the message fits", () => {
+		const url = "https://example.com/files/abc.enc";
+		const content = encryptedImageContent(url, `${"長".repeat(400)}.png`);
+		expect(fitsMessage(content)).toBe(true);
+		expect(isEncryptedImageUrl(content)).toBe(true);
+		expect(imageName(content).endsWith(".png")).toBe(true);
 	});
 });

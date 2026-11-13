@@ -13,6 +13,7 @@ import {
 	encryptedImageContent,
 	encryptFile,
 	encryptText,
+	fitsMessage,
 	MAX_UPLOAD_SIZE,
 	type RoomKey,
 } from "@/lib/room-crypto";
@@ -161,6 +162,7 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 
 	const send = useCallback(
 		async (text: string, replyToId?: string) => {
+			assertFits(text);
 			const res = await chatApi.send(roomId, {
 				content: encryptText(text, key),
 				encrypted: true,
@@ -175,6 +177,7 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 
 	const edit = useCallback(
 		async (id: string, text: string) => {
+			assertFits(text);
 			await chatApi.update(roomId, id, encryptText(text, key), true);
 			dispatch({ type: "updated", id, content: text, failed: false });
 		},
@@ -239,4 +242,10 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 		uploadImage,
 		leave,
 	};
+}
+
+function assertFits(text: string) {
+	if (!fitsMessage(text)) {
+		throw new Error("That message is too long.");
+	}
 }

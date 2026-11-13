@@ -25,6 +25,9 @@ type UserUseCase interface {
 	// user for an ID seen for the first time.
 	GetOrCreateUser(ctx context.Context, id string) (*model.User, error)
 	GetByID(ctx context.Context, id string) (*model.User, error)
+	// Rename stores a new display name for user; an empty or unchanged name
+	// is a no-op.
+	Rename(ctx context.Context, user *model.User, username string) error
 }
 
 type userUseCase struct {
@@ -74,6 +77,20 @@ func (uc *userUseCase) GetByID(ctx context.Context, id string) (*model.User, err
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
 	return user, nil
+}
+
+func (uc *userUseCase) Rename(ctx context.Context, user *model.User, username string) error {
+	if username == "" || username == user.Username {
+		return nil
+	}
+	renamed := *user
+	renamed.Username = username
+	if err := uc.repository.Update(ctx, &renamed); err != nil {
+		uc.logger.Error("failed to rename user", zap.Error(err), zap.String("userID", user.ID))
+		return fmt.Errorf("failed to rename user: %w", err)
+	}
+	user.Username = username
+	return nil
 }
 
 // guestUsername derives a readable name from the start of the user's ID.

@@ -2,6 +2,7 @@ package preview
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	"log/slog"
 
@@ -9,8 +10,21 @@ import (
 	"github.com/rwcarlsen/goexif/exif"
 )
 
+// maxImagePixels caps the decoded size of a previewed image. Images come from
+// other room members, and a small, highly compressed file can declare huge
+// dimensions that would take gigabytes to decode.
+const maxImagePixels = 40_000_000
+
 // prepareImageForPreview handles the complete image preparation pipeline
 func prepareImageForPreview(data []byte) (image.Image, int, int, error) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || cfg.Width > maxImagePixels/cfg.Height {
+		return nil, 0, 0, fmt.Errorf("image too large to preview: %dx%d", cfg.Width, cfg.Height)
+	}
+
 	imgReader := bytes.NewReader(data)
 
 	img, _, err := image.Decode(imgReader)

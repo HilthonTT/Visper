@@ -199,10 +199,11 @@ func dayLabel(t time.Time) string {
 	now := time.Now()
 	y1, m1, d1 := t.Date()
 	y2, m2, d2 := now.Date()
+	y3, m3, d3 := now.AddDate(0, 0, -1).Date()
 	switch {
 	case y1 == y2 && m1 == m2 && d1 == d2:
 		return "Today"
-	case y1 == y2 && m1 == m2 && d1 == d2-1:
+	case y1 == y3 && m1 == m3 && d1 == d3:
 		return "Yesterday"
 	default:
 		return t.Format("Mon, Jan 2")

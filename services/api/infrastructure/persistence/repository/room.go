@@ -68,22 +68,9 @@ func (r *roomRepository) AddUser(ctx context.Context, roomID string, user model.
 		return err
 	}
 
-	// Check if user already exists in members
-	if room.IsMember(user.ID) {
-		span.SetAttributes(attribute.Bool("user.already_member", true))
-		span.SetStatus(codes.Ok, "user already a member")
-		return nil
-	}
-
-	span.SetAttributes(attribute.Bool("user.already_member", false))
-	room.Members = append(room.Members, user)
-
-	// Update cache
-	if err := r.cache.Set(ctx, roomKey, &room, 0); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to update room in cache")
-		return err
-	}
+	// Membership lives only in the set (GetByID rebuilds Members from it).
+	// Rewriting the room record here would race with Update and could restore
+	// a join or secure code the owner just rotated.
 
 	span.SetStatus(codes.Ok, "user added to room successfully")
 	return nil
@@ -286,41 +273,7 @@ func (r *roomRepository) RemoveUser(ctx context.Context, roomID string, userID s
 		return err
 	}
 
-	roomKey := fmt.Sprintf("room:%s", roomID)
-	var room model.Room
-
-	found, err := r.cache.Get(ctx, roomKey, &room)
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to get room from cache")
-		return err
-	}
-	if !found {
-		span.SetAttributes(attribute.Bool("room.found", false))
-		span.SetStatus(codes.Error, "room not found")
-		return fmt.Errorf("room not found")
-	}
-
-	span.SetAttributes(
-		attribute.Bool("room.found", true),
-	)
-
-	userFound := false
-	for i, member := range room.Members {
-		if member.ID == userID {
-			room.Members = append(room.Members[:i], room.Members[i+1:]...)
-			userFound = true
-			break
-		}
-	}
-
-	span.SetAttributes(attribute.Bool("user.found_in_members", userFound))
-
-	if err := r.cache.Set(ctx, roomKey, &room, 0); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to update room in cache")
-		return err
-	}
+	// As in AddUser, the room record is not rewritten: membership is the set.
 
 	span.SetStatus(codes.Ok, "user removed from room successfully")
 	return nil

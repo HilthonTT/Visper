@@ -269,10 +269,14 @@ func (m model) editMessageDialogUpdate(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	case "enter":
 		id := m.state.chat.edit.messageID
 		content := m.state.chat.editInput.Value()
-		m = m.closeDialog()
 		if content == "" || content == m.messageContent(id) {
-			return m, nil
+			return m.closeDialog(), nil
 		}
+		// Keep the dialog open so the user can shorten the text.
+		if text, ok := m.checkMessageLength(content); !ok {
+			return m.toast(theme.ToneWarning, text)
+		}
+		m = m.closeDialog()
 		return m, m.updateMessage(id, content)
 	case "esc":
 		return m.closeDialog().exitEditMode(), nil

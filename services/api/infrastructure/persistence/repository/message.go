@@ -147,10 +147,14 @@ func (r *messageRepository) Update(ctx context.Context, message *model.Message) 
 			return err
 		}
 
-		message.UpdatedAt = time.Now()
-		message.CreatedAt = oldMessage.CreatedAt
+		// Apply only the edit to the stored version: writing back the caller's
+		// copy would drop reactions added since the caller read the message.
+		updated := *oldMessage
+		updated.Content = message.Content
+		updated.Encrypted = message.Encrypted
+		updated.UpdatedAt = time.Now()
 
-		newData, err := json.Marshal(message)
+		newData, err := json.Marshal(&updated)
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "failed to marshal new message")
@@ -169,6 +173,7 @@ func (r *messageRepository) Update(ctx context.Context, message *model.Message) 
 			return fmt.Errorf("failed to update message: %w", err)
 		}
 		if replaced {
+			*message = updated
 			span.SetStatus(codes.Ok, "message updated successfully")
 			return nil
 		}

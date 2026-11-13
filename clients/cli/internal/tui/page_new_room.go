@@ -53,7 +53,8 @@ func (m model) createRoom() (model, tea.Cmd) {
 	m.state.newRoom.error = ""
 
 	client, ctx, opts := m.client, m.ctx, m.requestOpts()
-	return m, tea.Batch(animTick(animFastInterval), func() tea.Msg {
+	anim := m.restartAnim()
+	return m, tea.Batch(anim, func() tea.Msg {
 		// The key is made here and never sent to the server.
 		key, err := apisdk.NewRoomKey()
 		if err != nil {

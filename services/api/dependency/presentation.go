@@ -84,8 +84,10 @@ func (c *Container) SetupRouter() *gin.Engine {
 func (c *Container) registerAPIRoutes(router *gin.Engine) {
 	v1 := router.Group("/api/v1")
 	{
-		v1.Use(middlewares.UserMiddleware(c.UserUC, c.Logger))
+		// Rate limit (by IP) before UserMiddleware, which creates a stored user
+		// for every unseen user ID: a throttled request must not write to Redis.
 		v1.Use(middlewares.RateLimiterMiddleware(cache.GetRedis(), c.Logger, middlewares.ModerateRateLimiterConfig()))
+		v1.Use(middlewares.UserMiddleware(c.UserUC, c.Logger))
 		v1.Use(middlewares.ETagMiddleware(c.ETagStore))
 
 		v1.Use(func(c *gin.Context) {

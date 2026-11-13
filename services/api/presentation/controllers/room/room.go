@@ -182,7 +182,7 @@ func (c *roomController) JoinRoom(ctx *gin.Context) {
 	if !httpx.BindJSON(ctx, &req) {
 		return
 	}
-	user, ok := joiningUser(ctx, req.Username)
+	user, ok := c.joiningUser(ctx, req.Username)
 	if !ok {
 		return
 	}
@@ -317,7 +317,7 @@ func (c *roomController) KickMember(ctx *gin.Context) {
 
 // joinFoundRoom joins a room found by its join code and responds with it.
 func (c *roomController) joinFoundRoom(ctx *gin.Context, room *model.Room, username string) {
-	user, ok := joiningUser(ctx, username)
+	user, ok := c.joiningUser(ctx, username)
 	if !ok {
 		return
 	}
@@ -336,13 +336,19 @@ func (c *roomController) joinFoundRoom(ctx *gin.Context, room *model.Room, usern
 	ctx.JSON(http.StatusOK, c.toRoomResponse(room, user))
 }
 
-// joiningUser returns the current user, renamed to username if one was given.
-func joiningUser(ctx *gin.Context, username string) (*model.User, bool) {
+// joiningUser returns the current user, renamed to username if one was
+// given. The new name is saved: messages, member lists and typing events read
+// it from the stored user on later requests.
+func (c *roomController) joiningUser(ctx *gin.Context, username string) (*model.User, bool) {
 	user, ok := httpx.RequireUser(ctx)
-	if ok && username != "" {
-		user.Username = username
+	if !ok {
+		return nil, false
 	}
-	return user, ok
+	if err := c.userUsecase.Rename(ctx.Request.Context(), user, username); err != nil {
+		httpx.Error(ctx, err)
+		return nil, false
+	}
+	return user, true
 }
 
 // completeJoin sets the room cookie and tells the room about its new member.

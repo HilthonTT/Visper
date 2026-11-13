@@ -199,9 +199,43 @@ export function isPlainImageUrl(content: string): boolean {
 	return isHttpUrl(file) && hasImageExtension(file) && !/\s/.test(file);
 }
 
-/** The message content for an encrypted image uploaded to fileUrl. */
+/** The API's limit on a message's (encrypted) content, in characters. */
+const MAX_CONTENT_LENGTH = 1000;
+
+/**
+ * Longest message plaintext, in UTF-8 bytes, whose encryptText output fits
+ * the API's limit: base64(nonce || secretbox(plaintext)). 710 bytes.
+ */
+export const MAX_MESSAGE_BYTES =
+	Math.floor(MAX_CONTENT_LENGTH / 4) * 3 -
+	NONCE_SIZE -
+	nacl.secretbox.overheadLength;
+
+/** Whether text is short enough to be sent once encrypted. */
+export function fitsMessage(text: string): boolean {
+	return new TextEncoder().encode(text).length <= MAX_MESSAGE_BYTES;
+}
+
+/**
+ * The message content for an encrypted image uploaded to fileUrl. A long file
+ * name is shortened (keeping its extension) so the message still fits.
+ */
 export function encryptedImageContent(fileUrl: string, name: string): string {
-	return `${fileUrl}#${encodeURIComponent(name)}`;
+	const budget = MAX_MESSAGE_BYTES - fileUrl.length - 1;
+	let encoded = encodeURIComponent(name);
+	if (encoded.length > budget) {
+		const dot = name.lastIndexOf(".");
+		const ext = dot > 0 ? name.slice(dot) : "";
+		const base = [...(dot > 0 ? name.slice(0, dot) : name)];
+		while (
+			base.length > 0 &&
+			encodeURIComponent(base.join("") + ext).length > budget
+		) {
+			base.pop();
+		}
+		encoded = encodeURIComponent((base.join("") || "image") + ext);
+	}
+	return `${fileUrl}#${encoded}`;
 }
 
 /** The file name in an encrypted image message's fragment. */

@@ -64,12 +64,9 @@ func (m model) messageLength() (int, int) {
 	return len([]rune(v)), maxMessageLen
 }
 
-func (m model) sendMessage() (model, tea.Cmd) {
-	content := m.state.chat.messageInput.Value()
-	if content == "" {
-		return m, nil
-	}
-
+// checkMessageLength validates content against the room's message limit and,
+// when it is too long, returns the text to tell the user.
+func (m model) checkMessageLength(content string) (string, bool) {
 	limit := validate.WithinLen(1, maxMessageLen, "message")
 	limitText := fmt.Sprintf("Messages can be up to %d characters", maxMessageLen)
 	if m.state.chat.encrypted() {
@@ -77,7 +74,19 @@ func (m model) sendMessage() (model, tea.Cmd) {
 		limitText = fmt.Sprintf("Encrypted messages can be up to %d bytes", maxEncryptedMessageBytes)
 	}
 	if err := validate.Compose(validate.NotEmpty("message"), limit)(content); err != nil {
-		return m.toast(theme.ToneWarning, limitText)
+		return limitText, false
+	}
+	return "", true
+}
+
+func (m model) sendMessage() (model, tea.Cmd) {
+	content := m.state.chat.messageInput.Value()
+	if content == "" {
+		return m, nil
+	}
+
+	if text, ok := m.checkMessageLength(content); !ok {
+		return m.toast(theme.ToneWarning, text)
 	}
 
 	replyTo := m.state.chat.social.replyTo
@@ -137,7 +146,8 @@ func (m model) rewriteDraft() (model, tea.Cmd) {
 
 	client, ctx, opts, session := m.client, m.ctx, m.requestOpts(), m.state.chat.session
 	req := apisdk.AIEnhanceRequest{Message: content, Style: aiRewriteStyle, Tone: aiRewriteTone}
-	return m, tea.Batch(animTick(animFastInterval), func() tea.Msg {
+	anim := m.restartAnim()
+	return m, tea.Batch(anim, func() tea.Msg {
 		res, err := client.AI.Enhance(ctx, req, opts...)
 		if err != nil {
 			return aiRewriteResultMsg{err: err, session: session}
@@ -157,7 +167,8 @@ func (m model) uploadImage(path string) (model, tea.Cmd) {
 
 	client, ctx, roomID, userID, session := m.client, m.ctx, m.state.chat.room.ID, m.userID, m.state.chat.session
 	key := m.state.chat.roomKey
-	return m, tea.Batch(animTick(animFastInterval), func() tea.Msg {
+	anim := m.restartAnim()
+	return m, tea.Batch(anim, func() tea.Msg {
 		result, err := client.File.UploadEncrypted(ctx, roomID, path, key, userID)
 		if err != nil {
 			return uploadResultMsg{err: err, session: session}

@@ -39,6 +39,8 @@ export type ChatState = {
 	typing: Record<string, { username: string; until: number }>;
 	/** Last message each member has read. */
 	reads: Record<string, string>;
+	/** IDs of deleted messages, so a late history snapshot cannot bring them back. */
+	deleted: string[];
 	/** Set once the room is gone for us. */
 	closed?: string;
 };
@@ -62,6 +64,7 @@ export function initialChatState(room: ApiRoom): ChatState {
 		online: [],
 		typing: {},
 		reads: {},
+		deleted: [],
 	};
 }
 
@@ -88,9 +91,15 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 				return state;
 			}
 			const byId = new Map(state.messages.map((m) => [m.id, m]));
+			const deleted = new Set(state.deleted);
 			let typing = state.typing;
 			for (const m of action.messages) {
-				byId.set(m.id, m);
+				if (deleted.has(m.id)) {
+					continue;
+				}
+				const prev = byId.get(m.id);
+				// History replays do not carry the edit marker; keep it.
+				byId.set(m.id, prev ? { ...m, edited: m.edited || prev.edited } : m);
 				// A message from someone ends their typing indicator.
 				if (typing[m.userId]) {
 					typing = { ...typing };
@@ -117,6 +126,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 			return {
 				...state,
 				messages: state.messages.filter((m) => m.id !== action.id),
+				deleted: state.deleted.includes(action.id)
+					? state.deleted
+					: [...state.deleted, action.id],
 			};
 		case "reactions":
 			return mapMessage(state, action.id, (m) => ({
@@ -132,7 +144,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 				members: state.members.filter((m) => m.id !== action.userId),
 				online: state.online.filter((id) => id !== action.userId),
 			};
-			if (action.type === "kicked" && action.userId === state.me) {
+			if (action.type === "left" && action.userId === state.me) {
+				// We left from another tab or device; the server refuses to reconnect us.
+				next.closed = "You left the room.";
+			} else if (action.type === "kicked" && action.userId === state.me) {
 				next.closed = action.reason
 					? `You were removed from the room: ${action.reason}`
 					: "You were removed from the room.";

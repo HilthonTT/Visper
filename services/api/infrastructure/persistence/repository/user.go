@@ -47,6 +47,26 @@ func (r *userRepository) Create(ctx context.Context, user *model.User) error {
 	return nil
 }
 
+func (r *userRepository) Update(ctx context.Context, user *model.User) error {
+	ctx, span := r.tracer.Start(ctx, "userRepository.Update")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("user.id", user.ID),
+		attribute.String("user.username", user.Username),
+	)
+
+	key := fmt.Sprintf("user:%s", user.ID)
+	if err := r.cache.Set(ctx, key, user, 0); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to update user")
+		return err
+	}
+
+	span.SetStatus(codes.Ok, "user updated successfully")
+	return nil
+}
+
 func (r *userRepository) Delete(ctx context.Context, id string) error {
 	ctx, span := r.tracer.Start(ctx, "userRepository.Delete")
 	defer span.End()

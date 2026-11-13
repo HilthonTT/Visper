@@ -277,3 +277,35 @@ describe("views", () => {
 		});
 	});
 });
+
+describe("chatReducer history merges", () => {
+	it("does not resurrect a deleted message from a late snapshot", () => {
+		const s = apply(
+			initialChatState(room),
+			{ type: "messages", messages: [msg("m1", "ann", "hi", 1)] },
+			{ type: "deleted", id: "m1" },
+			{ type: "messages", messages: [msg("m1", "ann", "hi", 1)] },
+		);
+		expect(s.messages).toEqual([]);
+	});
+
+	it("keeps the edited marker across a history replay", () => {
+		const s = apply(
+			initialChatState(room),
+			{ type: "messages", messages: [msg("m1", "ann", "hi", 1)] },
+			{ type: "updated", id: "m1", content: "hey", failed: false },
+			{ type: "messages", messages: [msg("m1", "ann", "hey", 1)] },
+		);
+		expect(s.messages[0].edited).toBe(true);
+	});
+
+	it("closes the chat when we leave from elsewhere", () => {
+		const s = apply(initialChatState(room), { type: "left", userId: "me" });
+		expect(s.closed).toBeTruthy();
+		const other = apply(initialChatState(room), {
+			type: "left",
+			userId: "ann",
+		});
+		expect(other.closed).toBeUndefined();
+	});
+});

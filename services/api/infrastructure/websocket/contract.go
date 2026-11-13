@@ -1,8 +1,6 @@
 package websocket
 
 import (
-	"time"
-
 	"github.com/hilthontt/visper/services/api/domain/model"
 )
 
@@ -89,11 +87,12 @@ func NewMessageReceived(roomID string, m *model.Message) *WSMessage {
 		Type:   MessageReceived,
 		RoomID: roomID,
 		Data: MessagePayload{
-			ID:        m.ID,
-			Content:   m.Content,
-			UserID:    m.UserID,
-			Username:  m.Username,
-			Timestamp: m.CreatedAt.Format(time.RFC3339),
+			ID:       m.ID,
+			Content:  m.Content,
+			UserID:   m.UserID,
+			Username: m.Username,
+			// Millisecond precision so clients can order messages sent within the same second.
+			Timestamp: m.CreatedAt.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
 			Encrypted: m.Encrypted,
 			ReplyToID: m.ReplyToID,
 			Reactions: toReactionPayloads(m.Reactions),

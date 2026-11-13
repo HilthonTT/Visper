@@ -38,7 +38,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case animTickMsg:
-		return m.animUpdate()
+		return m.animUpdate(msg)
 	case cleanupCompleteMsg:
 		log.Println("Cleanup completed")
 		return m, nil
@@ -144,7 +144,7 @@ func (m model) wantsHelp(msg tea.KeyPressMsg) bool {
 		return m.state.joinRoom.input.Value() == ""
 	case chatPage:
 		c := m.state.chat
-		return !c.edit.active && !c.members.searching && c.messageInput.Value() == ""
+		return !c.edit.active && !c.members.searching && !c.social.search.active && c.messageInput.Value() == ""
 	}
 	return false
 }

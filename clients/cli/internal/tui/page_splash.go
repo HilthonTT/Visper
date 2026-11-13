@@ -29,7 +29,7 @@ type splashDelayDoneMsg struct{}
 func (m model) splashInit() tea.Cmd {
 	// Mouse reporting is off by default in Bubble Tea v2 (View.MouseMode).
 	return tea.Batch(
-		animTick(animFastInterval),
+		animTick(m.state.anim.gen, animFastInterval),
 		func() tea.Msg { return clientReadyMsg{client: newAPIClient()} },
 		tea.RequestBackgroundColor,
 	)
@@ -65,7 +65,8 @@ func (m model) splashUpdate(msg tea.Msg) (model, tea.Cmd) {
 		if m.error != nil && m.client != nil && (msg.String() == "r" || msg.String() == "enter") {
 			m.error = nil
 			m.state.splash.healthy = false
-			return m, tea.Batch(m.healthCmd(), animTick(animFastInterval))
+			anim := m.restartAnim()
+			return m, tea.Batch(m.healthCmd(), anim)
 		}
 	}
 

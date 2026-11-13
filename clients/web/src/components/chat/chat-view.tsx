@@ -17,6 +17,7 @@ import {
 	typingLabel,
 	typingNames,
 } from "@/lib/chat-state";
+import { isEncryptedImageUrl, isPlainImageUrl } from "@/lib/room-crypto";
 import type { ChatSession } from "./join-form";
 import { MessageItem } from "./message-item";
 
@@ -165,7 +166,13 @@ export const ChatView = ({
 		} else if (e.key === "ArrowUp" && !draft) {
 			const last = [...state.messages]
 				.reverse()
-				.find((m) => m.userId === state.me && !m.failed);
+				.find(
+					(m) =>
+						m.userId === state.me &&
+						!m.failed &&
+						!isEncryptedImageUrl(m.content) &&
+						!isPlainImageUrl(m.content),
+				);
 			if (last) {
 				e.preventDefault();
 				onEdit(last);

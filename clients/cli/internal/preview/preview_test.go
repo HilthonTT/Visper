@@ -1,8 +1,12 @@
 package preview
 
 import (
+	"bytes"
+	"encoding/binary"
+	"hash/crc32"
 	"image"
 	"image/color"
+	"image/png"
 	"strings"
 	"testing"
 )
@@ -76,5 +80,23 @@ func TestAdjustOrientationDimensions(t *testing.T) {
 		if b.Dx() != tt.w || b.Dy() != tt.h {
 			t.Errorf("orientation %d: got %dx%d, want %dx%d", tt.orientation, b.Dx(), b.Dy(), tt.w, tt.h)
 		}
+	}
+}
+
+func TestPrepareImageRejectsHugeDimensions(t *testing.T) {
+	// A tiny PNG header declaring 30000x30000 pixels: rejected before decoding.
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewGray(image.Rect(0, 0, 1, 1))); err != nil {
+		t.Fatal(err)
+	}
+	data := buf.Bytes()
+	binary.BigEndian.PutUint32(data[16:], 30000) // IHDR width
+	binary.BigEndian.PutUint32(data[20:], 30000) // IHDR height
+	binary.BigEndian.PutUint32(data[29:], crc32.ChecksumIEEE(data[12:29]))
+	if _, _, err := image.DecodeConfig(bytes.NewReader(data)); err != nil {
+		t.Fatalf("test image header is invalid: %v", err)
+	}
+	if _, _, _, err := prepareImageForPreview(data); err == nil {
+		t.Fatal("expected an error for a 900-megapixel image")
 	}
 }

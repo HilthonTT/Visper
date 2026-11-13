@@ -13,9 +13,13 @@ import (
 type animState struct {
 	cursorVisible bool
 	frame         int
+	// gen identifies the live tick chain. Restarting the ticker (to spin
+	// right away) bumps it, so the chain it replaces stops at its next tick
+	// instead of running alongside it forever.
+	gen int
 }
 
-type animTickMsg struct{}
+type animTickMsg struct{ gen int }
 
 const (
 	animFastInterval = 90 * time.Millisecond
@@ -31,10 +35,16 @@ var wordmarkLines = []string{
 	"▀▄▀ █ ▄▄█ █▀▀ ██▄ █▀▄",
 }
 
-// animTick schedules the next animation frame. Call it with animFastInterval
-// when starting something that shows a spinner, so it spins right away.
-func animTick(d time.Duration) tea.Cmd {
-	return tea.Tick(d, func(time.Time) tea.Msg { return animTickMsg{} })
+// animTick schedules the next frame of tick chain gen.
+func animTick(gen int, d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg { return animTickMsg{gen: gen} })
+}
+
+// restartAnim replaces the running tick chain with a fast one. Call it when
+// starting something that shows a spinner, so it spins right away.
+func (m *model) restartAnim() tea.Cmd {
+	m.state.anim.gen++
+	return animTick(m.state.anim.gen, animFastInterval)
 }
 
 // animating reports whether a spinner is on screen.
@@ -50,13 +60,16 @@ func (m model) animating() bool {
 	return false
 }
 
-func (m model) animUpdate() (model, tea.Cmd) {
+func (m model) animUpdate(msg animTickMsg) (model, tea.Cmd) {
+	if msg.gen != m.state.anim.gen {
+		return m, nil // a replaced chain
+	}
 	m.state.anim.frame++
 	m.state.anim.cursorVisible = time.Now().UnixMilli()/blinkPeriod.Milliseconds()%2 == 0
 	if m.animating() {
-		return m, animTick(animFastInterval)
+		return m, animTick(m.state.anim.gen, animFastInterval)
 	}
-	return m, animTick(animIdleInterval)
+	return m, animTick(m.state.anim.gen, animIdleInterval)
 }
 
 // spinner returns the current spinner glyph in the brand colour.

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -171,8 +172,22 @@ func (m model) roomErrorUpdate(msg roomErrorMsg) (model, tea.Cmd) {
 
 func (m model) messageReceivedUpdate(msg messageReceivedMsg) (model, tea.Cmd) {
 	c := &m.state.chat
+	// The server replays history while live messages are already flowing, so
+	// a message can arrive twice, and newer ones before older history.
+	for _, existing := range c.messages {
+		if existing.ID == msg.message.ID {
+			return m, m.waitForRoomEvent()
+		}
+	}
 	atBottom := c.viewport.AtBottom()
-	c.messages = append(c.messages, msg.message)
+	i := len(c.messages)
+	for i > 0 && c.messages[i-1].CreatedAt.After(msg.message.CreatedAt) {
+		i--
+	}
+	c.messages = slices.Insert(c.messages, i, msg.message)
+	if c.edit.selected >= i {
+		c.edit.selected++ // keep the selection on the same message
+	}
 	// A message ends its author's "typing…".
 	delete(c.social.typing, msg.message.UserID)
 
