@@ -70,7 +70,7 @@ In a room:
 - **Read receipts**: "seen by …" marks the last message each member has read. Yours is sent for the newest message while the chat is on screen.
 - **Search** filters the loaded messages. It runs in the page: the server only has ciphertext, so it can't search.
 
-The browser is identified by the API's `visper_user_id` cookie (a browser WebSocket can't send the `X-User-ID` header), so chat requests are sent with credentials. **The API must list this site in `VISPER_CORS_ALLOWORIGINS`** (e.g. `http://localhost:3000`): with `*`, browsers refuse to send credentials and the Chat page reports that it can't reach the API.
+The browser is identified by the API's HttpOnly `visper_user_id` cookie, which holds a private user token (a browser WebSocket can't send the `X-User-Token` header), so chat requests are sent with credentials. **The API must list this site in `VISPER_CORS_ALLOWORIGINS`** (e.g. `http://localhost:3000`): with `*`, browsers refuse to send credentials and the Chat page reports that it can't reach the API.
 
 ## Environment variables
 

@@ -16,7 +16,6 @@ import (
 	"log"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/google/uuid"
 	"github.com/hilthontt/visper/clients/cli/internal/preview"
 	"github.com/hilthontt/visper/clients/cli/internal/settings"
 	"github.com/hilthontt/visper/clients/cli/internal/tui/theme"
@@ -78,8 +77,11 @@ type roomJoinedMsg struct {
 type model struct {
 	ctx    context.Context
 	client *apisdk.Client
-	// userID identifies this client to the API (the X-User-ID header). The
-	// server may assign a different one when a room is joined.
+	// userToken is this client's private credential (the X-User-Token
+	// header). It is never shown or logged.
+	userToken string
+	// userID is the public ID the API derives from userToken; it is what
+	// messages and member lists show.
 	userID string
 	// deviceKey lets the web client send this terminal a room key through the
 	// API without the API being able to read it (see the device code on the
@@ -108,7 +110,8 @@ type model struct {
 
 // NewModel returns the root model of the TUI.
 func NewModel() (tea.Model, error) {
-	userID := uuid.NewString()
+	userToken := apisdk.NewUserToken()
+	userID := apisdk.UserIDFromToken(userToken)
 	log.Printf("USERID: %s\n", userID)
 
 	deviceKey, err := apisdk.NewDeviceKey()
@@ -118,6 +121,7 @@ func NewModel() (tea.Model, error) {
 
 	return model{
 		ctx:             context.Background(),
+		userToken:       userToken,
 		userID:          userID,
 		deviceKey:       deviceKey,
 		page:            splashPage,

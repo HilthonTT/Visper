@@ -18,10 +18,10 @@ func newAPIClient() *apisdk.Client {
 
 // requestOpts returns the per-request options identifying the current user.
 func (m model) requestOpts() []option.RequestOption {
-	if m.userID == "" {
+	if m.userToken == "" {
 		return nil
 	}
-	return []option.RequestOption{option.WithHeader("X-User-ID", m.userID)}
+	return []option.RequestOption{option.WithUserToken(m.userToken)}
 }
 
 // requestFailedMsg reports a failed background API call; action completes

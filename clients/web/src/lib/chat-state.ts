@@ -1,5 +1,12 @@
 import type { ApiMessage, ApiRoom } from "./chat-api";
-import { type RoomKey, readField } from "./room-crypto";
+import {
+	failedText,
+	openEnvelope,
+	type RoomKey,
+	readMessage,
+	readReaction,
+	UnverifiedError,
+} from "./room-crypto";
 
 /*
  * The browser chat's state, as a pure reducer over room events. Everything
@@ -70,7 +77,18 @@ export function initialChatState(room: ApiRoom): ChatState {
 
 export type ChatAction =
 	| { type: "messages"; messages: ChatMessage[] }
-	| { type: "updated"; id: string; content: string; failed: boolean }
+	| {
+			type: "updated";
+			id: string;
+			content: string;
+			failed: boolean;
+			/**
+			 * Who sealed the edit and for which message, still to be checked
+			 * against the message (the event doesn't name its sender). Absent
+			 * for our own edits.
+			 */
+			sealed?: { from: string; msg: string };
+	  }
 	| { type: "deleted"; id: string }
 	| { type: "reactions"; id: string; reactions: Reaction[] }
 	| { type: "joined"; member: Member }
@@ -116,12 +134,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 			return { ...state, messages, members, typing };
 		}
 		case "updated":
-			return mapMessage(state, action.id, (m) => ({
-				...m,
-				content: action.content,
-				failed: action.failed,
-				edited: true,
-			}));
+			return mapMessage(state, action.id, (m) => {
+				const { sealed } = action;
+				const forged =
+					sealed !== undefined &&
+					// Edits are always sealed for the message they edit.
+					(sealed.from !== m.userId || sealed.msg !== m.id);
+				return {
+					...m,
+					content: forged ? failedText(new UnverifiedError()) : action.content,
+					failed: forged || action.failed,
+					edited: true,
+				};
+			});
 		case "deleted":
 			return {
 				...state,
@@ -243,7 +268,11 @@ type RawReaction = {
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
-function decodeReactions(raw: unknown, key: RoomKey): Reaction[] {
+function decodeReactions(
+	raw: unknown,
+	key: RoomKey,
+	messageId: string,
+): Reaction[] {
 	if (!Array.isArray(raw)) {
 		return [];
 	}
@@ -253,7 +282,13 @@ function decodeReactions(raw: unknown, key: RoomKey): Reaction[] {
 		if (!userId) {
 			continue;
 		}
-		const { text } = readField(str(r.emoji), r.encrypted === true, key);
+		const { text } = readReaction(
+			str(r.emoji),
+			r.encrypted === true,
+			key,
+			userId,
+			messageId,
+		);
 		out.push({ userId, emoji: text });
 	}
 	return out;
@@ -261,7 +296,13 @@ function decodeReactions(raw: unknown, key: RoomKey): Reaction[] {
 
 /** Decrypts a message from the REST API. */
 export function fromApiMessage(m: ApiMessage, key: RoomKey): ChatMessage {
-	const { text, failed } = readField(m.content, m.encrypted, key);
+	const { text, failed } = readMessage(
+		m.content,
+		m.encrypted,
+		key,
+		m.user_id,
+		m.id,
+	);
 	return {
 		id: m.id,
 		userId: m.user_id,
@@ -270,7 +311,7 @@ export function fromApiMessage(m: ApiMessage, key: RoomKey): ChatMessage {
 		failed,
 		createdAt: Date.parse(m.created_at) || 0,
 		replyToId: m.reply_to_id || undefined,
-		reactions: decodeReactions(m.reactions, key),
+		reactions: decodeReactions(m.reactions, key, m.id),
 	};
 }
 
@@ -299,10 +340,12 @@ export function parseRoomEvent(
 			if (!id || !userId) {
 				return null;
 			}
-			const { text, failed } = readField(
+			const { text, failed } = readMessage(
 				str(d.content),
 				d.encrypted === true,
 				key,
+				userId,
+				id,
 			);
 			return {
 				type: "messages",
@@ -315,7 +358,7 @@ export function parseRoomEvent(
 						failed,
 						createdAt: Date.parse(str(d.timestamp)) || now,
 						replyToId: str(d.replyToId) || undefined,
-						reactions: decodeReactions(d.reactions, key),
+						reactions: decodeReactions(d.reactions, key, id),
 					},
 				],
 			};
@@ -325,12 +368,30 @@ export function parseRoomEvent(
 			if (!id) {
 				return null;
 			}
-			const { text, failed } = readField(
-				str(d.content),
-				d.encrypted === true,
-				key,
-			);
-			return { type: "updated", id, content: text, failed };
+			if (d.encrypted !== true) {
+				// Plaintext in an encrypted room can only come from the server.
+				return {
+					type: "updated",
+					id,
+					content: failedText(new UnverifiedError()),
+					failed: true,
+				};
+			}
+			try {
+				const env = openEnvelope(str(d.content), key);
+				if (env.kind !== "m") {
+					throw new UnverifiedError("not a message");
+				}
+				return {
+					type: "updated",
+					id,
+					content: env.text,
+					failed: false,
+					sealed: { from: env.from, msg: env.msg },
+				};
+			} catch (e) {
+				return { type: "updated", id, content: failedText(e), failed: true };
+			}
 		}
 		case "message.deleted":
 			return str(d.id) ? { type: "deleted", id: str(d.id) } : null;
@@ -339,7 +400,7 @@ export function parseRoomEvent(
 				? {
 						type: "reactions",
 						id: str(d.id),
-						reactions: decodeReactions(d.reactions, key),
+						reactions: decodeReactions(d.reactions, key, str(d.id)),
 					}
 				: null;
 		case "member.joined":

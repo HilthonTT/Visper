@@ -9,7 +9,6 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.9
 	github.com/disintegration/imaging v1.6.2
 	github.com/foize/go.sgr v0.0.0-20140220094842-40bdfc98040c
-	github.com/google/uuid v1.6.0
 	github.com/hilthontt/visper/sdk/go v0.0.0-00010101000000-000000000000
 	github.com/muesli/reflow v0.3.0
 	github.com/muesli/termenv v0.16.0

@@ -62,8 +62,10 @@ func (m model) chatEventUpdate(msg tea.Msg) (_ model, _ tea.Cmd, handled bool) {
 		m, cmd = m.messageReceivedUpdate(msg)
 	case messageUpdatedMsg:
 		for i := range m.state.chat.messages {
-			if m.state.chat.messages[i].ID == msg.messageID {
-				m.state.chat.messages[i].Content = msg.content
+			if message := &m.state.chat.messages[i]; message.ID == msg.messageID {
+				// Only the message's (verified) author can have sealed the edit.
+				message.Content = decryptContent(m.state.chat.roomKey, msg.content, msg.encrypted,
+					sealedAs{edit: true, from: message.UserID, messageID: message.ID})
 				break
 			}
 		}

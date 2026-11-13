@@ -14,6 +14,7 @@ import pytest
 from fastapi import FastAPI
 
 from visper_ai.api import router
+from visper_ai.api.dependencies import user_id_from_token
 from visper_ai.api.v1 import ai_bot
 from visper_ai.core.ai.enhancement_service import TextEnhancementService
 from visper_ai.core.ai.ollama_client import OllamaResponse
@@ -22,8 +23,11 @@ from visper_ai.core.setup import create_application
 from visper_ai.core.utils.cache import async_get_redis
 from visper_ai.core.utils.rate_limit import async_get_rate_limit_redis
 
-USER_ID = "11111111-1111-1111-1111-111111111111"
-OTHER_USER_ID = "22222222-2222-2222-2222-222222222222"
+# Clients send private tokens; the services key users by the IDs derived from them.
+USER_TOKEN = "test-user-token-1111"
+OTHER_USER_TOKEN = "test-user-token-2222"
+USER_ID = user_id_from_token(USER_TOKEN)
+OTHER_USER_ID = user_id_from_token(OTHER_USER_TOKEN)
 
 
 @dataclass

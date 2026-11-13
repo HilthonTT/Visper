@@ -76,8 +76,12 @@ func (c *Client) ConnectNotificationWebSocket(
 		return nil, fmt.Errorf("failed to connect to notification websocket: %w", err)
 	}
 
+	userID := ""
+	if token := cfg.Request.Header.Get(UserTokenHeader); token != "" {
+		userID = UserIDFromToken(token)
+	}
 	return &NotificationWebSocket{
 		wsConn: newWSConn(conn),
-		userID: cfg.Request.Header.Get("X-User-ID"),
+		userID: userID,
 	}, nil
 }

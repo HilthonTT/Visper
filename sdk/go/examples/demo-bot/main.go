@@ -30,7 +30,7 @@ var script = []string{
 
 func main() {
 	codeFile := flag.String("code-file", "", "file to write the room's invite code (join code and key) to")
-	userID := flag.String("user-id", "visper-demo-bot", "X-User-ID the bot identifies as")
+	userToken := flag.String("user-token", "", "private user token the bot identifies with (default: a new random one)")
 	timeout := flag.Duration("timeout", 10*time.Minute, "give up after this long")
 	silent := flag.Bool("silent", false, "join the conversation as a quiet member: never reply")
 	flag.Parse()
@@ -43,7 +43,11 @@ func main() {
 	// Polls every 1.5 seconds: the API rate-limits per client IP (60 req/min for the API as a whole), and
 	// the bot usually shares that IP with the client being recorded.
 	// VISPER_BASE_URL is read by NewClient (default http://localhost:5005).
-	client := apisdk.NewClient(option.WithHeader("X-User-ID", *userID))
+	if *userToken == "" {
+		*userToken = apisdk.NewUserToken()
+	}
+	client := apisdk.NewClient(option.WithUserToken(*userToken))
+	userID := apisdk.UserIDFromToken(*userToken) // the bot's public ID
 
 	// The room key never leaves the clients: the server only stores
 	// ciphertext. Guests get it inside the invite code.
@@ -56,6 +60,7 @@ func main() {
 		log.Fatalf("create room: %v", err)
 	}
 	client.Message.SetEncryptionKey(key)
+	client.Message.SetSender(userID)
 	inviteCode, err := apisdk.FormatInviteCode(room.JoinCode, key)
 	if err != nil {
 		log.Fatalf("format invite code: %v", err)
@@ -68,7 +73,7 @@ func main() {
 		}
 	}
 
-	if err := waitForGuest(ctx, client, room.ID, *userID); err != nil {
+	if err := waitForGuest(ctx, client, room.ID, userID); err != nil {
 		log.Fatalf("waiting for a guest: %v", err)
 	}
 	log.Print("guest joined")
@@ -96,7 +101,7 @@ func main() {
 			continue
 		}
 		for _, m := range msgs.Messages {
-			if m.UserID == *userID || answered[m.ID] || line >= len(script) {
+			if m.UserID == userID || answered[m.ID] || line >= len(script) {
 				continue
 			}
 			answered[m.ID] = true

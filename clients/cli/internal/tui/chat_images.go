@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/hilthontt/visper/clients/cli/internal/resource"
 	apisdk "github.com/hilthontt/visper/sdk/go"
 )
 
@@ -19,6 +20,11 @@ import (
 // their message is the stored file's URL, ending in ".enc", with the image's
 // file name as the fragment, e.g. "https://host/api/v1/d/room/id.enc#cat.png".
 // Plain image URLs (e.g. pasted links) are shown too.
+//
+// Only images on the Visper server's own host are downloaded automatically:
+// fetching a URL any member posted would reveal every reader's IP address
+// (and when they were online) to whoever runs that host. Other image links
+// are shown as links.
 
 const (
 	imagePreviewHeight = 15
@@ -28,7 +34,16 @@ const (
 
 var (
 	imageExtensions = []string{".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
-	imageHTTPClient = &http.Client{Timeout: 30 * time.Second}
+	imageHTTPClient = &http.Client{
+		Timeout: 30 * time.Second,
+		// A redirect elsewhere would leak the reader's IP all the same.
+		CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			if !isAutoLoadHost(req.URL) {
+				return fmt.Errorf("redirect to %s refused", req.URL.Host)
+			}
+			return nil
+		},
+	}
 )
 
 // imageCache holds the images of image messages, keyed by message ID (not
@@ -60,7 +75,7 @@ func newImageCache() imageCache {
 // that isn't cached, being fetched or known to be broken.
 func (m model) fetchImageFor(messageID, content string) (model, tea.Cmd) {
 	c := &m.state.chat.images
-	if !isImageURL(content) || c.failed[messageID] || c.fetching[messageID] {
+	if !isAutoLoadImage(content) || c.failed[messageID] || c.fetching[messageID] {
 		return m, nil
 	}
 	if _, ok := c.fetched[messageID]; ok {
@@ -153,6 +168,24 @@ func isEncryptedImageURL(s string) bool {
 	lower := strings.ToLower(s)
 	file, name, ok := strings.Cut(lower, "#")
 	return ok && isHTTPURL(file) && strings.HasSuffix(file, encryptedFileExt) && hasImageExtension(name)
+}
+
+// isAutoLoadImage reports whether content is an image URL that is downloaded
+// and shown without asking: one on the Visper server's host.
+func isAutoLoadImage(content string) bool {
+	if !isImageURL(content) {
+		return false
+	}
+	file, _, _ := strings.Cut(content, "#")
+	u, err := url.Parse(file)
+	return err == nil && isAutoLoadHost(u)
+}
+
+// isAutoLoadHost reports whether u is on the API's host. The port is not
+// compared: the API and the proxy in front of it share a host but not a port.
+func isAutoLoadHost(u *url.URL) bool {
+	api, err := url.Parse(resource.Resource.Api.Url)
+	return err == nil && api.Hostname() != "" && strings.EqualFold(u.Hostname(), api.Hostname())
 }
 
 // encryptedFileExt ends the URLs of files encrypted with the room key.

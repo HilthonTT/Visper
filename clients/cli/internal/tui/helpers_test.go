@@ -3,6 +3,8 @@ package tui
 import (
 	"testing"
 	"time"
+
+	"github.com/hilthontt/visper/clients/cli/internal/resource"
 )
 
 func TestFormatDuration(t *testing.T) {
@@ -60,5 +62,24 @@ func TestMaxEncryptedMessageBytesFitsServerLimit(t *testing.T) {
 	n++
 	if encoded := (n + 2) / 3 * 4; encoded <= maxMessageLen {
 		t.Fatalf("limit %d is not tight", maxEncryptedMessageBytes)
+	}
+}
+
+func TestOnlyImagesOnTheAPIHostLoadAutomatically(t *testing.T) {
+	saved := resource.Resource.Api.Url
+	t.Cleanup(func() { resource.Resource.Api.Url = saved })
+	resource.Resource.Api.Url = "https://chat.example.com:5004"
+
+	for in, want := range map[string]bool{
+		"https://chat.example.com/api/v1/d/r/f.enc#cat.png":     true,
+		"http://CHAT.example.com:5005/api/v1/d/r/f.enc#cat.png": true, // the API behind the proxy
+		"https://attacker.example/x.png":                        false,
+		"https://attacker.example/api/v1/d/r/f.enc#cat.png":     false,
+		"https://chat.example.com.attacker.example/x.png":       false,
+		"just text": false,
+	} {
+		if got := isAutoLoadImage(in); got != want {
+			t.Errorf("isAutoLoadImage(%q) = %v, want %v", in, got, want)
+		}
 	}
 }

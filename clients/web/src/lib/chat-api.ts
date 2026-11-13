@@ -2,8 +2,9 @@ import { getBackendUrl } from "./api";
 
 /*
  * REST calls for the browser chat. The browser is identified by the API's
- * `visper_user_id` cookie (it can't set the X-User-ID header on the room
- * WebSocket), so every request carries credentials. That needs the API's
+ * HttpOnly `visper_user_id` cookie, a private user token (it can't set the
+ * X-User-Token header on the room WebSocket), so every request carries
+ * credentials. That needs the API's
  * VISPER_CORS_ALLOWORIGINS to list this site: with "*", browsers refuse to
  * send credentials.
  */

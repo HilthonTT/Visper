@@ -1,5 +1,9 @@
+import base64
+import binascii
+import hashlib
 import json
 import logging
+import uuid
 from typing import Annotated, Any
 
 from fastapi import Depends, Request
@@ -17,7 +21,12 @@ DEFAULT_LIMIT = settings.DEFAULT_RATE_LIMIT_LIMIT
 DEFAULT_PERIOD = settings.DEFAULT_RATE_LIMIT_PERIOD
 
 USER_CONTEXT_KEY = "user"
-USER_ID_HEADER_KEY = "X-User-ID"
+# The client's private user token (see the Go API's security/user_token.go).
+USER_TOKEN_HEADER_KEY = "X-User-Token"
+LEGACY_USER_TOKEN_HEADER_KEY = "X-User-ID"
+USER_TOKEN_COOKIE = "visper_user_id"
+MIN_USER_TOKEN_LENGTH = 16
+MAX_USER_TOKEN_LENGTH = 256
 
 
 async def get_user_from_redis(redis: Redis, user_id: str) -> dict[str, Any] | None:
@@ -34,15 +43,34 @@ async def get_user_from_redis(redis: Redis, user_id: str) -> dict[str, Any] | No
     return json.loads(user_data)
 
 
-def get_user_id_from_request(request: Request) -> str | None:
-    """Extract user ID from header or cookie."""
-    if user_id := request.headers.get(USER_ID_HEADER_KEY):
-        return user_id
+def user_id_from_token(token: str) -> str:
+    """Derive the public user ID from a private user token, exactly like the Go API:
+    the first 16 bytes of SHA-256("visper-user-id:" + token) as a version 8 UUID."""
+    b = bytearray(hashlib.sha256(f"visper-user-id:{token}".encode()).digest()[:16])
+    b[6] = (b[6] & 0x0F) | 0x80
+    b[8] = (b[8] & 0x3F) | 0x80
+    return str(uuid.UUID(bytes=bytes(b)))
 
-    if user_id := request.cookies.get("user_id"):
-        return user_id
 
+def get_user_token_from_request(request: Request) -> str | None:
+    """The user token from the headers, or else the Go API's session cookie (base64)."""
+    for header in (USER_TOKEN_HEADER_KEY, LEGACY_USER_TOKEN_HEADER_KEY):
+        if token := request.headers.get(header):
+            return token
+    if cookie := request.cookies.get(USER_TOKEN_COOKIE):
+        try:
+            return base64.b64decode(cookie, validate=True).decode()
+        except (binascii.Error, UnicodeDecodeError):
+            return None
     return None
+
+
+def get_user_id_from_request(request: Request) -> str | None:
+    """The caller's public user ID, derived from their token; None if there is no valid token."""
+    token = get_user_token_from_request(request)
+    if not token or not MIN_USER_TOKEN_LENGTH <= len(token) <= MAX_USER_TOKEN_LENGTH:
+        return None
+    return user_id_from_token(token)
 
 
 def is_guest_user(user: dict[str, Any]) -> bool:

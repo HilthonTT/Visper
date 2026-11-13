@@ -169,6 +169,12 @@ func (m model) messageBlockView(msg apisdk.MessageResponse, width int) string {
 }
 
 func (m model) messageContentView(msg apisdk.MessageResponse, width int) string {
+	if isImageURL(msg.Content) && !isAutoLoadImage(msg.Content) {
+		// Not fetched (see isAutoLoadImage): show the link instead.
+		return lipgloss.JoinVertical(lipgloss.Left,
+			m.theme.TextAccent().Width(width).Render(msg.Content),
+			m.theme.TextSubtle().Italic(true).Render("[image from another site, not loaded]"))
+	}
 	if isImageURL(msg.Content) {
 		images := m.state.chat.images
 		if images.failed[msg.ID] {

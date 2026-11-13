@@ -1,10 +1,10 @@
 package middlewares
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	userUseCase "github.com/hilthontt/visper/services/api/application/usecases/user"
 	"github.com/hilthontt/visper/services/api/domain/model"
 	"github.com/hilthontt/visper/services/api/infrastructure/logger"
@@ -16,14 +16,25 @@ const (
 	UserContextKey = "user"
 )
 
+// UserMiddleware resolves the caller from their private user token (see
+// security.UserIDFromToken). A request without one gets a new token in the
+// session cookie; a token too short to be secret is rejected.
 func UserMiddleware(userUC userUseCase.UserUseCase, logger *logger.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		userID := getUserIDFromRequest(c)
-		if userID == "" {
-			userID = uuid.NewString()
-			setUserIDCookie(c, userID)
-			logger.Debug("generated new user ID", zap.String("userID", userID))
+		token := security.GetUserToken(c.Request)
+		switch {
+		case token == "":
+			token = security.NewUserToken()
+			security.SetUserToken(c.Writer, token)
+		case !security.ValidUserToken(token):
+			c.JSON(http.StatusUnauthorized, gin.H{
+				"error":   "invalid_user_token",
+				"message": fmt.Sprintf("The user token must be %d to %d characters long", security.MinUserTokenLength, security.MaxUserTokenLength),
+			})
+			c.Abort()
+			return
 		}
+		userID := security.UserIDFromToken(token)
 
 		user, err := userUC.GetOrCreateUser(c.Request.Context(), userID)
 		if err != nil {
@@ -40,18 +51,6 @@ func UserMiddleware(userUC userUseCase.UserUseCase, logger *logger.Logger) gin.H
 
 		c.Next()
 	}
-}
-
-func getUserIDFromRequest(c *gin.Context) string {
-	if headerUserID := c.GetHeader("X-User-ID"); headerUserID != "" {
-		return headerUserID
-	}
-
-	return security.GetUserID(c.Request)
-}
-
-func setUserIDCookie(c *gin.Context, userID string) {
-	security.SetUserID(c.Writer, userID)
 }
 
 func GetUserFromContext(c *gin.Context) (*model.User, bool) {

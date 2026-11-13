@@ -2,6 +2,7 @@ package apisdk
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -20,6 +21,7 @@ type MessageService struct {
 
 	mu            sync.RWMutex
 	encryptionKey string // Room encryption key (set when joining room)
+	sender        string // the current user's public ID, sealed into what we encrypt
 }
 
 func NewMessageService(opts ...option.RequestOption) *MessageService {
@@ -36,23 +38,38 @@ func (m *MessageService) SetEncryptionKey(key string) {
 	m.encryptionKey = key
 }
 
+// SetSender sets the current user's public ID (see UserIDFromToken). It is
+// sealed into everything encrypted, so readers can check who wrote it, and
+// must be set before sending to an encrypted room.
+func (m *MessageService) SetSender(userID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sender = userID
+}
+
 func (m *MessageService) key() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.encryptionKey
 }
 
+func (m *MessageService) keyAndSender() (string, string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.encryptionKey, m.sender
+}
+
 // Send encrypts and sends a message to a room
 func (m *MessageService) Send(ctx context.Context, roomID string, body SendMessageParams, opts ...option.RequestOption) (*MessageResponse, error) {
 	opts = slices.Concat(m.Options, opts)
-	key := m.key()
+	key, sender := m.keyAndSender()
 	if roomID == "" {
 		return nil, ErrMissingIDParameter
 	}
 
 	// Encrypt the message content before sending
 	if key != "" {
-		encryptedContent, err := EncryptWithKeyB64(body.Content, key)
+		encryptedContent, err := SealMessage(body.Content, sender, "", key)
 		if err != nil {
 			return nil, fmt.Errorf("encryption failed: %w", err)
 		}
@@ -69,7 +86,7 @@ func (m *MessageService) Send(ctx context.Context, roomID string, body SendMessa
 
 	// Decrypt response for convenience
 	if key != "" && res.Encrypted {
-		decrypted, err := DecryptWithKeyB64(res.Content, key)
+		decrypted, err := OpenMessage(res.Content, key, res.UserID, res.ID)
 		if err != nil {
 			return res, fmt.Errorf("decryption failed: %w", err)
 		}
@@ -85,14 +102,14 @@ func (m *MessageService) Send(ctx context.Context, roomID string, body SendMessa
 // content. It returns the message with its new reactions, decrypted.
 func (m *MessageService) SetReaction(ctx context.Context, roomID, messageID, emoji string, opts ...option.RequestOption) (*MessageResponse, error) {
 	opts = slices.Concat(m.Options, opts)
-	key := m.key()
+	key, sender := m.keyAndSender()
 	if roomID == "" || messageID == "" {
 		return nil, ErrMissingIDParameter
 	}
 
 	body := SetReactionParams{Emoji: emoji}
 	if key != "" {
-		encrypted, err := EncryptWithKeyB64(emoji, key)
+		encrypted, err := SealReaction(emoji, sender, messageID, key)
 		if err != nil {
 			return nil, fmt.Errorf("encryption failed: %w", err)
 		}
@@ -125,40 +142,58 @@ func (m *MessageService) RemoveReaction(ctx context.Context, roomID, messageID s
 	return res, nil
 }
 
-// decryptMessage decrypts a message's content and reactions in place.
-// Failures are shown in place of the text rather than failing the call.
+// decryptMessage decrypts a message's content and reactions in place,
+// checking each against its sender (see OpenMessage). Failures are shown in
+// place of the text rather than failing the call.
 func decryptMessage(msg *MessageResponse, key string) {
-	msg.Content, msg.Encrypted = decryptField(msg.Content, msg.Encrypted, key)
+	msg.Content, msg.Encrypted = decryptField(msg.Content, msg.Encrypted, key, func(ct string) (string, error) {
+		return OpenMessage(ct, key, msg.UserID, msg.ID)
+	})
 	for i := range msg.Reactions {
 		r := &msg.Reactions[i]
-		r.Emoji, r.Encrypted = decryptField(r.Emoji, r.Encrypted, key)
+		r.Emoji, r.Encrypted = decryptField(r.Emoji, r.Encrypted, key, func(ct string) (string, error) {
+			return OpenReaction(ct, key, r.UserID, msg.ID)
+		})
 	}
 }
 
-// decryptField decrypts one encrypted field; it reports whether the result
-// is still encrypted (no key).
-func decryptField(value string, encrypted bool, key string) (string, bool) {
-	if !encrypted || key == "" {
+// decryptField decrypts one encrypted field with open; it reports whether
+// the result is still encrypted (no key). In an encrypted room, plaintext
+// can only have come from the server, so it is not shown as the sender's.
+func decryptField(value string, encrypted bool, key string, open func(string) (string, error)) (string, bool) {
+	if key == "" {
 		return value, encrypted
 	}
-	decrypted, err := DecryptWithKeyB64(value, key)
+	if !encrypted {
+		return FailedText(ErrUnverified), false
+	}
+	decrypted, err := open(value)
 	if err != nil {
-		return "[Decryption failed]", false
+		return FailedText(err), false
 	}
 	return decrypted, false
+}
+
+// FailedText is what to show in place of content that failed OpenMessage or
+// OpenReaction.
+func FailedText(err error) string {
+	if errors.Is(err, ErrUnverified) {
+		return "[Unverified message]"
+	}
+	return "[Decryption failed]"
 }
 
 // Update encrypts and updates a message
 func (m *MessageService) Update(ctx context.Context, roomID, messageID string, body UpdateMessageParams, opts ...option.RequestOption) (*MessageUpdatedResponse, error) {
 	opts = slices.Concat(m.Options, opts)
-	key := m.key()
+	key, sender := m.keyAndSender()
 	if roomID == "" || messageID == "" {
 		return nil, ErrMissingIDParameter
 	}
 
-	// Encrypt before updating
+	// Encrypt before updating, bound to this message
 	if key != "" {
-		encryptedContent, err := EncryptWithKeyB64(body.Content, key)
+		encryptedContent, err := SealMessage(body.Content, sender, messageID, key)
 		if err != nil {
 			return nil, fmt.Errorf("encryption failed: %w", err)
 		}
@@ -175,7 +210,7 @@ func (m *MessageService) Update(ctx context.Context, roomID, messageID string, b
 
 	// Decrypt response
 	if key != "" && res.Encrypted {
-		decrypted, err := DecryptWithKeyB64(res.Content, key)
+		decrypted, err := OpenEdit(res.Content, key, sender, messageID)
 		if err != nil {
 			return res, fmt.Errorf("decryption failed: %w", err)
 		}

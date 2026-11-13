@@ -7,7 +7,7 @@ import (
 )
 
 func TestParseRoomEvent(t *testing.T) {
-	decrypt := func(content string, encrypted bool) string {
+	decrypt := func(content string, encrypted bool, _ sealedAs) string {
 		if encrypted {
 			return "plain:" + content
 		}
@@ -55,5 +55,24 @@ func TestParseRoomEvent(t *testing.T) {
 	msg, _ = parseRoomEvent(apisdk.WSMessage{Type: apisdk.ErrorEvent, Data: map[string]any{}}, decrypt)
 	if e, _ := msg.(roomErrorMsg); e.code != "UNKNOWN_ERROR" {
 		t.Fatalf("incomplete error parsed as %#v", msg)
+	}
+}
+
+func TestDecryptContentChecksTheSealedSender(t *testing.T) {
+	key, _ := apisdk.GenerateKeyBase64()
+	sealed, err := apisdk.SealMessage("hi", "alice", "", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decryptContent(key, sealed, true, sealedAs{from: "alice", messageID: "m1"}); got != "hi" {
+		t.Fatalf("own sender: got %q", got)
+	}
+	// The server relays Alice's ciphertext as Bob's message.
+	if got := decryptContent(key, sealed, true, sealedAs{from: "bob", messageID: "m1"}); got != "[Unverified message]" {
+		t.Fatalf("relabelled sender: got %q", got)
+	}
+	// ...or as Alice's reaction.
+	if got := decryptContent(key, sealed, true, sealedAs{reaction: true, from: "alice", messageID: "m1"}); got != "[Unverified message]" {
+		t.Fatalf("message as reaction: got %q", got)
 	}
 }

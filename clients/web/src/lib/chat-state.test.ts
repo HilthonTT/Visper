@@ -15,7 +15,12 @@ import {
 	typingLabel,
 	typingNames,
 } from "./chat-state";
-import { encryptText, type RoomKey } from "./room-crypto";
+import {
+	encryptText,
+	type RoomKey,
+	sealMessage,
+	sealReaction,
+} from "./room-crypto";
 
 const key = new Uint8Array(32).map((_, i) => i) as RoomKey;
 
@@ -65,12 +70,16 @@ describe("parseRoomEvent", () => {
 					id: "m1",
 					userId: "ann",
 					username: "Ann",
-					content: encryptText("secret", key),
+					content: sealMessage("secret", "ann", "", key),
 					encrypted: true,
 					timestamp: "2026-01-01T10:00:00Z",
 					replyToId: "m0",
 					reactions: [
-						{ userId: "me", emoji: encryptText("👍", key), encrypted: true },
+						{
+							userId: "me",
+							emoji: sealReaction("👍", "me", "m1", key),
+							encrypted: true,
+						},
 					],
 				},
 			},
@@ -262,11 +271,15 @@ describe("views", () => {
 				room_id: "r1",
 				user_id: "ann",
 				username: "Ann",
-				content: encryptText("from rest", key),
+				content: sealMessage("from rest", "ann", "", key),
 				encrypted: true,
 				created_at: "2026-01-01T00:00:00Z",
 				reactions: [
-					{ user_id: "bo", emoji: encryptText("😂", key), encrypted: true },
+					{
+						user_id: "bo",
+						emoji: sealReaction("😂", "bo", "m1", key),
+						encrypted: true,
+					},
 				],
 			},
 			key,
@@ -307,5 +320,58 @@ describe("chatReducer history merges", () => {
 			userId: "ann",
 		});
 		expect(other.closed).toBeUndefined();
+	});
+});
+
+describe("edits", () => {
+	const edited = (content: string) =>
+		parseRoomEvent(
+			{ type: "message.updated", data: { id: "m1", content, encrypted: true } },
+			key,
+		);
+
+	it("applies an edit sealed by the message's author", () => {
+		const s = apply(
+			initialChatState(room),
+			{ type: "messages", messages: [msg("m1", "ann", "hi", 1)] },
+			edited(sealMessage("hello", "ann", "m1", key)),
+		);
+		expect(s.messages[0]).toMatchObject({ content: "hello", failed: false });
+	});
+
+	it("rejects an edit sealed by someone else or for another message", () => {
+		for (const forged of [
+			sealMessage("pwned", "bo", "m1", key),
+			sealMessage("pwned", "ann", "m2", key),
+			sealMessage("pwned", "ann", "", key),
+		]) {
+			const s = apply(
+				initialChatState(room),
+				{ type: "messages", messages: [msg("m1", "ann", "hi", 1)] },
+				edited(forged),
+			);
+			expect(s.messages[0]).toMatchObject({
+				content: "[Unverified message]",
+				failed: true,
+			});
+		}
+	});
+
+	it("rejects a message relabelled with another sender", () => {
+		const action = parseRoomEvent(
+			{
+				type: "message.received",
+				data: {
+					id: "m1",
+					userId: "bo",
+					content: sealMessage("hi", "ann", "", key),
+					encrypted: true,
+				},
+			},
+			key,
+		);
+		expect(action).toMatchObject({
+			messages: [{ failed: true, content: "[Unverified message]" }],
+		});
 	});
 });

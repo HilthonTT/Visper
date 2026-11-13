@@ -75,8 +75,8 @@ return {1, ttl}
 `
 
 // RateLimiterMiddleware limits requests per client IP. It deliberately does
-// not key on the user: user IDs come from the client-controlled X-User-ID
-// header, so a fresh ID per request would bypass the limit. The IP comes from
+// not key on the user: anyone can mint a fresh user token (X-User-Token)
+// per request, which would bypass the limit. The IP comes from
 // gin's ClientIP, which only honours X-Forwarded-For / X-Real-IP from the
 // proxies listed in server.trustedProxies.
 func RateLimiterMiddleware(redisClient *redis.Client, logger *logger.Logger, config RateLimiterConfig) gin.HandlerFunc {

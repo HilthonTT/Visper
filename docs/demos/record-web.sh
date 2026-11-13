@@ -60,7 +60,7 @@ MSYS_NO_PATHCONV=1 docker run --rm \
 			code=""
 			if [ "$scene" != tour ]; then
 				rm -f /tmp/code
-				"$WORK/demo-bot" -code-file /tmp/code -user-id "demo-bot-web-$scene-$RANDOM" 2>/tmp/bot.log &
+				"$WORK/demo-bot" -code-file /tmp/code 2>/tmp/bot.log &
 				bot=$!
 				for _ in $(seq 50); do [ -s /tmp/code ] && break; sleep 0.2; done
 				[ -s /tmp/code ] || { cat /tmp/bot.log; exit 1; }

@@ -3,7 +3,7 @@ import pytest
 from visper_ai.api import dependencies
 from visper_ai.core.ai.enhancement_service import USER_MESSAGE_CLOSE, USER_MESSAGE_OPEN
 
-from .conftest import OTHER_USER_ID, USER_ID, seed_user
+from .conftest import OTHER_USER_ID, OTHER_USER_TOKEN, USER_ID, USER_TOKEN, seed_user
 
 ENHANCE_URL = "/api/v1/ai/enhance"
 
@@ -62,7 +62,7 @@ async def test_enhance_unknown_user(client):
 
 async def test_enhance_success_and_cache(client, fake_redis, fake_ollama):
     await seed_user(fake_redis)
-    headers = {"X-User-ID": USER_ID}
+    headers = {"X-User-Token": USER_TOKEN}
     payload = {"message": "  u send me the report plz  ", "style": "professional", "tone": "polite"}
 
     first = await client.post(ENHANCE_URL, json=payload, headers=headers)
@@ -90,7 +90,7 @@ async def test_enhance_success_and_cache(client, fake_redis, fake_ollama):
 async def test_enhance_fallback_is_not_cached(client, fake_redis, fake_ollama):
     await seed_user(fake_redis)
     fake_ollama.error = RuntimeError("Cannot connect to Ollama")
-    headers = {"X-User-ID": USER_ID}
+    headers = {"X-User-Token": USER_TOKEN}
     payload = {"message": "thx bro", "style": "professional"}
 
     first = await client.post(ENHANCE_URL, json=payload, headers=headers)
@@ -108,14 +108,14 @@ async def test_enhance_fallback_is_not_cached(client, fake_redis, fake_ollama):
 @pytest.mark.parametrize("message", ["  a  ", "x" * 2001])
 async def test_enhance_validation(client, fake_redis, message):
     await seed_user(fake_redis)
-    response = await client.post(ENHANCE_URL, json={"message": message}, headers={"X-User-ID": USER_ID})
+    response = await client.post(ENHANCE_URL, json={"message": message}, headers={"X-User-Token": USER_TOKEN})
     assert response.status_code == 422
 
 
 async def test_enhance_rate_limited(client, fake_redis, monkeypatch):
     monkeypatch.setattr(dependencies, "DEFAULT_LIMIT", 2)
     await seed_user(fake_redis, is_guest=False)
-    headers = {"X-User-ID": USER_ID}
+    headers = {"X-User-Token": USER_TOKEN}
 
     codes = []
     for i in range(3):
@@ -129,7 +129,7 @@ async def test_batch_rejects_oversized_item(client, fake_redis):
     response = await client.post(
         "/api/v1/ai/enhance/batch",
         json={"messages": ["fine message", "x" * 5000]},
-        headers={"X-User-ID": USER_ID},
+        headers={"X-User-Token": USER_TOKEN},
     )
     assert response.status_code == 422
 
@@ -139,18 +139,18 @@ async def test_async_task_is_owner_only(client, fake_redis):
     await seed_user(fake_redis, OTHER_USER_ID)
 
     created = await client.post(
-        "/api/v1/ai/enhance/async", json={"message": "hello there"}, headers={"X-User-ID": USER_ID}
+        "/api/v1/ai/enhance/async", json={"message": "hello there"}, headers={"X-User-Token": USER_TOKEN}
     )
     assert created.status_code == 202
     task_id = created.json()["task_id"]
 
     # Background tasks complete before the ASGI call returns.
-    mine = await client.get(f"/api/v1/ai/enhance/status/{task_id}", headers={"X-User-ID": USER_ID})
+    mine = await client.get(f"/api/v1/ai/enhance/status/{task_id}", headers={"X-User-Token": USER_TOKEN})
     assert mine.status_code == 200
     assert mine.json()["status"] == "completed"
     assert mine.headers["cache-control"] == "no-store"
 
-    theirs = await client.get(f"/api/v1/ai/enhance/status/{task_id}", headers={"X-User-ID": OTHER_USER_ID})
+    theirs = await client.get(f"/api/v1/ai/enhance/status/{task_id}", headers={"X-User-Token": OTHER_USER_TOKEN})
     assert theirs.status_code == 404
 
 
@@ -175,7 +175,28 @@ async def test_async_enhance_rejects_internal_callback_urls(client, fake_redis, 
     response = await client.post(
         "/api/v1/ai/enhance/async",
         json={"message": "hello there", "callback_url": callback_url},
-        headers={"X-User-ID": USER_ID},
+        headers={"X-User-Token": USER_TOKEN},
     )
     assert response.status_code == 422
     assert "public" in response.text
+
+
+def test_user_id_from_token_matches_the_go_api():
+    # Same vector as services/api/infrastructure/security/user_token_test.go.
+    assert dependencies.user_id_from_token("example-token-0123456789") == "629bfa91-c2d7-8ec5-b29e-d701d23d339d"
+
+
+async def test_enhance_accepts_the_go_session_cookie(client, fake_redis, fake_ollama):
+    import base64
+
+    await seed_user(fake_redis)
+    client.cookies.set("visper_user_id", base64.b64encode(USER_TOKEN.encode()).decode())
+    response = await client.post(ENHANCE_URL, json={"message": "hello there"})
+    assert response.status_code == 200, response.text
+
+
+async def test_enhance_rejects_a_bare_user_id(client, fake_redis):
+    # The public ID is not a credential: sending it as the token must not work.
+    await seed_user(fake_redis)
+    response = await client.post(ENHANCE_URL, json={"message": "hello there"}, headers={"X-User-Token": USER_ID})
+    assert response.status_code == 401

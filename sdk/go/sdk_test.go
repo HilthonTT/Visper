@@ -54,11 +54,12 @@ func TestMessageSendEncryptsAndDecrypts(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"id": "m1", "room_id": "r1", "content": sent.Content, "encrypted": sent.Encrypted,
+			"id": "m1", "room_id": "r1", "user_id": "u1", "content": sent.Content, "encrypted": sent.Encrypted,
 			"created_at": "2026-01-01T00:00:00Z",
 		})
 	}))
 	client.Message.SetEncryptionKey(keyB64)
+	client.Message.SetSender("u1")
 
 	res, err := client.Message.Send(context.Background(), "r1", SendMessageParams{Content: "hello"})
 	if err != nil {
@@ -133,8 +134,8 @@ func TestFileUploadEncryptsContentAndHidesName(t *testing.T) {
 		if r.URL.Path != "/api/v1/rooms/r1/files/upload" {
 			t.Errorf("path = %s", r.URL.Path)
 		}
-		if got := r.Header.Get("X-User-ID"); got != "u1" {
-			t.Errorf("X-User-ID = %q", got)
+		if got := r.Header.Get("X-User-Token"); got != "u1" {
+			t.Errorf("X-User-Token = %q", got)
 		}
 		f, hdr, err := r.FormFile("file")
 		if err != nil {
@@ -354,6 +355,7 @@ func TestReactionsAreEncryptedAndDecrypted(t *testing.T) {
 		})
 	}))
 	client.Message.SetEncryptionKey(keyB64)
+	client.Message.SetSender("u1")
 
 	res, err := client.Message.SetReaction(context.Background(), "r1", "m1", "👍")
 	if err != nil {

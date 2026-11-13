@@ -13,6 +13,11 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+// userTTL is how long a user record outlives its last refresh. It matches the
+// session cookie's lifetime and is far longer than any room (7 days at most),
+// so a room's members never expire before it does.
+const userTTL = 30 * 24 * time.Hour
+
 type userRepository struct {
 	cache  *cache.DistributedCache
 	tracer trace.Tracer
@@ -35,9 +40,10 @@ func (r *userRepository) Create(ctx context.Context, user *model.User) error {
 	)
 
 	user.CreatedAt = time.Now()
+	user.SeenAt = user.CreatedAt
 	key := fmt.Sprintf("user:%s", user.ID)
 
-	if err := r.cache.Set(ctx, key, user, 0); err != nil {
+	if err := r.cache.Set(ctx, key, user, userTTL); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to create user")
 		return err
@@ -57,7 +63,8 @@ func (r *userRepository) Update(ctx context.Context, user *model.User) error {
 	)
 
 	key := fmt.Sprintf("user:%s", user.ID)
-	if err := r.cache.Set(ctx, key, user, 0); err != nil {
+	user.SeenAt = time.Now()
+	if err := r.cache.Set(ctx, key, user, userTTL); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to update user")
 		return err

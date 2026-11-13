@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	corsAllowHeaders = "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-User-ID, If-Match, If-None-Match"
+	corsAllowHeaders = "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With, X-User-Token, X-User-ID, If-Match, If-None-Match"
 	corsAllowMethods = "POST, OPTIONS, GET, PUT, DELETE, PATCH, HEAD"
 )
 

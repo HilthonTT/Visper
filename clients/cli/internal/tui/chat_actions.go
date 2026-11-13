@@ -14,10 +14,11 @@ import (
 
 // The API rejects message content longer than maxMessageLen characters. For
 // encrypted rooms that limit applies to the base64 ciphertext (24-byte nonce +
-// 16-byte MAC + plaintext), which caps the plaintext at 710 bytes.
+// 16-byte MAC + sealed envelope), which caps the envelope (the text plus its
+// sender and kind, see apisdk.SealMessage) at 710 bytes.
 const (
 	maxMessageLen            = 1000
-	maxEncryptedMessageBytes = maxMessageLen/4*3 - 24 - 16
+	maxEncryptedMessageBytes = apisdk.MaxSealedBytes
 )
 
 // Default style and tone of the AI rewrite.
@@ -59,22 +60,27 @@ func (m model) roomRequest(action string, fn func(ctx context.Context, client *a
 func (m model) messageLength() (int, int) {
 	v := m.state.chat.messageInput.Value()
 	if m.state.chat.encrypted() {
-		return len(v), maxEncryptedMessageBytes
+		return apisdk.SealedMessageSize(m.userID, "", v), maxEncryptedMessageBytes
 	}
 	return len([]rune(v)), maxMessageLen
 }
 
-// checkMessageLength validates content against the room's message limit and,
-// when it is too long, returns the text to tell the user.
-func (m model) checkMessageLength(content string) (string, bool) {
-	limit := validate.WithinLen(1, maxMessageLen, "message")
-	limitText := fmt.Sprintf("Messages can be up to %d characters", maxMessageLen)
-	if m.state.chat.encrypted() {
-		limit = validate.MaxBytes(maxEncryptedMessageBytes, "message")
-		limitText = fmt.Sprintf("Encrypted messages can be up to %d bytes", maxEncryptedMessageBytes)
+// checkMessageLength validates content (a new message, or an edit of
+// messageID) against the room's message limit and, when it is too long,
+// returns the text to tell the user.
+func (m model) checkMessageLength(content, messageID string) (string, bool) {
+	if err := validate.NotEmpty("message")(content); err != nil {
+		return "Messages can't be empty", false
 	}
-	if err := validate.Compose(validate.NotEmpty("message"), limit)(content); err != nil {
-		return limitText, false
+	if m.state.chat.encrypted() {
+		if apisdk.SealedMessageSize(m.userID, messageID, content) > maxEncryptedMessageBytes {
+			budget := maxEncryptedMessageBytes - apisdk.SealedMessageSize(m.userID, messageID, "")
+			return fmt.Sprintf("Encrypted messages can be up to about %d bytes", budget), false
+		}
+		return "", true
+	}
+	if err := validate.WithinLen(1, maxMessageLen, "message")(content); err != nil {
+		return fmt.Sprintf("Messages can be up to %d characters", maxMessageLen), false
 	}
 	return "", true
 }
@@ -85,7 +91,7 @@ func (m model) sendMessage() (model, tea.Cmd) {
 		return m, nil
 	}
 
-	if text, ok := m.checkMessageLength(content); !ok {
+	if text, ok := m.checkMessageLength(content, ""); !ok {
 		return m.toast(theme.ToneWarning, text)
 	}
 
@@ -165,11 +171,11 @@ func (m model) uploadImage(path string) (model, tea.Cmd) {
 	}
 	m.state.chat.uploading = true
 
-	client, ctx, roomID, userID, session := m.client, m.ctx, m.state.chat.room.ID, m.userID, m.state.chat.session
+	client, ctx, roomID, userToken, session := m.client, m.ctx, m.state.chat.room.ID, m.userToken, m.state.chat.session
 	key := m.state.chat.roomKey
 	anim := m.restartAnim()
 	return m, tea.Batch(anim, func() tea.Msg {
-		result, err := client.File.UploadEncrypted(ctx, roomID, path, key, userID)
+		result, err := client.File.UploadEncrypted(ctx, roomID, path, key, userToken)
 		if err != nil {
 			return uploadResultMsg{err: err, session: session}
 		}

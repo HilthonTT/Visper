@@ -114,6 +114,12 @@ func WithHeader(key, value string) RequestOption {
 	})
 }
 
+// WithUserToken identifies the client to the API by its private user token
+// (see apisdk.NewUserToken). The API derives the public user ID from it.
+func WithUserToken(token string) RequestOption {
+	return WithHeader("X-User-Token", token)
+}
+
 // WithHeaderDel returns a RequestOption that deletes the header value(s) associated with the given key.
 func WithHeaderDel(key string) RequestOption {
 	return requestconfig.RequestOptionFunc(func(r *requestconfig.RequestConfig) error {

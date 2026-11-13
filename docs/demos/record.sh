@@ -58,7 +58,7 @@ for name in "${tapes[@]}"; do
 			cp clients/cli/internal/tui/embeds/waifu.png "$HOME/Pictures/sketch.png"
 			if [ "$NEEDS_BOT" = 1 ]; then
 				rm -f /tmp/code
-				"$WORK/demo-bot" -code-file /tmp/code -user-id "demo-bot-$NAME-$RANDOM" $BOT_FLAGS 2>/tmp/bot.log &
+				"$WORK/demo-bot" -code-file /tmp/code $BOT_FLAGS 2>/tmp/bot.log &
 				for _ in $(seq 50); do [ -s /tmp/code ] && break; sleep 0.2; done
 				[ -s /tmp/code ] || { cat /tmp/bot.log; exit 1; }
 				sed -i "s/{{JOIN_CODE}}/$(cat /tmp/code)/g" "$WORK/$NAME.tape"

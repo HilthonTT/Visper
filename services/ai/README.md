@@ -4,8 +4,10 @@ FastAPI service that rewrites chat messages (style/tone) with a local Ollama mod
 (`qwen2.5:3b` by default), with a rule-based fallback, Redis caching and per-user rate
 limiting. The Go API / SDK (`sdk/go`) calls it at `POST /api/v1/ai/enhance` and
 `GET /api/v1/ai/health` (base URL `VISPER_AI_BASE_URL`, default `http://localhost:8088`),
-passing the user via the `X-User-ID` header; sessions are read from Redis keys
-`visper:user:<id>` written by the Go API.
+passing the user's private token in the `X-User-Token` header (or the API's
+`visper_user_id` session cookie). The public user ID is derived from the token exactly
+as the Go API does (SHA-256, see `user_id_from_token`), and sessions are read from Redis
+keys `visper:user:<id>` written by the Go API.
 
 ## Layout
 

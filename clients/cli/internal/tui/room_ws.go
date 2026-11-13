@@ -43,9 +43,12 @@ type (
 	messageReceivedMsg struct {
 		message apisdk.MessageResponse
 	}
+	// messageUpdatedMsg carries the edit still encrypted: the event does not
+	// name the sender, so it is checked against the message it edits.
 	messageUpdatedMsg struct {
 		messageID string
 		content   string
+		encrypted bool
 	}
 	messageDeletedMsg struct {
 		messageID string
@@ -100,8 +103,8 @@ func listenRoom(session context.Context, conn *apisdk.RoomWebSocket, encryptionK
 			case <-session.Done():
 			}
 		}
-		decrypt := func(content string, encrypted bool) string {
-			return decryptContent(encryptionKey, content, encrypted)
+		decrypt := func(content string, encrypted bool, want sealedAs) string {
+			return decryptContent(encryptionKey, content, encrypted, want)
 		}
 
 		conn.SetMessageHandler(func(wsMsg apisdk.WSMessage) {
@@ -148,7 +151,7 @@ func (m model) waitForRoomEvent() tea.Cmd {
 // parseRoomEvent turns a WebSocket message into a room event; ok is false for
 // unknown or invalid ones. The server's payload keys vary in case, hence the
 // alternatives.
-func parseRoomEvent(wsMsg apisdk.WSMessage, decrypt func(content string, encrypted bool) string) (tea.Msg, bool) {
+func parseRoomEvent(wsMsg apisdk.WSMessage, decrypt decryptFunc) (tea.Msg, bool) {
 	if wsMsg.Type == apisdk.MessageDeleted {
 		if payload, ok := wsMsg.Data.(apisdk.MessageDeletedPayload); ok {
 			return messageDeletedMsg{messageID: payload.ID}, true
@@ -189,11 +192,11 @@ func parseRoomEvent(wsMsg apisdk.WSMessage, decrypt func(content string, encrypt
 			RoomID:    wsMsg.RoomID,
 			UserID:    userID,
 			Username:  username,
-			Content:   decrypt(content, encrypted),
+			Content:   decrypt(content, encrypted, sealedAs{from: userID, messageID: id}),
 			Encrypted: encrypted,
 			CreatedAt: createdAt.Local(),
 			ReplyToID: replyTo,
-			Reactions: parseReactions(data["reactions"], decrypt),
+			Reactions: parseReactions(data["reactions"], id, decrypt),
 		}}, true
 
 	case apisdk.MessageReactions:
@@ -201,7 +204,7 @@ func parseRoomEvent(wsMsg apisdk.WSMessage, decrypt func(content string, encrypt
 		if !ok {
 			return nil, false
 		}
-		return messageReactionsMsg{messageID: id, reactions: parseReactions(data["reactions"], decrypt)}, true
+		return messageReactionsMsg{messageID: id, reactions: parseReactions(data["reactions"], id, decrypt)}, true
 
 	case apisdk.PresenceUpdate:
 		raw, _ := data["online"].([]any)
@@ -237,7 +240,7 @@ func parseRoomEvent(wsMsg apisdk.WSMessage, decrypt func(content string, encrypt
 			return nil, false
 		}
 		encrypted, _ := data["encrypted"].(bool)
-		return messageUpdatedMsg{messageID: id, content: decrypt(content, encrypted)}, true
+		return messageUpdatedMsg{messageID: id, content: content, encrypted: encrypted}, true
 
 	case apisdk.MessageDeleted:
 		id, ok := stringField(data, "id", "ID", "message_id", "messageId")
@@ -315,8 +318,8 @@ func parseRoomEvent(wsMsg apisdk.WSMessage, decrypt func(content string, encrypt
 	return nil, false
 }
 
-// parseReactions reads a reaction list, decrypting each emoji.
-func parseReactions(raw any, decrypt func(content string, encrypted bool) string) []apisdk.Reaction {
+// parseReactions reads messageID's reaction list, decrypting each emoji.
+func parseReactions(raw any, messageID string, decrypt decryptFunc) []apisdk.Reaction {
 	list, _ := raw.([]any)
 	var reactions []apisdk.Reaction
 	for _, r := range list {
@@ -330,7 +333,10 @@ func parseReactions(raw any, decrypt func(content string, encrypted bool) string
 			continue
 		}
 		encrypted, _ := fields["encrypted"].(bool)
-		reactions = append(reactions, apisdk.Reaction{UserID: userID, Emoji: decrypt(emoji, encrypted)})
+		reactions = append(reactions, apisdk.Reaction{
+			UserID: userID,
+			Emoji:  decrypt(emoji, encrypted, sealedAs{reaction: true, from: userID, messageID: messageID}),
+		})
 	}
 	return reactions
 }
@@ -352,20 +358,45 @@ func stringField(data map[string]any, keys ...string) (string, bool) {
 	return "", false
 }
 
-// decryptContent decrypts an encrypted message with the room's key; failures
-// are shown in place of the message.
-func decryptContent(key, content string, encrypted bool) string {
+// sealedAs is what an encrypted field claims to be: a message (or a reaction
+// to messageID) written by from. Decryption checks the sealed envelope
+// matches, so the server can't relabel content (see apisdk.OpenMessage).
+type sealedAs struct {
+	reaction  bool
+	edit      bool // an edit, sealed for messageID
+	from      string
+	messageID string
+}
+
+// decryptFunc decrypts a field that should be sealed as want.
+type decryptFunc func(content string, encrypted bool, want sealedAs) string
+
+// decryptContent decrypts an encrypted field with the room's key; failures
+// are shown in place of the content.
+func decryptContent(key, content string, encrypted bool, want sealedAs) string {
 	if !encrypted {
+		if key != "" {
+			// Every member of an encrypted room encrypts: plaintext can only
+			// have been injected by the server.
+			return apisdk.FailedText(apisdk.ErrUnverified)
+		}
 		return content
 	}
 	if key == "" {
 		log.Printf("Cannot decrypt: no encryption key available")
 		return "[Decryption failed: no key]"
 	}
-	decrypted, err := apisdk.DecryptWithKeyB64(content, key)
+	open := apisdk.OpenMessage
+	switch {
+	case want.reaction:
+		open = apisdk.OpenReaction
+	case want.edit:
+		open = apisdk.OpenEdit
+	}
+	decrypted, err := open(content, key, want.from, want.messageID)
 	if err != nil {
 		log.Printf("Failed to decrypt message: %v", err)
-		return "[Decryption failed]"
+		return apisdk.FailedText(err)
 	}
 	return decrypted
 }

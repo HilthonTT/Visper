@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/hilthontt/visper/services/api/domain/model"
 )
 
@@ -72,48 +71,6 @@ func decodeFromBase64(encoded string, target any) error {
 	}
 
 	return json.Unmarshal(decoded, target)
-}
-
-func GetOrCreateUserID(w http.ResponseWriter, r *http.Request) string {
-	if userID := GetUserID(r); userID != "" {
-		return userID
-	}
-
-	newUserID := uuid.NewString()
-	SetUserID(w, newUserID)
-	return newUserID
-}
-
-func GetUserID(r *http.Request) string {
-	// Check header first (for API/WebSocket clients)
-	if headerUserID := r.Header.Get("X-User-ID"); headerUserID != "" {
-		return headerUserID
-	}
-
-	// Fall back to cookie
-	cookie, err := r.Cookie(userIDCookie)
-	if err != nil {
-		return ""
-	}
-
-	decoded, err := base64.StdEncoding.DecodeString(cookie.Value)
-	if err != nil {
-		return ""
-	}
-
-	return string(decoded)
-}
-
-func SetUserID(w http.ResponseWriter, userID string) {
-	encoded := base64.StdEncoding.EncodeToString([]byte(userID))
-
-	setSecureCookie(w, cookieConfig{
-		name:     userIDCookie,
-		value:    encoded,
-		path:     "/",
-		httpOnly: true,
-		maxAge:   int(userIDLifetime.Seconds()),
-	})
 }
 
 // Room Authentication

@@ -138,6 +138,8 @@ func (m model) enterChat(room *apisdk.RoomResponse, roomKey string) (model, tea.
 	if room.CurrentUser.ID != "" {
 		m.userID = room.CurrentUser.ID
 	}
+	// Sealed into what we encrypt so other members can check who wrote it.
+	m.client.Message.SetSender(m.userID)
 
 	messageInput := m.newTextInput("Write a message…")
 	messageInput.Focus()

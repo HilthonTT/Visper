@@ -18,8 +18,8 @@ var (
 	ErrUserNotFound   = apperr.New(apperr.NotFound, "user not found")
 )
 
-// UserUseCase manages the anonymous users identified by the X-User-ID header
-// or the user ID cookie.
+// UserUseCase manages anonymous users. Their IDs are derived from private
+// user tokens (X-User-Token header or session cookie) by the user middleware.
 type UserUseCase interface {
 	// GetOrCreateUser returns the user with the given ID, creating a guest
 	// user for an ID seen for the first time.
@@ -44,8 +44,12 @@ func NewUserUseCase(repository repository.UserRepository, logger *logger.Logger)
 
 func (uc *userUseCase) GetOrCreateUser(ctx context.Context, id string) (*model.User, error) {
 	user, err := uc.GetByID(ctx, id)
+	if err == nil {
+		uc.keepAlive(ctx, user)
+		return user, nil
+	}
 	if !errors.Is(err, ErrUserNotFound) {
-		return user, err
+		return nil, err
 	}
 
 	user = &model.User{
@@ -92,6 +96,21 @@ func (uc *userUseCase) Rename(ctx context.Context, user *model.User, username st
 	user.Username = username
 	return nil
 }
+
+// keepAlive renews the expiry of an active user's record, at most once per
+// refreshInterval so that requests don't each write to Redis.
+func (uc *userUseCase) keepAlive(ctx context.Context, user *model.User) {
+	if time.Since(user.SeenAt) < refreshInterval {
+		return
+	}
+	if err := uc.repository.Update(ctx, user); err != nil {
+		// Not fatal: the record is still valid until it expires.
+		uc.logger.Warn("failed to refresh user", zap.Error(err), zap.String("userID", user.ID))
+	}
+}
+
+// refreshInterval is how often an active user's record expiry is renewed.
+const refreshInterval = 24 * time.Hour
 
 // guestUsername derives a readable name from the start of the user's ID.
 func guestUsername(userID string) string {

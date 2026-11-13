@@ -58,8 +58,8 @@ var ErrFileTooLarge = fmt.Errorf("file is larger than %d bytes", MaxUploadSize-e
 // uploads it to the room. The API only stores the ciphertext and never sees
 // the file's name: the caller shares the returned URL (and any name) in an
 // encrypted message, and readers decrypt the download with DecryptFile. If
-// userID is non-empty it is sent as the X-User-ID header.
-func (s *FileService) UploadEncrypted(ctx context.Context, roomID, filePath, keyB64, userID string, opts ...option.RequestOption) (*FileResponse, error) {
+// userToken is non-empty it identifies the uploader (see WithUserToken).
+func (s *FileService) UploadEncrypted(ctx context.Context, roomID, filePath, keyB64, userToken string, opts ...option.RequestOption) (*FileResponse, error) {
 	if roomID == "" {
 		return nil, ErrMissingIDParameter
 	}
@@ -96,8 +96,8 @@ func (s *FileService) UploadEncrypted(ctx context.Context, roomID, filePath, key
 		return nil, fmt.Errorf("failed to finalize form: %w", err)
 	}
 
-	if userID != "" {
-		opts = append(opts, option.WithHeader("X-User-ID", userID))
+	if userToken != "" {
+		opts = append(opts, option.WithUserToken(userToken))
 	}
 	// Retrying would require re-reading the body; uploads are not idempotent.
 	opts = append(opts,

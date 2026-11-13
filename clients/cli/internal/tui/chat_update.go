@@ -273,7 +273,7 @@ func (m model) editMessageDialogUpdate(msg tea.KeyPressMsg) (model, tea.Cmd) {
 			return m.closeDialog(), nil
 		}
 		// Keep the dialog open so the user can shorten the text.
-		if text, ok := m.checkMessageLength(content); !ok {
+		if text, ok := m.checkMessageLength(content, id); !ok {
 			return m.toast(theme.ToneWarning, text)
 		}
 		m = m.closeDialog()

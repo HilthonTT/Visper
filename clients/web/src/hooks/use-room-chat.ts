@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { type ApiRoom, chatApi, roomSocketUrl } from "@/lib/chat-api";
+import {
+	type ApiRoom,
+	ChatApiError,
+	chatApi,
+	roomSocketUrl,
+} from "@/lib/chat-api";
 import {
 	type ChatMessage,
 	chatReducer,
@@ -12,10 +17,11 @@ import {
 	ENCRYPTED_FILE_OVERHEAD,
 	encryptedImageContent,
 	encryptFile,
-	encryptText,
 	fitsMessage,
 	MAX_UPLOAD_SIZE,
 	type RoomKey,
+	sealMessage,
+	sealReaction,
 } from "@/lib/room-crypto";
 
 export type Connection = "connecting" | "open" | "reconnecting" | "closed";
@@ -23,6 +29,10 @@ export type Connection = "connecting" | "open" | "reconnecting" | "closed";
 /** Least time between two typing frames we send (the server relays one per 2s). */
 const TYPING_SEND_INTERVAL_MS = 2000;
 const MAX_RECONNECT_DELAY_MS = 15_000;
+/** Failed reconnects before checking whether the room still exists for us. */
+const PROBE_AFTER_ATTEMPTS = 2;
+/** Statuses meaning the room is gone (or we are no longer in it). */
+const ROOM_GONE_STATUSES = [403, 404, 410];
 
 /**
  * One joined room: its live state, fed by the room WebSocket (and the REST
@@ -39,6 +49,8 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 	const lastTypingSent = useRef(0);
 	const lastReadSent = useRef("");
 	const roomId = room.id;
+	// Our public ID, sealed into everything we encrypt.
+	const me = room.current_user.id;
 
 	// Room WebSocket, reconnecting with backoff until the room closes for us.
 	const closed = state.closed;
@@ -82,6 +94,22 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 				const delay = Math.min(1000 * 2 ** attempt, MAX_RECONNECT_DELAY_MS);
 				attempt++;
 				timer = window.setTimeout(connect, delay);
+				if (attempt >= PROBE_AFTER_ATTEMPTS) {
+					// A browser can't see why a WebSocket handshake failed: ask
+					// over REST whether the room is still there for us.
+					chatApi.listMessages(roomId).catch((e: unknown) => {
+						if (
+							!stopped &&
+							e instanceof ChatApiError &&
+							ROOM_GONE_STATUSES.includes(e.status)
+						) {
+							dispatch({
+								type: "closed",
+								reason: "This room is no longer available.",
+							});
+						}
+					});
+				}
 			};
 		};
 		connect();
@@ -93,6 +121,24 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 			socket.current = null;
 		};
 	}, [roomId, key, closed]);
+
+	// Rooms expire without a room.deleted event; close the chat on time.
+	const expiresAt = state.expiresAt;
+	useEffect(() => {
+		if (!expiresAt || closed) {
+			return;
+		}
+		const expire = () =>
+			dispatch({ type: "closed", reason: "This room has expired." });
+		const ms = expiresAt - Date.now();
+		if (ms <= 0) {
+			expire();
+			return;
+		}
+		// Rooms last at most 7 days, well within setTimeout's ~24.8-day range.
+		const id = window.setTimeout(expire, ms);
+		return () => window.clearTimeout(id);
+	}, [expiresAt, closed]);
 
 	// History over REST too: the socket replays only the latest messages.
 	useEffect(() => {
@@ -162,9 +208,9 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 
 	const send = useCallback(
 		async (text: string, replyToId?: string) => {
-			assertFits(text);
+			assertFits(text, me);
 			const res = await chatApi.send(roomId, {
-				content: encryptText(text, key),
+				content: sealMessage(text, me, "", key),
 				encrypted: true,
 				...(replyToId ? { reply_to_id: replyToId } : {}),
 			});
@@ -172,16 +218,16 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 			dispatch({ type: "messages", messages: [fromApiMessage(res, key)] });
 			lastTypingSent.current = 0;
 		},
-		[roomId, key],
+		[roomId, key, me],
 	);
 
 	const edit = useCallback(
 		async (id: string, text: string) => {
-			assertFits(text);
-			await chatApi.update(roomId, id, encryptText(text, key), true);
+			assertFits(text, me, id);
+			await chatApi.update(roomId, id, sealMessage(text, me, id, key), true);
 			dispatch({ type: "updated", id, content: text, failed: false });
 		},
-		[roomId, key],
+		[roomId, key, me],
 	);
 
 	const remove = useCallback(
@@ -201,7 +247,7 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 					: await chatApi.setReaction(
 							roomId,
 							message.id,
-							encryptText(emoji, key),
+							sealReaction(emoji, me, message.id, key),
 							true,
 						);
 			dispatch({
@@ -210,7 +256,7 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 				reactions: fromApiMessage(res, key).reactions,
 			});
 		},
-		[roomId, key, state.me],
+		[roomId, key, me, state.me],
 	);
 
 	const uploadImage = useCallback(
@@ -221,9 +267,9 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 			const data = new Uint8Array(await file.arrayBuffer());
 			const encrypted = new Uint8Array(encryptFile(data, key));
 			const uploaded = await chatApi.upload(roomId, encrypted);
-			await send(encryptedImageContent(uploaded.url, file.name));
+			await send(encryptedImageContent(uploaded.url, file.name, me));
 		},
-		[roomId, key, send],
+		[roomId, key, me, send],
 	);
 
 	const leave = useCallback(async () => {
@@ -244,8 +290,8 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 	};
 }
 
-function assertFits(text: string) {
-	if (!fitsMessage(text)) {
+function assertFits(text: string, me: string, messageId?: string) {
+	if (!fitsMessage(text, me, messageId)) {
 		throw new Error("That message is too long.");
 	}
 }
