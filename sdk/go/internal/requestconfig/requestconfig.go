@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
 	"math/rand"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -258,10 +260,23 @@ func applyMiddleware(middleware middleware, next middlewareNext) middlewareNext 
 	}
 }
 
-func shouldRetry(req *http.Request, res *http.Response) bool {
+func shouldRetry(req *http.Request, res *http.Response, err error) bool {
 	// If there is no way to recover the Body, then we shouldn't retry.
 	if req.Body != nil && req.GetBody == nil {
 		return false
+	}
+
+	// A POST or PATCH may have taken effect even though it failed (e.g. the
+	// connection dropped after the server stored a message), so resend it
+	// only when the server cannot have acted on it.
+	if !isIdempotent(req.Method) {
+		if res == nil {
+			return isDialError(err)
+		}
+		if v := res.Header.Get("x-should-retry"); v != "" {
+			return v == "true"
+		}
+		return res.StatusCode == http.StatusTooManyRequests
 	}
 
 	// If there is no response, that indicates that there is a connection error
@@ -283,6 +298,21 @@ func shouldRetry(req *http.Request, res *http.Response) bool {
 		res.StatusCode == http.StatusConflict ||
 		res.StatusCode == http.StatusTooManyRequests ||
 		res.StatusCode >= http.StatusInternalServerError
+}
+
+func isIdempotent(method string) bool {
+	switch method {
+	case "", http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace, http.MethodPut, http.MethodDelete:
+		return true
+	}
+	return false
+}
+
+// isDialError reports whether err means the connection was never made, so
+// the server did not receive the request.
+func isDialError(err error) bool {
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
 }
 
 func parseRetryAfterHeader(resp *http.Response) (time.Duration, bool) {
@@ -465,13 +495,25 @@ func (cfg *RequestConfig) Execute() error {
 		}
 
 		res, err = handler(req)
-		if ctx != nil && ctx.Err() != nil {
+		// The caller's context spans all attempts: once it is done, stop.
+		if callerErr := cfg.Request.Context().Err(); callerErr != nil {
 			if res != nil && res.Body != nil {
 				res.Body.Close()
 			}
-			return ctx.Err()
+			return callerErr
 		}
-		if !shouldRetry(cfg.Request, res) || retryCount >= cfg.MaxRetries {
+		// Only this attempt's timeout expired: retry it like a connection
+		// error, if there are retries left.
+		if attemptErr := ctx.Err(); attemptErr != nil {
+			if res != nil && res.Body != nil {
+				res.Body.Close()
+				res = nil
+			}
+			err = attemptErr
+			if retryCount >= cfg.MaxRetries || !isIdempotent(cfg.Request.Method) {
+				return attemptErr
+			}
+		} else if !shouldRetry(cfg.Request, res, err) || retryCount >= cfg.MaxRetries {
 			break
 		}
 

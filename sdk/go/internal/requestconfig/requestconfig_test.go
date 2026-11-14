@@ -148,7 +148,7 @@ func TestExecuteRetryResendsBytesReaderBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got string
-	err := ExecuteNewRequest(context.Background(), http.MethodPost, "thing", body, &got,
+	err := ExecuteNewRequest(context.Background(), http.MethodPut, "thing", body, &got,
 		RequestOptionFunc(func(rc *RequestConfig) error { rc.BaseURL = u; return nil }))
 	if err != nil {
 		t.Fatal(err)
@@ -157,5 +157,53 @@ func TestExecuteRetryResendsBytesReaderBody(t *testing.T) {
 	// "skip:payload" against a ContentLength of len("payload").
 	if got != "payload" {
 		t.Fatalf("retried body = %q, want %q", got, "payload")
+	}
+}
+
+func TestExecuteDoesNotRetryPostAfterServerError(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After-Ms", "1")
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(srv.Close)
+	u, _ := url.Parse(srv.URL + "/")
+
+	// The server may have stored the message before failing: resending it
+	// could post it twice.
+	err := ExecuteNewRequest(context.Background(), http.MethodPost, "thing", bytes.NewReader([]byte("m")), nil,
+		RequestOptionFunc(func(rc *RequestConfig) error { rc.BaseURL = u; return nil }))
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("POST sent %d times, want 1", n)
+	}
+}
+
+func TestExecuteRetriesAttemptTimeout(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			<-r.Context().Done() // hang past the attempt timeout
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(srv.Close)
+	u, _ := url.Parse(srv.URL + "/")
+
+	err := ExecuteNewRequest(context.Background(), http.MethodGet, "thing", nil, nil,
+		RequestOptionFunc(func(rc *RequestConfig) error {
+			rc.BaseURL = u
+			rc.RequestTimeout = 200 * time.Millisecond
+			return nil
+		}))
+	if err != nil {
+		t.Fatalf("err = %v, want the retry to succeed", err)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("calls = %d, want 2", n)
 	}
 }
