@@ -7,7 +7,9 @@ import (
 	"regexp"
 )
 
-var sensitiveHeaderRegex = regexp.MustCompile(`(?i)^(Authorization|Cookie|Set-Cookie|X-Api-Key): .+`)
+// Multi-line mode: a dump holds one header per line after the request line.
+// X-User-Token (and its X-User-ID alias) is the client's private credential.
+var sensitiveHeaderRegex = regexp.MustCompile(`(?im)^(Authorization|Cookie|Set-Cookie|X-Api-Key|X-User-Token|X-User-Id): [^\r\n]+`)
 
 func redactSensitiveHeaders(s string) string {
 	return sensitiveHeaderRegex.ReplaceAllString(s, "$1: [REDACTED]")
