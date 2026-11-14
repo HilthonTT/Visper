@@ -341,6 +341,24 @@ func (r *messageRepository) GetByRoomAfter(ctx context.Context, roomID string, a
 		return nil, err
 	}
 
+	// Count can cut the last second in the middle, and within a second Redis
+	// orders by member bytes, not time: a message created earlier in that
+	// second could be left out while a later one is returned, and a client
+	// paging on from the returned one would skip it for good. Fetch the
+	// whole last second.
+	if limit > 0 && int64(len(later)) >= limit {
+		lastSec := lastScore(later)
+		if lastSec != "" {
+			tail, err := r.cache.ZRangeByScore(ctx, key, &redis.ZRangeBy{Min: lastSec, Max: lastSec})
+			if err != nil {
+				span.RecordError(err)
+				span.SetStatus(codes.Error, "failed to get messages by score range")
+				return nil, err
+			}
+			later = mergeMembers(later, tail)
+		}
+	}
+
 	span.SetAttributes(attribute.Int("messages.fetched_count", len(sameSecond)+len(later)))
 
 	boundary, boundaryErrors := decodeMessages(sameSecond)
@@ -355,6 +373,30 @@ func (r *messageRepository) GetByRoomAfter(ctx context.Context, roomID string, a
 
 	span.SetStatus(codes.Ok, "messages retrieved successfully")
 	return messages, nil
+}
+
+// lastScore returns the score (whole Unix second) of the last member of
+// results, which are in score order, or "" if it can't be decoded.
+func lastScore(results []string) string {
+	msgs, _ := decodeMessages(results[len(results)-1:])
+	if len(msgs) == 0 {
+		return ""
+	}
+	return strconv.FormatInt(msgs[0].CreatedAt.Unix(), 10)
+}
+
+// mergeMembers appends the members of extra not already in base.
+func mergeMembers(base, extra []string) []string {
+	seen := make(map[string]struct{}, len(base))
+	for _, m := range base {
+		seen[m] = struct{}{}
+	}
+	for _, m := range extra {
+		if _, ok := seen[m]; !ok {
+			base = append(base, m)
+		}
+	}
+	return base
 }
 
 // messagesAfter merges the messages stored in after's own second (boundary)
