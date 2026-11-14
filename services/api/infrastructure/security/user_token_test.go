@@ -1,6 +1,8 @@
 package security
 
 import (
+	"encoding/base64"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 )
@@ -41,5 +43,23 @@ func TestUserTokenRoundTripsThroughCookie(t *testing.T) {
 func TestValidUserTokenRejectsShortTokens(t *testing.T) {
 	if ValidUserToken("bob") {
 		t.Fatal("a 3-character token must be rejected")
+	}
+}
+
+func TestLegacyPublicIDsAreNotTokens(t *testing.T) {
+	legacy := "3f2b8c1e-9a4d-4e7f-8b6a-1c2d3e4f5a6b"
+	if ValidUserToken(legacy) {
+		t.Fatal("a canonical UUID (a pre-token public user ID) was accepted as a token")
+	}
+
+	// A pre-token session cookie is ignored, so the middleware mints a new token.
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(&http.Cookie{Name: userIDCookie, Value: base64.StdEncoding.EncodeToString([]byte(legacy))})
+	if got := GetUserToken(r); got != "" {
+		t.Fatalf("GetUserToken = %q, want \"\" for a legacy cookie", got)
+	}
+
+	if !ValidUserToken(NewUserToken()) {
+		t.Fatal("a fresh token is not valid")
 	}
 }

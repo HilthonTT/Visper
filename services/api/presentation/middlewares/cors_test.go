@@ -3,6 +3,7 @@ package middlewares
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -76,5 +77,15 @@ func TestETagMiddleware(t *testing.T) {
 	}
 	if w.Body.Len() != 0 {
 		t.Fatalf("304 response must not have a body, got %q", w.Body.String())
+	}
+}
+
+func TestRedactQuery(t *testing.T) {
+	got := redactQuery("join_code=AB12CD&secure_code=s3cret&x=1")
+	if strings.Contains(got, "AB12CD") || strings.Contains(got, "s3cret") || !strings.Contains(got, "x=1") {
+		t.Fatalf("redactQuery = %q", got)
+	}
+	if got := redactQuery("limit=50"); got != "limit=50" {
+		t.Fatalf("redactQuery changed a harmless query: %q", got)
 	}
 }

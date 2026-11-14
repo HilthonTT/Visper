@@ -101,7 +101,12 @@ func sentryDataCollection(sendPII bool) *sentry.DataCollection {
 		return &sentry.DataCollection{UserInfo: sentry.Set(true)}
 	}
 
-	denyList := &sentry.KeyValueCollectionBehavior{Mode: sentry.CollectionDenyList}
+	// On top of Sentry's default sensitive terms: the legacy user-token
+	// header and the room codes some endpoints take in the query string.
+	denyList := &sentry.KeyValueCollectionBehavior{
+		Mode:  sentry.CollectionDenyList,
+		Terms: []string{"x-user-id", "join_code", "secure_code", "secure_token"},
+	}
 	return &sentry.DataCollection{
 		UserInfo:   sentry.Set(false),
 		Cookies:    &sentry.KeyValueCollectionBehavior{Mode: sentry.CollectionOff},

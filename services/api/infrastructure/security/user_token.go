@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+
+	"github.com/google/uuid"
 )
 
 // A user is identified by a private token that only its client knows. The
@@ -33,7 +35,19 @@ func NewUserToken() string {
 
 // ValidUserToken reports whether token is acceptable as a credential.
 func ValidUserToken(token string) bool {
-	return len(token) >= MinUserTokenLength && len(token) <= MaxUserTokenLength
+	return len(token) >= MinUserTokenLength && len(token) <= MaxUserTokenLength && !isLegacyUserID(token)
+}
+
+// isLegacyUserID reports whether token is a canonical UUID. Before user
+// tokens, clients sent their public user ID in its place, and those IDs have
+// been shown to every room they were in: accepting one would let anyone who
+// saw it act as that user.
+func isLegacyUserID(token string) bool {
+	if len(token) != 36 {
+		return false
+	}
+	_, err := uuid.Parse(token)
+	return err == nil
 }
 
 // UserIDFromToken derives the public user ID for token: the first 16 bytes
@@ -62,7 +76,8 @@ func GetUserToken(r *http.Request) string {
 		return ""
 	}
 	decoded, err := base64.StdEncoding.DecodeString(cookie.Value)
-	if err != nil {
+	if err != nil || isLegacyUserID(string(decoded)) {
+		// A pre-token session cookie: start over with a fresh token.
 		return ""
 	}
 	return string(decoded)

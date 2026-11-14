@@ -29,7 +29,7 @@ func UserMiddleware(userUC userUseCase.UserUseCase, logger *logger.Logger) gin.H
 		case !security.ValidUserToken(token):
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"error":   "invalid_user_token",
-				"message": fmt.Sprintf("The user token must be %d to %d characters long", security.MinUserTokenLength, security.MaxUserTokenLength),
+				"message": fmt.Sprintf("The user token must be a random secret of %d to %d characters (not a user ID)", security.MinUserTokenLength, security.MaxUserTokenLength),
 			})
 			c.Abort()
 			return

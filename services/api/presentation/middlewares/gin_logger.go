@@ -1,6 +1,7 @@
 package middlewares
 
 import (
+	"net/url"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -12,7 +13,7 @@ func GinLogger(logger *logger.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
-		query := c.Request.URL.RawQuery
+		query := redactQuery(c.Request.URL.RawQuery)
 
 		c.Next()
 
@@ -42,4 +43,29 @@ func GinLogger(logger *logger.Logger) gin.HandlerFunc {
 			)
 		}
 	}
+}
+
+// secretQueryParams are query parameters that carry room secrets.
+var secretQueryParams = []string{"join_code", "secure_code", "secure_token"}
+
+// redactQuery hides the values of secretQueryParams in a raw query string.
+func redactQuery(raw string) string {
+	if raw == "" {
+		return raw
+	}
+	values, err := url.ParseQuery(raw)
+	if err != nil {
+		return "[unparseable query]"
+	}
+	redacted := false
+	for _, k := range secretQueryParams {
+		if _, ok := values[k]; ok {
+			values.Set(k, "REDACTED")
+			redacted = true
+		}
+	}
+	if !redacted {
+		return raw
+	}
+	return values.Encode()
 }
