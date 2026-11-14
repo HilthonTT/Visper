@@ -151,16 +151,21 @@ func (m model) switchPage(p page) model {
 
 // gotoPage opens one of the top-level (tabbed) pages.
 func (m model) gotoPage(p page) (model, tea.Cmd) {
+	var cmd tea.Cmd
 	switch p {
 	case newRoomPage:
-		return m.gotoNewRoom()
+		m, cmd = m.gotoNewRoom()
 	case joinRoomPage:
-		return m.gotoJoinRoom()
+		m, cmd = m.gotoJoinRoom()
 	case faqPage:
-		return m.gotoFaq()
+		m, cmd = m.gotoFaq()
 	case settingsPage:
-		return m.gotoSettings()
+		m, cmd = m.gotoSettings()
 	default:
 		return m, nil
 	}
+	// Reconnect a dropped notification listener on any page, not only New
+	// room, so invites keep arriving (a no-op while it is connected).
+	m, notifyCmd := m.startNotificationListener()
+	return m, tea.Batch(cmd, notifyCmd)
 }

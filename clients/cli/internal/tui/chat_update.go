@@ -19,6 +19,24 @@ func (m model) chatUpdate(msg tea.Msg) (model, tea.Cmd) {
 		if mm, cmd, handled := m.chatKeyUpdate(msg); handled {
 			return mm, cmd
 		}
+	case tea.PasteMsg:
+		// A paste is not a key press: route it to the input that has focus,
+		// not to the (blurred) draft.
+		if m.state.dialog.open && m.state.dialog.kind == dialogEditMessage {
+			var cmd tea.Cmd
+			m.state.chat.editInput, cmd = m.state.chat.editInput.Update(msg)
+			return m, cmd
+		}
+		if m.state.chat.social.search.active && !m.state.dialog.open {
+			s := &m.state.chat.social.search
+			before := s.input.Value()
+			var cmd tea.Cmd
+			s.input, cmd = s.input.Update(msg)
+			if s.input.Value() != before {
+				m = m.findMessages()
+			}
+			return m, cmd
+		}
 	}
 
 	if m.state.dialog.open {

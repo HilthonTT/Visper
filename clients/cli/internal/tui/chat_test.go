@@ -262,3 +262,28 @@ func TestEnterChatWithoutKeyStaysOut(t *testing.T) {
 		t.Fatal("entered a room without its key")
 	}
 }
+
+// A paste arrives as tea.PasteMsg, not a key press, and used to be dropped
+// while a dialog or the message search had focus.
+func TestPasteGoesToTheFocusedInput(t *testing.T) {
+	m := newChatModel(t)
+	m.page = chatPage
+	m = m.openEditMessageDialog("old")
+	m.state.chat.editInput.SetValue("")
+	tm, _ := m.Update(tea.PasteMsg{Content: "pasted"})
+	if got := tm.(model).state.chat.editInput.Value(); got != "pasted" {
+		t.Fatalf("edit dialog input = %q, want %q", got, "pasted")
+	}
+
+	m = newChatModel(t)
+	m.page = chatPage
+	m, _ = m.openMessageSearch()
+	tm, _ = m.Update(tea.PasteMsg{Content: "needle"})
+	mm := tm.(model)
+	if got := mm.state.chat.social.search.input.Value(); got != "needle" {
+		t.Fatalf("search input = %q, want %q", got, "needle")
+	}
+	if mm.state.chat.messageInput.Value() != "" {
+		t.Fatal("paste during search went into the draft")
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/muesli/termenv"
+	_ "golang.org/x/image/bmp"  // Register BMP decoder (.bmp is offered as an image)
 	_ "golang.org/x/image/webp" // Register WebP decoder
 )
 

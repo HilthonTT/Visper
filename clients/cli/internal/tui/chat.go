@@ -131,6 +131,12 @@ func (m model) enterChat(room *apisdk.RoomResponse, roomKey string) (model, tea.
 
 	m = m.switchPage(chatPage)
 	m.state.menu = menuState{}
+	// An invite that arrived while the room was being created or joined can
+	// no longer be accepted: its pending invite was just dropped with the
+	// notification listener.
+	if m.state.dialog.open && m.state.dialog.kind == dialogRoomInvite {
+		m = m.closeDialog()
+	}
 
 	// Always reset the key so a previous room's key is never reused.
 	m.client.Message.SetEncryptionKey(roomKey)
