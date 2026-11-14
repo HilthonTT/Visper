@@ -6,11 +6,11 @@ import logging
 import uuid
 from typing import Annotated, Any
 
-from fastapi import Depends, Request
+from fastapi import Depends, Request, status
 from redis.asyncio import Redis
 
 from ..core.config import settings
-from ..core.exceptions.http_exceptions import RateLimitException, UnauthorizedException
+from ..core.exceptions.http_exceptions import CustomException, RateLimitException, UnauthorizedException
 from ..core.utils.cache import async_get_redis
 from ..core.utils.rate_limit import async_get_rate_limit_redis, check_sliding_window
 from ..schemas.rate_limit import sanitize_path
@@ -43,24 +43,30 @@ async def get_user_from_redis(redis: Redis, user_id: str) -> dict[str, Any] | No
     return json.loads(user_data)
 
 
-def user_id_from_token(token: str) -> str:
+def user_id_from_token(token: str | bytes) -> str:
     """Derive the public user ID from a private user token, exactly like the Go API:
     the first 16 bytes of SHA-256("visper-user-id:" + token) as a version 8 UUID."""
-    b = bytearray(hashlib.sha256(f"visper-user-id:{token}".encode()).digest()[:16])
+    if isinstance(token, str):
+        token = token.encode()
+    b = bytearray(hashlib.sha256(b"visper-user-id:" + token).digest()[:16])
     b[6] = (b[6] & 0x0F) | 0x80
     b[8] = (b[8] & 0x3F) | 0x80
     return str(uuid.UUID(bytes=bytes(b)))
 
 
-def get_user_token_from_request(request: Request) -> str | None:
-    """The user token from the headers, or else the Go API's session cookie (base64)."""
+def get_user_token_from_request(request: Request) -> bytes | None:
+    """The raw user token bytes from the headers, or else the Go API's session cookie (base64).
+
+    Bytes, like the Go API, so non-ASCII tokens hash and length-check the same way:
+    Starlette decodes header values as latin-1, which re-encoding undoes exactly.
+    """
     for header in (USER_TOKEN_HEADER_KEY, LEGACY_USER_TOKEN_HEADER_KEY):
         if token := request.headers.get(header):
-            return token
+            return token.encode("latin-1")
     if cookie := request.cookies.get(USER_TOKEN_COOKIE):
         try:
-            return base64.b64decode(cookie, validate=True).decode()
-        except (binascii.Error, UnicodeDecodeError):
+            return base64.b64decode(cookie, validate=True)
+        except binascii.Error:
             return None
     return None
 
@@ -113,8 +119,9 @@ async def get_current_user(
     try:
         user = await get_user_from_redis(redis, user_id)
     except Exception as e:
+        # The session store being down is our fault, not bad credentials.
         logger.error(f"Failed to get user from Redis: {e}, user_id: {user_id}")
-        raise UnauthorizedException("Failed to retrieve user session") from e
+        raise CustomException(status.HTTP_503_SERVICE_UNAVAILABLE, "Session store unavailable") from e
 
     if not user or "id" not in user:
         logger.warning(f"User not found in Redis: {user_id}")
