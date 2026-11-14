@@ -56,7 +56,7 @@ func TestETagMiddleware(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	r := gin.New()
-	r.Use(ETagMiddleware(NewInMemoryETagStore()))
+	r.Use(ETagMiddleware())
 	r.GET("/json", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"hello": "world"}) })
 
 	w := httptest.NewRecorder()

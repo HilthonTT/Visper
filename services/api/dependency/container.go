@@ -24,7 +24,6 @@ import (
 	"github.com/hilthontt/visper/services/api/presentation/controllers/message"
 	"github.com/hilthontt/visper/services/api/presentation/controllers/room"
 	wsCtrl "github.com/hilthontt/visper/services/api/presentation/controllers/websocket"
-	"github.com/hilthontt/visper/services/api/presentation/middlewares"
 	"go.opentelemetry.io/otel/sdk/trace"
 )
 
@@ -56,8 +55,7 @@ type Container struct {
 	FilesController            file.FilesController
 	UserNotificationController wsCtrl.UserNotificationController
 
-	ETagStore middlewares.ETagStore
-	Storage   *storage.LocalStorage
+	Storage *storage.LocalStorage
 
 	FileCleanupJob   *jobs.FileCleanupJob
 	RoomExpiryJob    *jobs.RoomExpiryJob

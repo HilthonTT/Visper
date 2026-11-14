@@ -22,8 +22,6 @@ import (
 )
 
 func (c *Container) initMiddleware() {
-	c.ETagStore = middlewares.NewInMemoryETagStore()
-
 	c.Logger.Info("Middleware components initialized successfully")
 }
 
@@ -88,7 +86,7 @@ func (c *Container) registerAPIRoutes(router *gin.Engine) {
 		// for every unseen user ID: a throttled request must not write to Redis.
 		v1.Use(middlewares.RateLimiterMiddleware(cache.GetRedis(), c.Logger, middlewares.ModerateRateLimiterConfig()))
 		v1.Use(middlewares.UserMiddleware(c.UserUC, c.Logger))
-		v1.Use(middlewares.ETagMiddleware(c.ETagStore))
+		v1.Use(middlewares.ETagMiddleware())
 
 		v1.Use(func(c *gin.Context) {
 			if hub := sentrygin.GetHubFromContext(c); hub != nil {
