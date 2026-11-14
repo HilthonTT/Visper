@@ -121,9 +121,13 @@ func (lb *LoadBalancer) random() *Backend {
 
 // weighted picks an alive backend with probability proportional to its weight.
 func (lb *LoadBalancer) weighted() *Backend {
+	// One snapshot of who is alive: health checks change it concurrently, and
+	// a second pass seeing a different set could pick no backend at all.
+	var alive []*Backend
 	total := 0
 	for _, b := range lb.backends {
 		if b.IsAlive() {
+			alive = append(alive, b)
 			total += b.weight
 		}
 	}
@@ -131,10 +135,7 @@ func (lb *LoadBalancer) weighted() *Backend {
 		return nil
 	}
 	target := rand.IntN(total)
-	for _, b := range lb.backends {
-		if !b.IsAlive() {
-			continue
-		}
+	for _, b := range alive {
 		if target -= b.weight; target < 0 {
 			return b
 		}

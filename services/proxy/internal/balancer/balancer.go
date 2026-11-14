@@ -86,6 +86,8 @@ func (lb *LoadBalancer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if backend == nil {
 		lb.metrics.RequestCount.WithLabelValues("none", "503", r.Method).Inc()
 		w.Header().Set("Retry-After", "5")
+		// Nothing was forwarded, so even a POST is safe for the client to resend.
+		w.Header().Set("X-Should-Retry", "true")
 		http.Error(w, "No available backends", http.StatusServiceUnavailable)
 		return
 	}

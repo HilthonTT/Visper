@@ -14,6 +14,10 @@ import (
 // client abandoned before the backend answered.
 const statusClientClosedRequest = 499
 
+// upstreamResponseTimeout is how long a backend may take to send response
+// headers (for a WebSocket, the 101) after receiving the whole request.
+const upstreamResponseTimeout = 60 * time.Second
+
 // newProxyTransport creates the transport shared by all backends.
 func newProxyTransport() *http.Transport {
 	return &http.Transport{
@@ -27,6 +31,9 @@ func newProxyTransport() *http.Transport {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
+		// A backend that accepts requests but never answers counts as failing
+		// (504 and a recorded failure) instead of holding connections forever.
+		ResponseHeaderTimeout: upstreamResponseTimeout,
 		// HTTP/1.1 only so Upgrade (WebSocket) requests can be proxied.
 		ForceAttemptHTTP2: false,
 	}
