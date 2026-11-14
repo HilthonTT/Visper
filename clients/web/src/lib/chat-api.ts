@@ -118,6 +118,8 @@ export const chatApi = {
 			...(username ? { username } : {}),
 		}),
 
+	get: (roomId: string) => request<ApiRoom>("GET", room(roomId)),
+
 	leave: (roomId: string) => request<unknown>("POST", `${room(roomId)}/leave`),
 
 	listMessages: (roomId: string, limit = 100) =>

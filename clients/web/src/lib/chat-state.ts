@@ -77,6 +77,14 @@ export function initialChatState(room: ApiRoom): ChatState {
 
 export type ChatAction =
 	| { type: "messages"; messages: ChatMessage[] }
+	/**
+	 * A REST history snapshot (the latest messages). It may predate socket
+	 * events already applied, so it never overwrites a message we have; any
+	 * message we hold in its time window that it lacks was deleted meanwhile.
+	 */
+	| { type: "history"; messages: ChatMessage[] }
+	/** The room's current members, e.g. re-read after a reconnect. */
+	| { type: "members"; members: Member[] }
 	| {
 			type: "updated";
 			id: string;
@@ -127,11 +135,62 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 			const messages = [...byId.values()].sort(
 				(a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id),
 			);
-			const members = addMembers(
+			// Authors may have left since; only refresh names of current members.
+			const members = renameMembers(
 				state.members,
 				action.messages.map((m) => ({ id: m.userId, username: m.username })),
 			);
 			return { ...state, messages, members, typing };
+		}
+		case "history": {
+			if (action.messages.length === 0) {
+				return state;
+			}
+			const fetched = new Set(action.messages.map((m) => m.id));
+			let oldest = Number.POSITIVE_INFINITY;
+			let newest = Number.NEGATIVE_INFINITY;
+			for (const m of action.messages) {
+				oldest = Math.min(oldest, m.createdAt);
+				newest = Math.max(newest, m.createdAt);
+			}
+			const gone = state.messages
+				.filter(
+					(m) =>
+						!fetched.has(m.id) &&
+						m.createdAt >= oldest &&
+						m.createdAt <= newest,
+				)
+				.map((m) => m.id);
+			const known = new Set(state.messages.map((m) => m.id));
+			const added = action.messages.filter((m) => !known.has(m.id));
+			const next = chatReducer(state, { type: "messages", messages: added });
+			if (gone.length === 0) {
+				return next;
+			}
+			const goneSet = new Set(gone);
+			return {
+				...next,
+				messages: next.messages.filter((m) => !goneSet.has(m.id)),
+				deleted: [
+					...next.deleted,
+					...gone.filter((id) => !next.deleted.includes(id)),
+				],
+			};
+		}
+		case "members": {
+			const ids = new Set(action.members.map((m) => m.id));
+			if (!ids.has(state.me)) {
+				// We are no longer in the room; the socket closes us shortly.
+				return state;
+			}
+			return {
+				...state,
+				members: action.members.map((m) => ({
+					id: m.id,
+					username: m.username,
+				})),
+				online: state.online.filter((id) => ids.has(id)),
+			};
 		}
 		case "updated":
 			return mapMessage(state, action.id, (m) => {
@@ -250,6 +309,18 @@ function addMembers(members: Member[], add: Member[]): Member[] {
 		if (i < 0) {
 			out = [...out, m];
 		} else if (m.username && out[i].username !== m.username) {
+			out = out.map((x, j) => (j === i ? { ...x, username: m.username } : x));
+		}
+	}
+	return out;
+}
+
+/** Updates the usernames of members already listed; adds no one. */
+function renameMembers(members: Member[], update: Member[]): Member[] {
+	let out = members;
+	for (const m of update) {
+		const i = out.findIndex((x) => x.id === m.id);
+		if (i >= 0 && m.username && out[i].username !== m.username) {
 			out = out.map((x, j) => (j === i ? { ...x, username: m.username } : x));
 		}
 	}

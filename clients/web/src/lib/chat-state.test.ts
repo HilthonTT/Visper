@@ -165,7 +165,60 @@ describe("chatReducer", () => {
 			},
 		);
 		expect(s.messages.map((m) => m.id)).toEqual(["a", "b", "c"]);
-		expect(s.members.some((m) => m.id === "bo")).toBe(true);
+		// Authors who are not members (e.g. who left) are not added back.
+		expect(s.members.some((m) => m.id === "bo")).toBe(false);
+	});
+
+	it("keeps newer socket state over a history snapshot", () => {
+		const s = apply(
+			initialChatState(room),
+			{ type: "messages", messages: [msg("a", "ann", "hi", 1)] },
+			{ type: "updated", id: "a", content: "edited", failed: false },
+			{ type: "history", messages: [msg("a", "ann", "hi", 1)] },
+		);
+		expect(s.messages[0].content).toBe("edited");
+	});
+
+	it("drops messages a history snapshot no longer has in its window", () => {
+		const s = apply(
+			initialChatState(room),
+			{
+				type: "messages",
+				messages: [
+					msg("a", "ann", "1", 1),
+					msg("b", "ann", "2", 2),
+					msg("c", "ann", "3", 3),
+					msg("d", "ann", "4", 4),
+				],
+			},
+			{
+				type: "history",
+				messages: [
+					msg("b", "ann", "2", 2),
+					msg("d", "ann", "4", 4),
+					msg("e", "ann", "5", 5),
+				],
+			},
+		);
+		// "a" is older than the snapshot's window, "c" was deleted meanwhile.
+		expect(s.messages.map((m) => m.id)).toEqual(["a", "b", "d", "e"]);
+		expect(s.deleted).toContain("c");
+	});
+
+	it("replaces the member list with the room's current members", () => {
+		const s = apply(
+			initialChatState(room),
+			{ type: "presence", online: ["ann", "me"] },
+			{
+				type: "members",
+				members: [
+					{ id: "me", username: "Me" },
+					{ id: "cy", username: "Cy" },
+				],
+			},
+		);
+		expect(s.members.map((m) => m.id)).toEqual(["me", "cy"]);
+		expect(s.online).toEqual(["me"]);
 	});
 
 	it("updates, reacts to and deletes messages", () => {

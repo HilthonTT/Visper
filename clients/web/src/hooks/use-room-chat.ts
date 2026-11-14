@@ -61,7 +61,33 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 		}
 		let stopped = false;
 		let attempt = 0;
+		let opened = false;
 		let timer: number | undefined;
+
+		// After a reconnect, catch up on what the socket missed: its replay
+		// covers only the latest messages, and neither deletions nor member
+		// changes.
+		const resync = () => {
+			chatApi
+				.get(roomId)
+				.then((res) => {
+					if (!stopped) {
+						dispatch({ type: "members", members: res.members ?? [] });
+					}
+				})
+				.catch(() => {});
+			chatApi
+				.listMessages(roomId)
+				.then((res) => {
+					if (!stopped) {
+						dispatch({
+							type: "history",
+							messages: (res.messages ?? []).map((m) => fromApiMessage(m, key)),
+						});
+					}
+				})
+				.catch(() => {});
+		};
 
 		const connect = () => {
 			const ws = new WebSocket(roomSocketUrl(roomId));
@@ -70,6 +96,10 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 				attempt = 0;
 				lastReadSent.current = ""; // re-announce after a reconnect
 				setConnection("open");
+				if (opened) {
+					resync();
+				}
+				opened = true;
 			};
 			ws.onmessage = (event) => {
 				let raw: unknown;
@@ -148,7 +178,7 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 			.then((res) => {
 				if (!controller.signal.aborted) {
 					dispatch({
-						type: "messages",
+						type: "history",
 						messages: (res.messages ?? []).map((m) => fromApiMessage(m, key)),
 					});
 				}
