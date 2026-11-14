@@ -76,7 +76,12 @@ export const MessageItem = memo(function MessageItem({
 			)}
 
 			{image ? (
-				<ImageMessage content={message.content} roomKey={roomKey} />
+				<ImageMessage
+					// Remount when an edit changes the image, so no stale state is kept.
+					key={message.content}
+					content={message.content}
+					roomKey={roomKey}
+				/>
 			) : (
 				<Content $failed={message.failed}>{message.content}</Content>
 			)}

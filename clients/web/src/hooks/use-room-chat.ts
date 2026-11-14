@@ -302,9 +302,19 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 		[roomId, key, me, send],
 	);
 
+	/** Leaves the room; throws (and stays in it) if the server refuses. */
 	const leave = useCallback(async () => {
+		try {
+			await chatApi.leave(roomId);
+		} catch (e) {
+			// Already gone for us: nothing left to leave.
+			if (
+				!(e instanceof ChatApiError && ROOM_GONE_STATUSES.includes(e.status))
+			) {
+				throw e;
+			}
+		}
 		dispatch({ type: "closed", reason: "You left the room." });
-		await chatApi.leave(roomId);
 	}, [roomId]);
 
 	return {

@@ -207,7 +207,12 @@ export const ChatView = ({
 		if (!window.confirm("Leave this room?")) {
 			return;
 		}
-		await chat.leave().catch(() => {});
+		try {
+			await chat.leave();
+		} catch (e) {
+			fail(e);
+			return;
+		}
 		onLeft();
 	};
 
