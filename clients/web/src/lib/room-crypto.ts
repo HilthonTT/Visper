@@ -1,5 +1,5 @@
 import nacl from "tweetnacl";
-import { parseRoomKey, RoomKeyError } from "./room-key";
+import { base64UrlEncode, parseRoomKey, RoomKeyError } from "./room-key";
 
 /**
  * Message and file encryption with the room key: NaCl secretbox
@@ -276,6 +276,44 @@ export function parseInviteCode(code: string): {
 		}
 		throw e;
 	}
+}
+
+/**
+ * A new random room key. Made by the client that creates the room and never
+ * sent to the API (like the Go SDK's NewRoomKey).
+ */
+export function newRoomKey(): RoomKey {
+	return new Uint8Array(nacl.randomBytes(nacl.secretbox.keyLength));
+}
+
+/** The invite code to share: "<join code>.<base64url key>". */
+export function formatInviteCode(joinCode: string, key: RoomKey): string {
+	return `${joinCode}.${base64UrlEncode(key)}`;
+}
+
+/**
+ * The invite link to share: the room's join URL from the API with the key
+ * in its fragment (`#key=…`), which browsers never send to a server. The
+ * join code is replaced with `joinCode`, which may have been regenerated
+ * since the URL was issued. Returns "" without a join URL.
+ */
+export function formatInviteLink(
+	joinUrl: string,
+	joinCode: string,
+	key: RoomKey,
+): string {
+	if (!joinUrl) {
+		return "";
+	}
+	let url: URL;
+	try {
+		url = new URL(joinUrl);
+	} catch {
+		return "";
+	}
+	url.searchParams.set("joinCode", joinCode);
+	url.hash = new URLSearchParams({ key: base64UrlEncode(key) }).toString();
+	return url.toString();
 }
 
 /** Decodes a base64url room key (as found in an invite link's fragment). */

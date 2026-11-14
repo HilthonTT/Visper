@@ -18,6 +18,7 @@ import {
 	typingNames,
 } from "@/lib/chat-state";
 import { isEncryptedImageUrl, isPlainImageUrl } from "@/lib/room-crypto";
+import { InvitePanel } from "./invite-panel";
 import type { ChatSession } from "./join-form";
 import { MessageItem } from "./message-item";
 
@@ -46,6 +47,8 @@ export const ChatView = ({
 	const [query, setQuery] = useState("");
 	const [searching, setSearching] = useState(false);
 	const [showMembers, setShowMembers] = useState(false);
+	// A room you just created is empty: start with what to share.
+	const [showInvite, setShowInvite] = useState(Boolean(session.created));
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [now, setNow] = useState(() => Date.now());
@@ -258,6 +261,13 @@ export const ChatView = ({
 				</BarButton>
 				<BarButton
 					type="button"
+					aria-pressed={showInvite}
+					onClick={() => setShowInvite((s) => !s)}
+				>
+					invite
+				</BarButton>
+				<BarButton
+					type="button"
 					className="members-toggle"
 					aria-pressed={showMembers}
 					onClick={() => setShowMembers((s) => !s)}
@@ -268,6 +278,14 @@ export const ChatView = ({
 					leave
 				</BarButton>
 			</Bar>
+			{showInvite && (
+				<InvitePanel
+					joinCode={state.joinCode}
+					joinUrl={session.room.qr_code_url}
+					roomKey={session.key}
+					onClose={() => setShowInvite(false)}
+				/>
+			)}
 
 			<Body>
 				<Messages

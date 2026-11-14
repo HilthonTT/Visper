@@ -8,6 +8,8 @@ import {
 	encryptFile,
 	encryptText,
 	fitsMessage,
+	formatInviteCode,
+	formatInviteLink,
 	InviteCodeError,
 	imageMimeType,
 	imageName,
@@ -15,6 +17,7 @@ import {
 	isEncryptedImageUrl,
 	isPlainImageUrl,
 	MAX_MESSAGE_BYTES,
+	newRoomKey,
 	parseInviteCode,
 	type RoomKey,
 	readMessage,
@@ -205,5 +208,40 @@ describe("message size limit", () => {
 		expect(fitsMessage(content, ME)).toBe(true);
 		expect(isEncryptedImageUrl(content)).toBe(true);
 		expect(imageName(content).endsWith(".png")).toBe(true);
+	});
+});
+
+describe("new rooms and invites", () => {
+	it("makes distinct 32-byte room keys", () => {
+		const a = newRoomKey();
+		const b = newRoomKey();
+		expect(a).toHaveLength(32);
+		expect(a).not.toEqual(b);
+	});
+
+	it("formats an invite code that parseInviteCode reads back", () => {
+		const key = newRoomKey();
+		const code = formatInviteCode("ABC123", key);
+		expect(code).toMatch(/^ABC123\.[A-Za-z0-9_-]{43}$/);
+		expect(parseInviteCode(code)).toEqual({ joinCode: "ABC123", key });
+	});
+
+	it("puts the key in the invite link's fragment", () => {
+		const key = newRoomKey();
+		const link = formatInviteLink(
+			"https://visper.example/?joinCode=OLD111&secureCode=s3cret",
+			"NEW222",
+			key,
+		);
+		const url = new URL(link);
+		expect(url.searchParams.get("joinCode")).toBe("NEW222");
+		expect(url.searchParams.get("secureCode")).toBe("s3cret");
+		const fromHash = new URLSearchParams(url.hash.slice(1)).get("key") ?? "";
+		expect(parseInviteCode(`NEW222.${fromHash}`).key).toEqual(key);
+	});
+
+	it("gives no link without a join URL", () => {
+		expect(formatInviteLink("", "ABC123", newRoomKey())).toBe("");
+		expect(formatInviteLink("not a url", "ABC123", newRoomKey())).toBe("");
 	});
 });

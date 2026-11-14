@@ -1,6 +1,6 @@
 # Visper Web
 
-Terminal-style web client for [Visper](https://github.com/HilthonTT/Visper), the anonymous, encrypted real-time chat app. The **Chat** page joins a room right in the browser (see [Chat in the browser](#chat-in-the-browser)). On the Terminal and Join room pages you type shell-like commands (`help`, `setdevicecode`, `setjoincode`, `setroomkey`, `joinroom`, `themes`, ...) to send a room invite to your own Visper CLI through the Go API. The room key is sealed to your CLI's device key (X25519 + AES-GCM, via WebCrypto) before it is sent, so the API relays it without being able to read it.
+Terminal-style web client for [Visper](https://github.com/HilthonTT/Visper), the anonymous, encrypted real-time chat app. The **Chat** page creates or joins a room right in the browser (see [Chat in the browser](#chat-in-the-browser)). On the Terminal and Join room pages you type shell-like commands (`help`, `setdevicecode`, `setjoincode`, `setroomkey`, `joinroom`, `themes`, ...) to send a room invite to your own Visper CLI through the Go API. The room key is sealed to your CLI's device key (X25519 + AES-GCM, via WebCrypto) before it is sent, so the API relays it without being able to read it.
 
 Built with React 19, TanStack Start/Router, Vite and styled-components. Every colour comes from the active theme (`src/lib/themes.ts`).
 
@@ -35,7 +35,7 @@ Screenshots are taken at 2× with Playwright against `pnpm dev`. Retake them aft
 | Page | Key | What it does |
 | --- | --- | --- |
 | Terminal | `t` / `alt+1` | Shell-style commands (`help` lists them). Scrollback survives tab switches. |
-| Chat | `c` / `alt+2` | Join a room and chat in the browser. Opens first when the URL carries `?joinCode=`. Stays connected while other pages are shown. |
+| Chat | `c` / `alt+2` | Create or join a room and chat in the browser. Opens first when the URL carries `?joinCode=`. Stays connected while other pages are shown. |
 | Join room | `j` / `alt+3` | Send a room invite to your CLI instead: form version of `setdevicecode` + `setjoincode` + `setsecurecode` + `setroomkey` + `joinroom`. |
 | FAQ | `f` / `alt+4` | Same questions as the CLI's FAQ page. |
 | Settings | `s` / `alt+5` | Pick the companion and the colour theme. Both are saved in the browser. |
@@ -58,7 +58,7 @@ Room credentials can be prefilled from an invite link: `/?joinCode=...&secureCod
 
 ## Chat in the browser
 
-Join with an invite link (`/?joinCode=…&secureCode=…#key=…`, from a CLI's `ctrl+p`) or by pasting an invite code (`ABC123.<key>`). Everything is end-to-end encrypted in the page with the room key (NaCl secretbox via [tweetnacl](https://github.com/dchest/tweetnacl-js), the same format as the Go SDK): messages, reactions and images. The key is kept in memory only, so reloading the page means joining again.
+Join with an invite link (`/?joinCode=…&secureCode=…#key=…`, from a CLI's `ctrl+p`) or by pasting an invite code (`ABC123.<key>`). Or start a new room (it lives 1 hour, 24 hours or 7 days): the room key is generated in the page, and the **invite** button in the room bar shows the invite code and link to share, both carrying the key. Everything is end-to-end encrypted in the page with the room key (NaCl secretbox via [tweetnacl](https://github.com/dchest/tweetnacl-js), the same format as the Go SDK): messages, reactions and images. The key is kept in memory only, so reloading the page means joining again.
 
 In a room:
 

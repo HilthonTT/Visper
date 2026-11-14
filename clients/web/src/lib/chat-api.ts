@@ -101,6 +101,10 @@ const message = (roomId: string, id: string) =>
 	`${room(roomId)}/messages/${encodeURIComponent(id)}`;
 
 export const chatApi = {
+	/** Creates a room owned by this browser's user, which joins it. */
+	create: (expiryHours: number) =>
+		request<ApiRoom>("POST", "rooms", { expiry_hours: expiryHours }),
+
 	joinByCode: (joinCode: string, username?: string) =>
 		request<ApiRoom>("POST", "rooms/join-code", {
 			join_code: joinCode,
