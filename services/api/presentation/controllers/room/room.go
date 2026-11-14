@@ -290,14 +290,16 @@ func (c *roomController) KickMember(ctx *gin.Context) {
 		return
 	}
 
-	kicked, err := c.userUsecase.GetByID(ctx.Request.Context(), kickedID)
-	if err != nil {
-		httpx.Error(ctx, err)
-		return
-	}
+	// Kick first: it checks the caller owns the room, so non-owners can't
+	// probe which user IDs exist.
 	if err := c.usecase.KickMember(ctx.Request.Context(), roomID, kickedID, user.ID); err != nil {
 		httpx.Error(ctx, err)
 		return
+	}
+	kicked, err := c.userUsecase.GetByID(ctx.Request.Context(), kickedID)
+	if err != nil {
+		// The member is out either way; announce them by ID alone.
+		kicked = &model.User{ID: kickedID}
 	}
 
 	c.wsCore.Publish(websocket.NewErrorKicked(roomID, kicked.ID, kicked.Username, kickReason))

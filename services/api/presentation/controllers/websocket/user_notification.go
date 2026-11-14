@@ -89,7 +89,9 @@ func (c *userNotificationController) NotifySelfRoomInvite(ctx *gin.Context) {
 		return
 	}
 
-	user, err := c.userUseCase.GetOrCreateUser(ctx.Request.Context(), req.UserID)
+	// Only invite devices that exist; creating a user here would let anyone
+	// holding a room's codes mint user records for arbitrary IDs.
+	user, err := c.userUseCase.GetByID(ctx.Request.Context(), req.UserID)
 	if err != nil {
 		httpx.Error(ctx, err)
 		return

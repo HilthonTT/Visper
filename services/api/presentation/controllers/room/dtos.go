@@ -20,7 +20,7 @@ type JoinByCodeRequest struct {
 type JoinByCodeWithTokenRequest struct {
 	JoinCode    string `json:"join_code" binding:"required"`
 	SecureToken string `json:"secure_token" binding:"required"`
-	Username    string `json:"username"`
+	Username    string `json:"username" binding:"omitempty,max=50"`
 }
 
 type RoomResponse struct {

@@ -1,7 +1,7 @@
 package websocket
 
 type NotifySelfRoomInviteRequest struct {
-	UserID string `json:"user_id" binding:"required"`
+	UserID string `json:"user_id" binding:"required,uuid"`
 	// SealedKey is the room key encrypted to the invited device's public key
 	// (see the SDK's SealRoomKey). The server relays it but cannot read it.
 	SealedKey string `json:"sealed_key" binding:"required,max=256"`
