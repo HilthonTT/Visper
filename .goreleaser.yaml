@@ -1,0 +1,77 @@
+# GoReleaser config for the visper CLI (clients/cli). Releases are built by
+# .github/workflows/release.yml when a v* tag is pushed; nothing here is built
+# on a developer machine. Try it locally with `make release-snapshot`.
+version: 2
+
+project_name: visper
+
+builds:
+  - id: visper
+    dir: clients/cli
+    main: ./cmd/visper
+    binary: visper
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: visper
+    ids: [visper]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  use: git
+  sort: asc
+  groups:
+    - title: Breaking changes
+      regexp: '^.*?(\(.+\))?!:.+$'
+      order: 0
+    - title: Features
+      regexp: '^.*?feat(\(.+\))?:.+$'
+      order: 1
+    - title: Fixes
+      regexp: '^.*?fix(\(.+\))?:.+$'
+      order: 2
+    - title: Other changes
+      order: 999
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore\(deps\):'
+      - '^Merge '
+
+release:
+  footer: |
+    ## Install
+
+    Download the archive for your system, check it against `checksums.txt`
+    (`sha256sum -c checksums.txt --ignore-missing`), extract it and put
+    `visper` (`visper.exe` on Windows) on your `PATH`. Point it at a Visper API
+    with `VISPER_BASE_URL` (default `http://localhost:5005`).
+
+    The binaries are built from this tag by GitHub Actions, with build
+    provenance you can check with
+    `gh attestation verify <archive> --repo HilthonTT/Visper`.
+    They are **not code-signed**: macOS Gatekeeper and Windows SmartScreen may
+    warn the first time you run them.

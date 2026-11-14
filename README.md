@@ -32,6 +32,26 @@ end-to-end encryption ([more demos](docs/demos/README.md#web-client),
 
 ![Joining a Visper room in the browser and chatting](docs/assets/demos/web-chat.gif)
 
+## Install the CLI
+
+Prebuilt `visper` binaries for Linux, macOS and Windows (amd64 and arm64) are
+on the [Releases](https://github.com/HilthonTT/Visper/releases) page, built
+from each version tag by GitHub Actions with
+[build provenance](https://docs.github.com/actions/security-for-github-actions/using-artifact-attestations).
+Check the archive against `checksums.txt`, extract it, put `visper` on your
+`PATH` and point it at a Visper API:
+
+```bash
+export VISPER_BASE_URL=https://visper.example.com   # default http://localhost:5005
+visper
+```
+
+The binaries are not code-signed, so macOS Gatekeeper and Windows SmartScreen
+may warn on first run. To build from source instead: `make build` (the binary
+lands in `./bin`). Maintainers cut a release by pushing a tag
+(`git tag -a v0.1.0 -m v0.1.0 && git push origin v0.1.0`); see
+[`.goreleaser.yaml`](.goreleaser.yaml).
+
 ## Quick start
 
 Requires Docker and Go 1.27+.

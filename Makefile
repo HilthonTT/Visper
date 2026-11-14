@@ -19,6 +19,10 @@ build: ## Build the api, proxy and visper CLI binaries into ./bin
 	cd services/proxy && go build -o ../../$(BIN_DIR)/visper-proxy$(EXE) ./cmd/proxy
 	cd clients/cli    && go build -o ../../$(BIN_DIR)/visper$(EXE)       ./cmd/visper
 
+.PHONY: release-snapshot
+release-snapshot: ## Build the CLI release archives into ./dist without publishing (needs goreleaser)
+	goreleaser release --snapshot --clean --skip=publish
+
 # ── Quality ─────────────────────────────────────────────────
 .PHONY: check
 check: go-check ai-check web-check ## Run every formatter check, linter and test suite

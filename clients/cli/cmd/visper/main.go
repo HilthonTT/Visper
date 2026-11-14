@@ -2,17 +2,30 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/hilthontt/visper/clients/cli/internal/tui"
 )
 
+// version is set at release time with -ldflags "-X main.version=…".
+var version = ""
+
 func main() {
+	showVersion := flag.Bool("version", false, "print the version and exit")
+	flag.Usage = usage
+	flag.Parse()
+	if *showVersion {
+		fmt.Println("visper", buildVersion())
+		return
+	}
+
 	logFile, err := openLogFile()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: logging disabled: %v\n", err)
@@ -36,6 +49,31 @@ func main() {
 		fmt.Fprintln(os.Stderr, "Error running program:", err)
 		os.Exit(1)
 	}
+}
+
+func usage() {
+	out := flag.CommandLine.Output()
+	fmt.Fprintf(out, `visper %s: anonymous, end-to-end encrypted chat rooms in your terminal.
+
+Usage: visper [-version]
+
+Environment:
+  VISPER_BASE_URL  URL of the Visper API or proxy (default http://localhost:5005)
+
+`, buildVersion())
+	flag.PrintDefaults()
+}
+
+// buildVersion is the release version, else the module version recorded by
+// "go install", else "dev".
+func buildVersion() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return "dev"
 }
 
 // openLogFile creates (truncating) visper.log in the user's cache directory,
