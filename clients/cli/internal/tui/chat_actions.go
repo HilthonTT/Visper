@@ -49,8 +49,22 @@ func (m model) roomRequest(action string, fn func(ctx context.Context, client *a
 	if m.state.chat.room == nil {
 		return nil
 	}
-	client, roomID := m.client, m.state.chat.room.ID
+	client, roomID, session := m.client, m.state.chat.room.ID, m.state.chat.session
 	return m.apiRequest(action, func(ctx context.Context, opts []option.RequestOption) error {
+		// The SDK encrypts with the key it holds when the request runs, and
+		// leaving the room (or entering another) changes that key. Tie the
+		// request to the room's session so it is never sent once the room is
+		// left: it would go out unencrypted, or sealed with the wrong key.
+		if session != nil {
+			if session.Err() != nil {
+				return nil
+			}
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithCancel(ctx)
+			defer cancel()
+			stop := context.AfterFunc(session, cancel)
+			defer stop()
+		}
 		return fn(ctx, client, roomID, opts)
 	})
 }
