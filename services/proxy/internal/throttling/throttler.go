@@ -82,6 +82,30 @@ func (t *Throttler) Allow(key string, weight int) (bool, time.Duration) {
 	return true, 0
 }
 
+// Refund takes back weight requests that Allow recorded for key, e.g. when a
+// later throttling level denied the request after all. It only undoes counts
+// still in the current span and not yet synced, so it never goes negative.
+func (t *Throttler) Refund(key string, weight int) {
+	if weight <= 0 {
+		weight = 1
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	w := t.windows[key]
+	if w == nil {
+		return
+	}
+	n := min(weight, w.spans[t.slot], t.pending[key])
+	if n <= 0 {
+		return
+	}
+	w.add(t.slot, -n)
+	if t.pending[key] -= n; t.pending[key] == 0 {
+		delete(t.pending, key)
+	}
+}
+
 // blockLocked blocks key for the cooldown and returns the block duration.
 // When the cooldown is shorter than a span the key would be blocked again
 // right away by its window anyway, so a zero cooldown still blocks for one

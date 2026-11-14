@@ -59,12 +59,19 @@ func (h *Hierarchy) Start(ctx context.Context) error {
 	return err
 }
 
-// Allow checks the levels in order and stops at the first that denies r.
+// Allow checks the levels in order and stops at the first that denies r. A
+// denied request consumes no quota: what earlier levels recorded is refunded.
 func (h *Hierarchy) Allow(r *http.Request) Decision {
-	for _, l := range h.levels {
-		if ok, retry := l.Throttler.Allow(l.Key(r), l.Weight); !ok {
+	keys := make([]string, 0, len(h.levels))
+	for i, l := range h.levels {
+		key := l.Key(r)
+		if ok, retry := l.Throttler.Allow(key, l.Weight); !ok {
+			for j := range i {
+				h.levels[j].Throttler.Refund(keys[j], h.levels[j].Weight)
+			}
 			return Decision{Level: l.Name, RetryAfter: retry}
 		}
+		keys = append(keys, key)
 	}
 	return Decision{Allowed: true}
 }

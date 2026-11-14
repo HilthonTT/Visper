@@ -219,3 +219,33 @@ func TestHierarchyAllow(t *testing.T) {
 		}
 	}
 }
+
+func TestHierarchyGlobalDenialRefundsIPQuota(t *testing.T) {
+	ipT, _ := newTestThrottler(Config{MaxRequests: 2, Interval: time.Minute, Spans: 1, Cooldown: time.Minute})
+	globalT, _ := newTestThrottler(Config{MaxRequests: 1, Interval: time.Minute, Spans: 1, Cooldown: time.Minute})
+	h := NewHierarchy(
+		&Level{Name: "ip", Key: func(r *http.Request) string { return r.RemoteAddr }, Throttler: ipT},
+		&Level{Name: "global", Key: func(*http.Request) string { return "global" }, Throttler: globalT},
+	)
+	req := func(remote string) Decision {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.RemoteAddr = remote
+		return h.Allow(r)
+	}
+
+	if d := req("1.1.1.1"); !d.Allowed {
+		t.Fatalf("first request denied: %+v", d)
+	}
+	// Global is now full: 2.2.2.2 retrying must not burn its own IP quota.
+	for i := range 3 {
+		if d := req("2.2.2.2"); d.Level != "global" {
+			t.Fatalf("retry %d: got %+v, want global denial", i, d)
+		}
+	}
+	if w := ipT.windows["2.2.2.2"]; w != nil && w.total != 0 {
+		t.Fatalf("2.2.2.2 IP window = %d, want 0", w.total)
+	}
+	if p := ipT.pending["2.2.2.2"]; p != 0 {
+		t.Fatalf("2.2.2.2 pending = %d, want 0", p)
+	}
+}
