@@ -2,6 +2,7 @@ package apisdk
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -142,8 +143,8 @@ func listen[T any](ctx context.Context, c *wsConn, handle func(T), onError func(
 	defer stop()
 
 	for {
-		var msg T
-		if err := c.conn.ReadJSON(&msg); err != nil {
+		_, data, err := c.conn.ReadMessage()
+		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -154,6 +155,14 @@ func listen[T any](ctx context.Context, c *wsConn, handle func(T), onError func(
 				onError(err)
 			}
 			return fmt.Errorf("websocket read error: %w", err)
+		}
+		// One frame we can't decode is no reason to drop the connection.
+		var msg T
+		if err := json.Unmarshal(data, &msg); err != nil {
+			if onError != nil {
+				onError(fmt.Errorf("websocket decode error: %w", err))
+			}
+			continue
 		}
 		handle(msg)
 	}
