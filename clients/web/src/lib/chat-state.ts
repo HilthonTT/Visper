@@ -120,7 +120,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 					continue;
 				}
 				const prev = byId.get(m.id);
-				// History replays do not carry the edit marker; keep it.
+				// A replay carries the marker only when the latest version is an
+				// edit; keep one already shown.
 				byId.set(m.id, prev ? { ...m, edited: m.edited || prev.edited } : m);
 				// A message from someone ends their typing indicator.
 				if (typing[m.userId]) {
@@ -363,7 +364,7 @@ function decodeReactions(
 export function fromApiMessage(m: ApiMessage, rc: RoomCrypto): ChatMessage {
 	const createdAt = Date.parse(m.created_at) || 0;
 	const updatedAt = (m.updated_at && Date.parse(m.updated_at)) || 0;
-	const { text, failed, fileHash } = rc.readMessage(
+	const { text, failed, fileHash, edited } = rc.readMessage(
 		m.content,
 		m.encrypted,
 		m.user_id,
@@ -378,6 +379,7 @@ export function fromApiMessage(m: ApiMessage, rc: RoomCrypto): ChatMessage {
 		content: text,
 		failed,
 		fileHash: fileHash || undefined,
+		edited: edited || undefined,
 		createdAt,
 		replyToId: m.reply_to_id || undefined,
 		reactions: decodeReactions(m.reactions, rc, m.id),
@@ -410,7 +412,7 @@ export function parseRoomEvent(
 				return null;
 			}
 			const createdAt = Date.parse(str(d.timestamp)) || now;
-			const { text, failed, fileHash } = rc.readMessage(
+			const { text, failed, fileHash, edited } = rc.readMessage(
 				str(d.content),
 				d.encrypted === true,
 				userId,
@@ -429,6 +431,7 @@ export function parseRoomEvent(
 						content: text,
 						failed,
 						fileHash: fileHash || undefined,
+						edited: edited || undefined,
 						createdAt,
 						replyToId: str(d.replyToId) || undefined,
 						reactions: decodeReactions(d.reactions, rc, id),

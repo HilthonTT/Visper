@@ -282,7 +282,12 @@ export type OpenedMessage = {
 	edited: boolean;
 };
 
-export type ReadResult = { text: string; failed: boolean; fileHash: string };
+export type ReadResult = {
+	text: string;
+	failed: boolean;
+	fileHash: string;
+	edited: boolean;
+};
 
 function rekeyMessage(
 	roomId: string,
@@ -587,9 +592,14 @@ export class RoomCrypto {
 				throw new UnverifiedError("plaintext in an encrypted room");
 			}
 			const m = this.openMessage(value, from, messageId, created, updated);
-			return { text: m.text, failed: false, fileHash: m.fileHash };
+			return {
+				text: m.text,
+				failed: false,
+				fileHash: m.fileHash,
+				edited: m.edited,
+			};
 		} catch (e) {
-			return { text: failedText(e), failed: true, fileHash: "" };
+			return { text: failedText(e), failed: true, fileHash: "", edited: false };
 		}
 	}
 

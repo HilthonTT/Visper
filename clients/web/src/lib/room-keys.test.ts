@@ -169,6 +169,12 @@ describe("signed envelopes", () => {
 			text: "edited",
 			from: "alice",
 		});
+		// History replays an edited message as its latest edit: keep the marker.
+		expect(bob.readMessage(edit, true, "alice", "m1", now, now)).toMatchObject({
+			text: "edited",
+			failed: false,
+			edited: true,
+		});
 
 		const reaction = alice.sealReaction("m1", "👍");
 		expect(() => bob.openMessage(reaction, "alice", "m1", now)).toThrow(
@@ -197,6 +203,7 @@ describe("signed envelopes", () => {
 			text: "[Unverified message]",
 			failed: true,
 			fileHash: "",
+			edited: false,
 		});
 		// Her card under Alice's name is refused (the API files it under her ID).
 		expect(() => bob.addCard("mallory", forger.myCard())).toThrow(
