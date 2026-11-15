@@ -13,9 +13,22 @@ USER_MESSAGE_CLOSE = "</user_message>"
 _DELIMITER_RE = re.compile(r"</?\s*user_message\s*>", re.IGNORECASE)
 
 
+def strip_delimiters(text: str) -> str:
+    """Remove delimiter tags until none are left.
+
+    A single pass is not enough: removing the inner tag of ``</user_</user_message>message>``
+    joins the pieces around it into a new ``</user_message>``.
+    """
+    while True:
+        stripped = _DELIMITER_RE.sub("", text)
+        if stripped == text:
+            return text
+        text = stripped
+
+
 def wrap_user_message(message: str) -> str:
     """Delimit untrusted user content; strip any delimiter tags the user smuggled in."""
-    sanitized = _DELIMITER_RE.sub("", message)
+    sanitized = strip_delimiters(message)
     return f"{USER_MESSAGE_OPEN}\n{sanitized}\n{USER_MESSAGE_CLOSE}"
 
 
@@ -34,7 +47,7 @@ def clean_llm_output(output: str, original: str) -> str:
     text = output.strip()
     if not _PREAMBLE_RE.match(original.strip()):
         text = _PREAMBLE_RE.sub("", text, count=1).strip()
-    text = _DELIMITER_RE.sub("", text).strip()
+    text = strip_delimiters(text).strip()
 
     stripped_original = original.strip()
     for open_q, close_q in _QUOTE_PAIRS.items():
