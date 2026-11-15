@@ -66,6 +66,16 @@ func (c *webSocketController) HandleConnection(ctx *gin.Context) {
 		client.Close()
 		return
 	}
+	// Check membership again now that the client is registered: a kick or
+	// leave dispatched between the check above and registration found no
+	// connection to close, and would otherwise leave this one receiving the
+	// room's broadcasts (including new keys). Membership is removed before the
+	// kick is published, so any kick from here on finds this client.
+	if member, err := c.roomUseCase.IsUserInRoom(ctx.Request.Context(), roomID, user.ID); err != nil || !member {
+		c.wsCore.UnregisterClient(client)
+		client.Close()
+		return
+	}
 
 	c.wsCore.Publish(websocket.NewMemberJoined(roomID, websocket.MemberPayload{
 		UserID:   user.ID,
