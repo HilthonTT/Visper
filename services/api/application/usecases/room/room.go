@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,7 +29,10 @@ type RoomUseCase interface {
 	JoinRoom(ctx context.Context, roomID string, user model.User) error
 	JoinRoomWithCodes(ctx context.Context, roomID, joinCode, secureCode string, user model.User) error
 	LeaveRoom(ctx context.Context, roomID, userID string) error
-	KickMember(ctx context.Context, roomID, userID, requesterID string) error
+	// KickMember removes a member and rotates the room's join and secure
+	// codes, so the kicked user can't rejoin with the codes they already saw.
+	// It returns the updated room.
+	KickMember(ctx context.Context, roomID, userID, requesterID string) (*model.Room, error)
 	IsUserInRoom(ctx context.Context, roomID, userID string) (bool, error)
 
 	// ExpireRooms deletes every room whose expiry has passed and returns how many it removed.
@@ -243,29 +247,40 @@ func (uc *roomUseCase) LeaveRoom(ctx context.Context, roomID, userID string) err
 	return nil
 }
 
-func (uc *roomUseCase) KickMember(ctx context.Context, roomID, userID, requesterID string) error {
+func (uc *roomUseCase) KickMember(ctx context.Context, roomID, userID, requesterID string) (*model.Room, error) {
 	if userID == "" {
-		return ErrUserIDRequired
+		return nil, ErrUserIDRequired
 	}
 	room, err := uc.loadOwnedRoom(ctx, roomID, requesterID, ErrOwnerOnlyKick)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if userID == room.Owner.ID {
-		return ErrOwnerCannotBeKicked
+		return nil, ErrOwnerCannotBeKicked
 	}
 	if !room.IsMember(userID) {
-		return ErrNotMember
+		return nil, ErrNotMember
 	}
 
 	if err := uc.repository.RemoveUser(ctx, roomID, userID); err != nil {
 		uc.logger.Error("failed to kick user from room", zap.Error(err), zap.String("roomID", roomID), zap.String("userID", userID))
-		return fmt.Errorf("failed to kick member: %w", err)
+		return nil, fmt.Errorf("failed to kick member: %w", err)
 	}
 
+	// Every member can see the join code, and joining by join code alone is
+	// allowed, so without new codes a kicked user could rejoin at once and be
+	// sealed into the next room key.
+	room.JoinCode = generateJoinCode()
+	room.SecureCode = generateSecureCode()
+	if err := uc.repository.Update(ctx, room); err != nil {
+		uc.logger.Error("failed to rotate codes after kick", zap.Error(err), zap.String("roomID", roomID))
+		return nil, fmt.Errorf("failed to rotate room codes: %w", err)
+	}
+	room.Members = slices.DeleteFunc(room.Members, func(u model.User) bool { return u.ID == userID })
+
 	uc.logger.Info("user kicked from room", zap.String("roomID", roomID), zap.String("kickedUserID", userID), zap.String("kickedBy", requesterID))
-	return nil
+	return room, nil
 }
 
 func (uc *roomUseCase) IsUserInRoom(ctx context.Context, roomID, userID string) (bool, error) {

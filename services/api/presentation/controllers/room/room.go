@@ -301,7 +301,8 @@ func (c *roomController) KickMember(ctx *gin.Context) {
 
 	// Kick first: it checks the caller owns the room, so non-owners can't
 	// probe which user IDs exist.
-	if err := c.usecase.KickMember(ctx.Request.Context(), roomID, kickedID, user.ID); err != nil {
+	room, err := c.usecase.KickMember(ctx.Request.Context(), roomID, kickedID, user.ID)
+	if err != nil {
 		httpx.Error(ctx, err)
 		return
 	}
@@ -313,6 +314,9 @@ func (c *roomController) KickMember(ctx *gin.Context) {
 	}
 
 	c.wsCore.Publish(websocket.NewErrorKicked(roomID, kicked.ID, kicked.Username, kickReason))
+	// Published after the kick, which disconnects the kicked user first, so
+	// only the remaining members learn the new join code.
+	c.wsCore.Publish(websocket.NewRoomUpdated(room.ID, room.JoinCode))
 
 	ctx.JSON(http.StatusOK, httpx.SuccessResponse{
 		Message: "member kicked successfully",

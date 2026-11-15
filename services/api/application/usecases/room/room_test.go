@@ -60,7 +60,7 @@ func TestMissingRoomIsReportedAsNotFound(t *testing.T) {
 	checks := map[string]error{
 		"Delete":               uc.Delete(ctx, "missing", "u1"),
 		"LeaveRoom":            uc.LeaveRoom(ctx, "missing", "u1"),
-		"KickMember":           uc.KickMember(ctx, "missing", "u2", "u1"),
+		"KickMember":           func() error { _, err := uc.KickMember(ctx, "missing", "u2", "u1"); return err }(),
 		"GenerateNewJoinCode":  func() error { _, err := uc.GenerateNewJoinCode(ctx, "u1", "missing"); return err }(),
 		"RegenerateSecureCode": func() error { _, err := uc.RegenerateSecureCode(ctx, "u1", "missing"); return err }(),
 	}
@@ -160,5 +160,26 @@ func TestLazyExpiryNotifies(t *testing.T) {
 	}
 	if len(notified) != 1 || notified[0] != "r1" {
 		t.Fatalf("onExpired got %v; want [r1]", notified)
+	}
+}
+
+func TestKickRotatesCodes(t *testing.T) {
+	owner := model.User{ID: "owner"}
+	repo := &fakeRoomRepo{rooms: map[string]*model.Room{
+		"r1": {ID: "r1", Owner: owner, JoinCode: "ABC123", SecureCode: "secret",
+			Members: []model.User{owner, {ID: "member"}}},
+	}}
+	uc := newTestUseCase(repo)
+
+	room, err := uc.KickMember(context.Background(), "r1", "member", "owner")
+	if err != nil {
+		t.Fatalf("kick: %v", err)
+	}
+	// The kicked member saw the old codes, so they must not work any more.
+	if room.JoinCode == "ABC123" || room.SecureCode == "secret" {
+		t.Fatalf("codes not rotated: %q %q", room.JoinCode, room.SecureCode)
+	}
+	if room.IsMember("member") {
+		t.Fatal("kicked member still listed")
 	}
 }
