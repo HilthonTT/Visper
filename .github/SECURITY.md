@@ -23,6 +23,11 @@ to stay anonymous.
 
 ## Scope
 
+The encryption scheme and its known limits are described in
+[docs/security-model.md](../docs/security-model.md). Limits listed there
+(e.g. metadata the server sees) are known, but a way around a protection it
+claims is very much in scope.
+
 In scope: the encryption scheme, room access control, authentication/session
 handling, file upload/storage, rate limiting and the reverse proxy.
 
