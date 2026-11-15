@@ -45,6 +45,22 @@ func NewLogger() (*Logger, error) {
 	}, nil
 }
 
+// NewLoggerWithLevel creates a JSON logger at the named level ("debug",
+// "info", "warn", "error", ...). An empty level means debug; an unknown one
+// is an error.
+func NewLoggerWithLevel(level string) (*Logger, error) {
+	l, err := NewDevelopmentLogger()
+	if err != nil || level == "" {
+		return l, err
+	}
+	lvl, err := zapcore.ParseLevel(level)
+	if err != nil {
+		return nil, err
+	}
+	l.Log = l.Log.WithOptions(zap.IncreaseLevel(lvl))
+	return l, nil
+}
+
 // NewDevelopmentLogger creates a logger for development with more debug information
 func NewDevelopmentLogger() (*Logger, error) {
 	encoderConfig := zapcore.EncoderConfig{

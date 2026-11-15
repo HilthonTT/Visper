@@ -88,7 +88,9 @@ func NewContainer(ctx context.Context) (*Container, error) {
 	// plain-HTTP release/compose setup made browsers drop the user cookie.
 	security.SetSecureCookies(c.Config.RequiresHTTPS())
 
-	loggerInstance, err := logger.NewDevelopmentLogger()
+	// logger.level from the config (e.g. "info" in config-docker.yml); it
+	// was ignored and every environment logged at debug level.
+	loggerInstance, err := logger.NewLoggerWithLevel(c.Config.Logger.Level)
 	if err != nil {
 		return nil, fmt.Errorf("error initializing logger: %w", err)
 	}
