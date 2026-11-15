@@ -36,8 +36,26 @@ export type ApiMessage = {
 	content: string;
 	encrypted: boolean;
 	created_at: string;
+	/** When the content was last edited, if ever. */
+	updated_at?: string;
 	reply_to_id?: string;
 	reactions?: ApiReaction[] | null;
+};
+
+/** A new room key sealed to each member, signed by the owner. */
+export type ApiRekey = {
+	epoch: number;
+	keys: Record<string, string> | null;
+	signature: string;
+};
+
+/** Key cards and the latest rekey (see room-keys.ts). */
+export type ApiCryptoState = {
+	key_epoch: number;
+	rekey_needed: boolean;
+	rekey: ApiRekey | null;
+	cards: Record<string, string[]> | null;
+	members: string[] | null;
 };
 
 export type ApiFile = { id: string; url: string };
@@ -152,6 +170,18 @@ export const chatApi = {
 
 	removeReaction: (roomId: string, id: string) =>
 		request<ApiMessage>("DELETE", `${message(roomId, id)}/reaction`),
+
+	/** The room's key cards and latest rekey. */
+	getCrypto: (roomId: string) =>
+		request<ApiCryptoState>("GET", `${room(roomId)}/crypto`),
+
+	/** Publishes this browser's key card for the room. */
+	putCard: (roomId: string, card: string) =>
+		request<unknown>("PUT", `${room(roomId)}/crypto/card`, { card }),
+
+	/** Publishes a rekey (owner only); 409 if the epoch is out of date. */
+	postRekey: (roomId: string, rekey: ApiRekey) =>
+		request<unknown>("POST", `${room(roomId)}/crypto/rekey`, rekey),
 
 	/** Uploads an already encrypted file under a fixed, meaningless name. */
 	upload: (roomId: string, encrypted: Uint8Array<ArrayBuffer>) => {

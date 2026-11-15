@@ -1,12 +1,5 @@
 import type { ApiMessage, ApiRoom } from "./chat-api";
-import {
-	failedText,
-	openEnvelope,
-	type RoomKey,
-	readMessage,
-	readReaction,
-	UnverifiedError,
-} from "./room-crypto";
+import { failedText, type RoomCrypto, UnverifiedError } from "./room-keys";
 
 /*
  * The browser chat's state, as a pure reducer over room events. Everything
@@ -23,6 +16,8 @@ export type ChatMessage = {
 	/** Decrypted content, or a placeholder if decryption failed. */
 	content: string;
 	failed: boolean;
+	/** Verified hash of the file an image message points to. */
+	fileHash?: string;
 	/** Milliseconds since the epoch. */
 	createdAt: number;
 	replyToId?: string;
@@ -90,12 +85,13 @@ export type ChatAction =
 			id: string;
 			content: string;
 			failed: boolean;
+			fileHash?: string;
 			/**
-			 * Who sealed the edit and for which message, still to be checked
-			 * against the message (the event doesn't name its sender). Absent
-			 * for our own edits.
+			 * Who signed the edit, still to be checked against the message's
+			 * author (the event doesn't name its sender). Absent for our own
+			 * edits.
 			 */
-			sealed?: { from: string; msg: string };
+			sealedBy?: string;
 	  }
 	| { type: "deleted"; id: string }
 	| { type: "reactions"; id: string; reactions: Reaction[] }
@@ -194,15 +190,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 		}
 		case "updated":
 			return mapMessage(state, action.id, (m) => {
-				const { sealed } = action;
+				// Only the message's author may edit it.
 				const forged =
-					sealed !== undefined &&
-					// Edits are always sealed for the message they edit.
-					(sealed.from !== m.userId || sealed.msg !== m.id);
+					action.sealedBy !== undefined && action.sealedBy !== m.userId;
 				return {
 					...m,
 					content: forged ? failedText(new UnverifiedError()) : action.content,
 					failed: forged || action.failed,
+					fileHash: forged ? undefined : action.fileHash,
 					edited: true,
 				};
 			});
@@ -341,7 +336,7 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
 function decodeReactions(
 	raw: unknown,
-	key: RoomKey,
+	rc: RoomCrypto,
 	messageId: string,
 ): Reaction[] {
 	if (!Array.isArray(raw)) {
@@ -353,26 +348,28 @@ function decodeReactions(
 		if (!userId) {
 			continue;
 		}
-		const { text } = readReaction(
+		const emoji = rc.readReaction(
 			str(r.emoji),
 			r.encrypted === true,
-			key,
 			userId,
 			messageId,
 		);
-		out.push({ userId, emoji: text });
+		out.push({ userId, emoji });
 	}
 	return out;
 }
 
-/** Decrypts a message from the REST API. */
-export function fromApiMessage(m: ApiMessage, key: RoomKey): ChatMessage {
-	const { text, failed } = readMessage(
+/** Decrypts and verifies a message from the REST API. */
+export function fromApiMessage(m: ApiMessage, rc: RoomCrypto): ChatMessage {
+	const createdAt = Date.parse(m.created_at) || 0;
+	const updatedAt = (m.updated_at && Date.parse(m.updated_at)) || 0;
+	const { text, failed, fileHash } = rc.readMessage(
 		m.content,
 		m.encrypted,
-		key,
 		m.user_id,
 		m.id,
+		createdAt,
+		updatedAt,
 	);
 	return {
 		id: m.id,
@@ -380,9 +377,10 @@ export function fromApiMessage(m: ApiMessage, key: RoomKey): ChatMessage {
 		username: m.username,
 		content: text,
 		failed,
-		createdAt: Date.parse(m.created_at) || 0,
+		fileHash: fileHash || undefined,
+		createdAt,
 		replyToId: m.reply_to_id || undefined,
-		reactions: decodeReactions(m.reactions, key, m.id),
+		reactions: decodeReactions(m.reactions, rc, m.id),
 	};
 }
 
@@ -392,7 +390,7 @@ export function fromApiMessage(m: ApiMessage, key: RoomKey): ChatMessage {
  */
 export function parseRoomEvent(
 	raw: unknown,
-	key: RoomKey,
+	rc: RoomCrypto,
 	now = Date.now(),
 ): ChatAction | null {
 	if (typeof raw !== "object" || raw === null) {
@@ -411,12 +409,15 @@ export function parseRoomEvent(
 			if (!id || !userId) {
 				return null;
 			}
-			const { text, failed } = readMessage(
+			const createdAt = Date.parse(str(d.timestamp)) || now;
+			const { text, failed, fileHash } = rc.readMessage(
 				str(d.content),
 				d.encrypted === true,
-				key,
 				userId,
 				id,
+				createdAt,
+				// History replays an edited message with its latest edit.
+				Date.parse(str(d.updatedAt)) || 0,
 			);
 			return {
 				type: "messages",
@@ -427,9 +428,10 @@ export function parseRoomEvent(
 						username: str(d.username),
 						content: text,
 						failed,
-						createdAt: Date.parse(str(d.timestamp)) || now,
+						fileHash: fileHash || undefined,
+						createdAt,
 						replyToId: str(d.replyToId) || undefined,
-						reactions: decodeReactions(d.reactions, key, id),
+						reactions: decodeReactions(d.reactions, rc, id),
 					},
 				],
 			};
@@ -449,16 +451,18 @@ export function parseRoomEvent(
 				};
 			}
 			try {
-				const env = openEnvelope(str(d.content), key);
-				if (env.kind !== "m") {
-					throw new UnverifiedError("not a message");
-				}
+				const edit = rc.openEdit(
+					str(d.content),
+					id,
+					Date.parse(str(d.timestamp)) || now,
+				);
 				return {
 					type: "updated",
 					id,
-					content: env.text,
+					content: edit.text,
 					failed: false,
-					sealed: { from: env.from, msg: env.msg },
+					fileHash: edit.fileHash || undefined,
+					sealedBy: edit.from,
 				};
 			} catch (e) {
 				return { type: "updated", id, content: failedText(e), failed: true };
@@ -471,7 +475,7 @@ export function parseRoomEvent(
 				? {
 						type: "reactions",
 						id: str(d.id),
-						reactions: decodeReactions(d.reactions, key, str(d.id)),
+						reactions: decodeReactions(d.reactions, rc, str(d.id)),
 					}
 				: null;
 		case "member.joined":

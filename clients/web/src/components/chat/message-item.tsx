@@ -1,11 +1,8 @@
 import { memo, useState } from "react";
 import styled from "styled-components";
 import { type ChatMessage, groupReactions, myReaction } from "@/lib/chat-state";
-import {
-	isEncryptedImageUrl,
-	isPlainImageUrl,
-	type RoomKey,
-} from "@/lib/room-crypto";
+import { isEncryptedImageUrl, isPlainImageUrl } from "@/lib/room-crypto";
+import type { RoomCrypto } from "@/lib/room-keys";
 import { ImageMessage } from "./image-message";
 
 /** The reactions offered in the picker. */
@@ -14,7 +11,7 @@ export const REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🎉"] as c
 type Props = {
 	message: ChatMessage;
 	me: string;
-	roomKey: RoomKey;
+	crypto: RoomCrypto;
 	/** The message this one replies to; null if it is gone. */
 	replyTo: ChatMessage | null | undefined;
 	seenBy: string[] | undefined;
@@ -31,7 +28,7 @@ const time = (ms: number) =>
 export const MessageItem = memo(function MessageItem({
 	message,
 	me,
-	roomKey,
+	crypto,
 	replyTo,
 	seenBy,
 	onReply,
@@ -80,7 +77,8 @@ export const MessageItem = memo(function MessageItem({
 					// Remount when an edit changes the image, so no stale state is kept.
 					key={message.content}
 					content={message.content}
-					roomKey={roomKey}
+					fileHash={message.fileHash ?? ""}
+					crypto={crypto}
 				/>
 			) : (
 				<Content $failed={message.failed}>{message.content}</Content>

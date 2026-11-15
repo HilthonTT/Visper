@@ -40,18 +40,18 @@ function fromBase64(s: string): Uint8Array {
 	}
 }
 
-/** Encrypts message text (or a reaction) with the room key. */
-export function encryptText(plaintext: string, key: RoomKey): string {
+/** Encrypts bytes with the room key: base64(nonce || secretbox(plaintext)). */
+export function encryptBytes(plaintext: Uint8Array, key: RoomKey): string {
 	const nonce = nacl.randomBytes(NONCE_SIZE);
-	const box = nacl.secretbox(new TextEncoder().encode(plaintext), nonce, key);
+	const box = nacl.secretbox(plaintext, nonce, key);
 	const out = new Uint8Array(NONCE_SIZE + box.length);
 	out.set(nonce);
 	out.set(box, NONCE_SIZE);
 	return toBase64(out);
 }
 
-/** Decrypts text encrypted by encryptText (or the Go SDK's Encrypt). */
-export function decryptText(ciphertext: string, key: RoomKey): string {
+/** Decrypts what encryptBytes (or the Go SDK's Encrypt) made. */
+export function decryptBytes(ciphertext: string, key: RoomKey): Uint8Array {
 	const data = fromBase64(ciphertext);
 	if (data.length < NONCE_SIZE + nacl.secretbox.overheadLength) {
 		throw new DecryptionError("ciphertext too short");
@@ -64,145 +64,17 @@ export function decryptText(ciphertext: string, key: RoomKey): string {
 	if (!opened) {
 		throw new DecryptionError("decryption failed");
 	}
-	return new TextDecoder().decode(opened);
+	return opened;
 }
 
-/*
- * Message text and reactions are sealed in an envelope naming their kind and
- * sender (and, for reactions and edits, the message), the same JSON as the
- * Go SDK (sdk/go/envelope.go):
- *
- *   {"v":1,"k":"m"|"r","f":"<sender user ID>","m":"<message ID>","t":"<text>"}
- *
- * The server relays the sender's ID in plaintext; checking it against the
- * sealed one stops it passing one member's words off as another's.
- */
-
-export class UnverifiedError extends Error {}
-
-type Kind = "m" | "r";
-
-export type Envelope = { kind: Kind; from: string; msg: string; text: string };
-
-/** The envelope JSON for text (the Go SDK omits an empty "m" too). */
-function envelopeJson(kind: Kind, from: string, msg: string, text: string) {
-	return JSON.stringify(
-		msg
-			? { v: 1, k: kind, f: from, m: msg, t: text }
-			: { v: 1, k: kind, f: from, t: text },
-	);
+/** Encrypts text with the room key. */
+export function encryptText(plaintext: string, key: RoomKey): string {
+	return encryptBytes(new TextEncoder().encode(plaintext), key);
 }
 
-/** Encrypts message text from `from`; pass the message ID when editing it. */
-export function sealMessage(
-	text: string,
-	from: string,
-	messageId: string,
-	key: RoomKey,
-): string {
-	return encryptText(envelopeJson("m", from, messageId, text), key);
-}
-
-/** Encrypts `from`'s reaction to messageId. */
-export function sealReaction(
-	emoji: string,
-	from: string,
-	messageId: string,
-	key: RoomKey,
-): string {
-	return encryptText(envelopeJson("r", from, messageId, emoji), key);
-}
-
-/** Decrypts an envelope without checking whom it claims to be from. */
-export function openEnvelope(ciphertext: string, key: RoomKey): Envelope {
-	const plain = decryptText(ciphertext, key);
-	let raw: unknown;
-	try {
-		raw = JSON.parse(plain);
-	} catch {
-		throw new UnverifiedError("not a sealed envelope");
-	}
-	const e = (typeof raw === "object" && raw !== null ? raw : {}) as Record<
-		string,
-		unknown
-	>;
-	if (
-		e.v !== 1 ||
-		(e.k !== "m" && e.k !== "r") ||
-		typeof e.f !== "string" ||
-		!e.f ||
-		typeof e.t !== "string" ||
-		(e.m !== undefined && typeof e.m !== "string")
-	) {
-		throw new UnverifiedError("not a sealed envelope");
-	}
-	return { kind: e.k, from: e.f, msg: (e.m as string) ?? "", text: e.t };
-}
-
-export type ReadResult = { text: string; failed: boolean };
-
-/** The placeholder shown for content that failed to decrypt or verify. */
-export function failedText(e: unknown): string {
-	return e instanceof UnverifiedError
-		? "[Unverified message]"
-		: "[Decryption failed]";
-}
-
-function readSealed(
-	value: string,
-	encrypted: boolean,
-	key: RoomKey,
-	check: (e: Envelope) => boolean,
-): ReadResult {
-	try {
-		if (!encrypted) {
-			// Every member of a room encrypts; plaintext came from the server.
-			throw new UnverifiedError("plaintext in an encrypted room");
-		}
-		const env = openEnvelope(value, key);
-		if (!check(env)) {
-			throw new UnverifiedError("sender or message mismatch");
-		}
-		return { text: env.text, failed: false };
-	} catch (e) {
-		return { text: failedText(e), failed: true };
-	}
-}
-
-/**
- * Decrypts message messageId's content, shown as sent by `from`, checking
- * that `from` sealed it for that message (or as a new message). Failures read
- * as a placeholder rather than throwing, like the CLI.
- */
-export function readMessage(
-	value: string,
-	encrypted: boolean,
-	key: RoomKey,
-	from: string,
-	messageId: string,
-): ReadResult {
-	return readSealed(
-		value,
-		encrypted,
-		key,
-		(e) => e.kind === "m" && e.from === from && (!e.msg || e.msg === messageId),
-	);
-}
-
-/** Decrypts `from`'s reaction to messageId, checking that it is one. */
-export function readReaction(
-	value: string,
-	encrypted: boolean,
-	key: RoomKey,
-	from: string,
-	messageId: string,
-): ReadResult {
-	return readSealed(
-		value,
-		encrypted,
-		key,
-		(e) => e.kind === "r" && e.from === from && e.msg === messageId,
-	);
+/** Decrypts text encrypted by encryptText (or the Go SDK's Encrypt). */
+export function decryptText(ciphertext: string, key: RoomKey): string {
+	return new TextDecoder().decode(decryptBytes(ciphertext, key));
 }
 
 /** Reports whether data starts like an encrypted file. */
@@ -356,46 +228,17 @@ export function isPlainImageUrl(content: string): boolean {
 	return isHttpUrl(file) && hasImageExtension(file) && !/\s/.test(file);
 }
 
-/** The API's limit on a message's (encrypted) content, in characters. */
-const MAX_CONTENT_LENGTH = 1000;
-
 /**
- * Largest sealed envelope, in UTF-8 bytes, whose encryptText output fits the
- * API's limit: base64(nonce || secretbox(envelope)). 710 bytes.
+ * The content of an encrypted image message: the stored file's URL with the
+ * image's (URI-encoded) name as the fragment. A long name is shortened,
+ * keeping its extension, to at most `budget` encoded bytes; the encoded name
+ * is plain ASCII, so it costs its length.
  */
-export const MAX_MESSAGE_BYTES =
-	Math.floor(MAX_CONTENT_LENGTH / 4) * 3 -
-	NONCE_SIZE -
-	nacl.secretbox.overheadLength;
-
-function sealedSize(from: string, messageId: string, text: string): number {
-	return new TextEncoder().encode(envelopeJson("m", from, messageId, text))
-		.length;
-}
-
-/**
- * Whether text, sent by `from` (as an edit of messageId, if given), is short
- * enough once sealed and encrypted.
- */
-export function fitsMessage(
-	text: string,
-	from: string,
-	messageId = "",
-): boolean {
-	return sealedSize(from, messageId, text) <= MAX_MESSAGE_BYTES;
-}
-
-/**
- * The message content for an encrypted image uploaded to fileUrl, sent by
- * `from`. A long file name is shortened (keeping its extension) so the
- * message still fits; the encoded name is plain ASCII, so it costs its length.
- */
-export function encryptedImageContent(
+export function imageMessageContent(
 	fileUrl: string,
 	name: string,
-	from: string,
+	budget: number,
 ): string {
-	const budget = MAX_MESSAGE_BYTES - sealedSize(from, "", `${fileUrl}#`);
 	let encoded = encodeURIComponent(name);
 	if (encoded.length > budget) {
 		const dot = name.lastIndexOf(".");

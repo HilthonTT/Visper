@@ -15,14 +15,23 @@ import {
 	typingLabel,
 	typingNames,
 } from "./chat-state";
-import {
-	encryptText,
-	type RoomKey,
-	sealMessage,
-	sealReaction,
-} from "./room-crypto";
+import { encryptText, type RoomKey } from "./room-crypto";
+import { Identity, RoomCrypto } from "./room-keys";
 
 const key = new Uint8Array(32).map((_, i) => i) as RoomKey;
+
+// Ann, Bo and me in one room, each with our own signing keys; `rc` is ours,
+// which decrypts and verifies what arrives.
+const [ann, bo, rc] = ["ann", "bo", "me"].map(
+	(id) => new RoomCrypto(Identity.create(id), "r1", "ann", key),
+);
+for (const from of [ann, bo, rc]) {
+	const card = from.myCard();
+	for (const to of [ann, bo, rc]) {
+		to.addCard(from.me.userId, card);
+	}
+}
+const nowIso = () => new Date().toISOString();
 
 const room: ApiRoom = {
 	id: "r1",
@@ -70,20 +79,20 @@ describe("parseRoomEvent", () => {
 					id: "m1",
 					userId: "ann",
 					username: "Ann",
-					content: sealMessage("secret", "ann", "", key),
+					content: ann.sealMessage("secret"),
 					encrypted: true,
-					timestamp: "2026-01-01T10:00:00Z",
+					timestamp: nowIso(),
 					replyToId: "m0",
 					reactions: [
 						{
 							userId: "me",
-							emoji: sealReaction("👍", "me", "m1", key),
+							emoji: rc.sealReaction("m1", "👍"),
 							encrypted: true,
 						},
 					],
 				},
 			},
-			key,
+			rc,
 		);
 		expect(action).toMatchObject({
 			type: "messages",
@@ -111,7 +120,7 @@ describe("parseRoomEvent", () => {
 					encrypted: true,
 				},
 			},
-			key,
+			rc,
 		);
 		expect(action).toMatchObject({
 			messages: [{ failed: true, content: "[Decryption failed]" }],
@@ -137,7 +146,7 @@ describe("parseRoomEvent", () => {
 		],
 		[{ type: "room.deleted", data: {} }, { type: "closed" }],
 	])("parses %j", (raw, want) => {
-		expect(parseRoomEvent(raw, key, 5)).toMatchObject(want);
+		expect(parseRoomEvent(raw, rc, 5)).toMatchObject(want);
 	});
 
 	it.each([
@@ -147,7 +156,7 @@ describe("parseRoomEvent", () => {
 		{ type: "message.received", data: {} },
 		{ type: "nope", data: {} },
 	])("ignores %j", (raw) => {
-		expect(parseRoomEvent(raw, key)).toBeNull();
+		expect(parseRoomEvent(raw, rc)).toBeNull();
 	});
 });
 
@@ -324,18 +333,18 @@ describe("views", () => {
 				room_id: "r1",
 				user_id: "ann",
 				username: "Ann",
-				content: sealMessage("from rest", "ann", "", key),
+				content: ann.sealMessage("from rest"),
 				encrypted: true,
-				created_at: "2026-01-01T00:00:00Z",
+				created_at: nowIso(),
 				reactions: [
 					{
 						user_id: "bo",
-						emoji: sealReaction("😂", "bo", "m1", key),
+						emoji: bo.sealReaction("m1", "😂"),
 						encrypted: true,
 					},
 				],
 			},
-			key,
+			rc,
 		);
 		expect(m).toMatchObject({
 			content: "from rest",
@@ -380,23 +389,23 @@ describe("edits", () => {
 	const edited = (content: string) =>
 		parseRoomEvent(
 			{ type: "message.updated", data: { id: "m1", content, encrypted: true } },
-			key,
+			rc,
 		);
 
 	it("applies an edit sealed by the message's author", () => {
 		const s = apply(
 			initialChatState(room),
 			{ type: "messages", messages: [msg("m1", "ann", "hi", 1)] },
-			edited(sealMessage("hello", "ann", "m1", key)),
+			edited(ann.sealEdit("m1", "hello")),
 		);
 		expect(s.messages[0]).toMatchObject({ content: "hello", failed: false });
 	});
 
 	it("rejects an edit sealed by someone else or for another message", () => {
 		for (const forged of [
-			sealMessage("pwned", "bo", "m1", key),
-			sealMessage("pwned", "ann", "m2", key),
-			sealMessage("pwned", "ann", "", key),
+			bo.sealEdit("m1", "pwned"), // validly signed, but by someone else
+			ann.sealEdit("m2", "pwned"),
+			ann.sealMessage("pwned"),
 		]) {
 			const s = apply(
 				initialChatState(room),
@@ -417,11 +426,11 @@ describe("edits", () => {
 				data: {
 					id: "m1",
 					userId: "bo",
-					content: sealMessage("hi", "ann", "", key),
+					content: ann.sealMessage("hi"),
 					encrypted: true,
 				},
 			},
-			key,
+			rc,
 		);
 		expect(action).toMatchObject({
 			messages: [{ failed: true, content: "[Unverified message]" }],

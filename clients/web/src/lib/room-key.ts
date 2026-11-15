@@ -13,6 +13,8 @@
  * (sdk/go/roomkey.go); keep the two in step.
  */
 
+import nacl from "tweetnacl";
+
 const KEY_SIZE = 32;
 const SEAL_INFO = "visper/sealed-room-key/v1";
 const CODE_SEPARATOR = ".";
@@ -80,42 +82,36 @@ export function parseDeviceCode(code: string): DeviceCode {
 	return { userId, publicKey: new Uint8Array(publicKey) };
 }
 
-/** Encrypts a room key to a device's X25519 public key. */
-export async function sealRoomKey(
-	roomKey: Uint8Array<ArrayBuffer>,
-	recipientPublicKey: Uint8Array<ArrayBuffer>,
-): Promise<string> {
-	if (roomKey.length !== KEY_SIZE) {
-		throw new RoomKeyError("invalid room key");
+/** X25519 (with tweetnacl, so it needs no WebCrypto X25519 support). */
+function x25519(privateKey: Uint8Array, publicKey: Uint8Array): Uint8Array {
+	const shared = nacl.scalarMult(privateKey, publicKey);
+	// A low-order public key gives an all-zero secret; Go's crypto/ecdh
+	// refuses it too.
+	if (shared.every((b) => b === 0)) {
+		throw new RoomKeyError("invalid device key");
 	}
+	return shared;
+}
+
+/** The AES-GCM key for one sealed key (see the Go SDK's sealCipher). */
+async function sealKey(
+	shared: Uint8Array,
+	ephemeralPublic: Uint8Array,
+	recipientPublic: Uint8Array,
+	usage: KeyUsage,
+): Promise<CryptoKey> {
 	const { subtle } = globalThis.crypto;
-
-	const recipient = await subtle.importKey(
-		"raw",
-		recipientPublicKey,
-		{ name: "X25519" },
-		false,
-		[],
-	);
-	const ephemeral = (await subtle.generateKey({ name: "X25519" }, true, [
-		"deriveBits",
-	])) as CryptoKeyPair;
-	const ephemeralPublic = new Uint8Array(
-		await subtle.exportKey("raw", ephemeral.publicKey),
-	);
-	const shared = await subtle.deriveBits(
-		{ name: "X25519", public: recipient },
-		ephemeral.privateKey,
-		256,
-	);
-
 	const salt = new Uint8Array(64);
 	salt.set(ephemeralPublic, 0);
-	salt.set(recipientPublicKey, 32);
-	const hkdfKey = await subtle.importKey("raw", shared, "HKDF", false, [
-		"deriveKey",
-	]);
-	const aesKey = await subtle.deriveKey(
+	salt.set(recipientPublic, 32);
+	const hkdfKey = await subtle.importKey(
+		"raw",
+		new Uint8Array(shared),
+		"HKDF",
+		false,
+		["deriveKey"],
+	);
+	return subtle.deriveKey(
 		{
 			name: "HKDF",
 			hash: "SHA-256",
@@ -125,17 +121,83 @@ export async function sealRoomKey(
 		hkdfKey,
 		{ name: "AES-GCM", length: 256 },
 		false,
-		["encrypt"],
+		[usage],
+	);
+}
+
+/** Encrypts a room key to a device's X25519 public key. */
+export async function sealRoomKey(
+	roomKey: Uint8Array<ArrayBuffer>,
+	recipientPublicKey: Uint8Array<ArrayBuffer>,
+): Promise<string> {
+	if (roomKey.length !== KEY_SIZE) {
+		throw new RoomKeyError("invalid room key");
+	}
+	const ephemeral = nacl.box.keyPair();
+	const shared = x25519(ephemeral.secretKey, recipientPublicKey);
+	const aesKey = await sealKey(
+		shared,
+		ephemeral.publicKey,
+		recipientPublicKey,
+		"encrypt",
 	);
 
 	const nonce = globalThis.crypto.getRandomValues(new Uint8Array(12));
 	const ciphertext = new Uint8Array(
-		await subtle.encrypt({ name: "AES-GCM", iv: nonce }, aesKey, roomKey),
+		await globalThis.crypto.subtle.encrypt(
+			{ name: "AES-GCM", iv: nonce },
+			aesKey,
+			roomKey,
+		),
 	);
 
 	const out = new Uint8Array(32 + 12 + ciphertext.length);
-	out.set(ephemeralPublic, 0);
+	out.set(ephemeral.publicKey, 0);
 	out.set(nonce, 32);
 	out.set(ciphertext, 44);
 	return base64UrlEncode(out);
+}
+
+/**
+ * Decrypts a room key sealed to the device whose X25519 private key is
+ * `devicePrivateKey` (see the Go SDK's DeviceKey.OpenRoomKey).
+ */
+export async function openRoomKey(
+	sealed: string,
+	devicePrivateKey: Uint8Array,
+): Promise<Uint8Array<ArrayBuffer>> {
+	let data: Uint8Array;
+	try {
+		data = base64UrlDecode(sealed);
+	} catch {
+		throw new RoomKeyError("invalid sealed room key");
+	}
+	if (data.length < 32 + 12 + KEY_SIZE + 16) {
+		throw new RoomKeyError("invalid sealed room key");
+	}
+	const ephemeralPublic = data.slice(0, 32);
+	const nonce = data.slice(32, 44);
+	const ciphertext = data.slice(44);
+	const shared = x25519(devicePrivateKey, ephemeralPublic);
+	const devicePublic = nacl.scalarMult.base(devicePrivateKey);
+	const aesKey = await sealKey(
+		shared,
+		ephemeralPublic,
+		devicePublic,
+		"decrypt",
+	);
+	let plain: ArrayBuffer;
+	try {
+		plain = await globalThis.crypto.subtle.decrypt(
+			{ name: "AES-GCM", iv: nonce },
+			aesKey,
+			ciphertext,
+		);
+	} catch {
+		throw new RoomKeyError("invalid sealed room key");
+	}
+	if (plain.byteLength !== KEY_SIZE) {
+		throw new RoomKeyError("invalid sealed room key");
+	}
+	return new Uint8Array(plain);
 }

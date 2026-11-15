@@ -27,7 +27,8 @@ type Mode =
 	| { kind: "reply"; message: ChatMessage }
 	| { kind: "edit"; message: ChatMessage };
 
-const MAX_MESSAGE_LENGTH = 700; // leaves room for encryption under the API's 1000
+// Leaves room for the signed, encrypted envelope under the API's 4000.
+const MAX_MESSAGE_LENGTH = 2500;
 
 export const ChatView = ({
 	session,
@@ -287,7 +288,7 @@ export const ChatView = ({
 				<InvitePanel
 					joinCode={state.joinCode}
 					joinUrl={session.room.qr_code_url}
-					roomKey={session.key}
+					roomKey={chat.inviteKey}
 					onClose={() => setShowInvite(false)}
 				/>
 			)}
@@ -320,7 +321,7 @@ export const ChatView = ({
 							key={m.id}
 							message={m}
 							me={state.me}
-							roomKey={session.key}
+							crypto={chat.crypto}
 							replyTo={
 								m.replyToId ? (byId.get(m.replyToId) ?? null) : undefined
 							}
@@ -368,6 +369,14 @@ export const ChatView = ({
 						esc cancel
 					</button>
 				</ModeBar>
+			)}
+			{chat.notice && (
+				<NoticeLine role="status">
+					🔑 {chat.notice}{" "}
+					<BarButton type="button" onClick={chat.clearNotice}>
+						dismiss
+					</BarButton>
+				</NoticeLine>
 			)}
 			{error && <ErrorLine role="alert">✕ {error}</ErrorLine>}
 
@@ -555,6 +564,10 @@ const ModeBar = styled.div`
 
 const ErrorLine = styled.div`
   color: ${({ theme }) => theme.colors.danger};
+`;
+
+const NoticeLine = styled.div`
+  color: ${({ theme }) => theme.colors.text[300]};
 `;
 
 const Composer = styled.form`
