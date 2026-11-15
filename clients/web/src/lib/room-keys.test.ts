@@ -294,6 +294,12 @@ describe("rekeying", () => {
 		expect(second.rekey.keys?.bob).toBeDefined();
 	});
 
+	it("refuses a new message with no send time", () => {
+		const [alice, bob] = newRoom("alice", "bob");
+		const msg = alice.sealMessage("hello");
+		expect(() => bob.openMessage(msg, "alice", "m1", 0)).toThrow(ReplayedError);
+	});
+
 	it("leaves the departed member out and keeps history readable", async () => {
 		const [alice, bob, mallory] = newRoom("alice", "bob", "mallory");
 		const before = bob.sealMessage("before");

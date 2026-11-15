@@ -300,7 +300,9 @@ func (rc *RoomCrypto) OpenMessage(ciphertext, from, messageID string, created, u
 	}
 	switch env.Msg {
 	case "":
-		if !near(env.time(), created) {
+		// A new message needs a send time to check: with none, a server
+		// could replay an old message as new just by leaving it out.
+		if created.IsZero() || !near(env.time(), created) {
 			return Opened{}, ErrReplayed
 		}
 		if err := rc.claimNonce(env.Nonce, messageID); err != nil {

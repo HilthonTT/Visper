@@ -504,7 +504,9 @@ export class RoomCrypto {
 	): OpenedMessage {
 		const env = this.openKind(ciphertext, "m", from);
 		if (env.msg === "") {
-			if (!near(env.ts, created)) {
+			// A new message needs a send time to check: with none, a server
+			// could replay an old message as new just by leaving it out.
+			if (!created || !near(env.ts, created)) {
 				throw new ReplayedError("stale message");
 			}
 			this.claimNonce(env.nonce, messageId);

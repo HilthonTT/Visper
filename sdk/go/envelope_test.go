@@ -339,6 +339,18 @@ func TestEditedMessageInHistory(t *testing.T) {
 	}
 }
 
+func TestNewMessageWithoutSendTimeIsRefused(t *testing.T) {
+	m := newRoom(t, "alice", "bob")
+	msg, err := m[0].rc.SealMessage("hello", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A server leaving the timestamp out must not switch the replay check off.
+	if _, err := m[1].rc.OpenMessage(msg, "alice", "m1", time.Time{}, time.Time{}); !errors.Is(err, ErrReplayed) {
+		t.Fatalf("zero send time: err = %v, want ErrReplayed", err)
+	}
+}
+
 func TestRejoinedMemberIsRekeyedAgain(t *testing.T) {
 	m := newRoom(t, "alice", "bob")
 	alice := m[0].rc
