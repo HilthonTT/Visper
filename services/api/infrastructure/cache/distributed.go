@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -17,6 +19,14 @@ type DistributedCache struct {
 	keyPrefix   string
 	localTTL    time.Duration
 	redisKeyTTL time.Duration
+
+	// writes counts Set/Delete calls. Get only refills the local cache when
+	// no write happened while it read Redis, so a read that raced a write
+	// can't put the old value back locally (where it would outlive a delete
+	// for localTTL). fillMu makes "check writes, then fill" and "count the
+	// write, then update the local copy" atomic with respect to each other.
+	writes atomic.Uint64
+	fillMu sync.Mutex
 }
 
 // NewDistributedCache creates a new distributed cache
@@ -42,11 +52,14 @@ func (dc *DistributedCache) Set(ctx context.Context, key string, value any, ttl 
 	redisKey := dc.keyPrefix + key
 	if err := dc.redis.Set(ctx, redisKey, data, ttl).Err(); err != nil {
 		// Do not keep a local copy of a value that was never persisted.
-		dc.local.Delete(key)
+		dc.invalidateLocal(key)
 		return err
 	}
 
+	dc.fillMu.Lock()
+	dc.writes.Add(1)
 	dc.local.Set(key, data, dc.localTTLFor(ttl))
+	dc.fillMu.Unlock()
 	return nil
 }
 
@@ -62,8 +75,13 @@ func (dc *DistributedCache) Get(ctx context.Context, key string, valuePtr any) (
 		dc.local.Delete(key)
 	}
 
+	writesBefore := dc.writes.Load()
 	redisKey := dc.keyPrefix + key
-	data, err := dc.redis.Get(ctx, redisKey).Bytes()
+	pipe := dc.redis.Pipeline()
+	getCmd := pipe.Get(ctx, redisKey)
+	ttlCmd := pipe.PTTL(ctx, redisKey)
+	_, _ = pipe.Exec(ctx) // errors are read from the commands below
+	data, err := getCmd.Bytes()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return false, nil
@@ -75,7 +93,15 @@ func (dc *DistributedCache) Get(ctx context.Context, key string, valuePtr any) (
 		return false, err
 	}
 
-	dc.local.Set(key, data, dc.localTTL)
+	// Cap the local copy at the key's remaining Redis TTL, as Set does, so it
+	// is not served after Redis has expired the key.
+	if ttl, err := ttlCmd.Result(); err == nil {
+		dc.fillMu.Lock()
+		if dc.writes.Load() == writesBefore {
+			dc.local.Set(key, data, dc.localTTLFor(ttl))
+		}
+		dc.fillMu.Unlock()
+	}
 
 	return true, nil
 }
@@ -89,12 +115,20 @@ func (dc *DistributedCache) localTTLFor(ttl time.Duration) time.Duration {
 
 // Delete removes an item from both caches
 func (dc *DistributedCache) Delete(ctx context.Context, key string) error {
-	// Delete from local cache
-	dc.local.Delete(key)
-
-	// Delete from Redis
 	redisKey := dc.keyPrefix + key
-	return dc.redis.Del(ctx, redisKey).Err()
+	err := dc.redis.Del(ctx, redisKey).Err()
+	// Drop the local copy after Redis, and count the write, so a concurrent
+	// Get can't refill it with the deleted value.
+	dc.invalidateLocal(key)
+	return err
+}
+
+// invalidateLocal drops key's local copy and counts a write.
+func (dc *DistributedCache) invalidateLocal(key string) {
+	dc.fillMu.Lock()
+	dc.writes.Add(1)
+	dc.local.Delete(key)
+	dc.fillMu.Unlock()
 }
 
 // Flush clears both caches
@@ -205,7 +239,7 @@ func (dc *DistributedCache) ZAppendNext(ctx context.Context, key, member string,
 		return false, 0, err
 	}
 	if n == -1 {
-		dc.local.Delete(alsoDelete)
+		dc.invalidateLocal(alsoDelete)
 		return true, next, nil
 	}
 	return false, n, nil
