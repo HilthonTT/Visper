@@ -178,6 +178,39 @@ func (dc *DistributedCache) ZReplace(ctx context.Context, key, oldMember, newMem
 	return n == 1, nil
 }
 
+// zAppendNextScript adds a member at score ARGV[2] only if the set's highest
+// score is ARGV[2]-1 (or the set is empty and ARGV[2] is 1), then drops every
+// lower score and deletes KEYS[2].
+var zAppendNextScript = redis.NewScript(`
+local top = redis.call('ZRANGE', KEYS[1], -1, -1, 'WITHSCORES')
+local current = 0
+if #top == 2 then current = tonumber(top[2]) end
+local next = tonumber(ARGV[2])
+if next ~= current + 1 then return current end
+redis.call('ZADD', KEYS[1], next, ARGV[1])
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', '(' .. next)
+redis.call('DEL', KEYS[2])
+return -1
+`)
+
+// ZAppendNext atomically adds member to a sorted set at score next, if next
+// follows the set's highest score (an empty set counts as 0), keeping only
+// that member and deleting alsoDelete. It returns ok and, when not ok, the
+// set's current highest score.
+func (dc *DistributedCache) ZAppendNext(ctx context.Context, key, member string, next int64, alsoDelete string) (bool, int64, error) {
+	n, err := zAppendNextScript.Run(ctx, dc.redis,
+		[]string{dc.keyPrefix + key, dc.keyPrefix + alsoDelete},
+		member, strconv.FormatInt(next, 10)).Int64()
+	if err != nil {
+		return false, 0, err
+	}
+	if n == -1 {
+		dc.local.Delete(alsoDelete)
+		return true, next, nil
+	}
+	return false, n, nil
+}
+
 // ZRemRangeByScore removes members from a sorted set by score range
 func (dc *DistributedCache) ZRemRangeByScore(ctx context.Context, key, min, max string) error {
 	redisKey := dc.keyPrefix + key

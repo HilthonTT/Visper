@@ -21,6 +21,8 @@ const (
 	NotFound
 	Gone
 	TooLarge
+	// Conflict means the request was made against out-of-date state.
+	Conflict
 )
 
 // Error is an error of a given kind with a message safe to show to clients.

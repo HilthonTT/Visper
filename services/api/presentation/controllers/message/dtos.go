@@ -3,7 +3,7 @@ package message
 import "time"
 
 type SendMessageRequest struct {
-	Content   string `json:"content" binding:"required,max=1000"`
+	Content   string `json:"content" binding:"required,max=4000"`
 	Encrypted bool   `json:"encrypted"`
 	ReplyToID string `json:"reply_to_id" binding:"omitempty,max=64"`
 }
@@ -11,7 +11,7 @@ type SendMessageRequest struct {
 // SetReactionRequest sets the caller's reaction; the emoji is encrypted by
 // the client like message content.
 type SetReactionRequest struct {
-	Emoji     string `json:"emoji" binding:"required,max=256"`
+	Emoji     string `json:"emoji" binding:"required,max=512"`
 	Encrypted bool   `json:"encrypted"`
 }
 
@@ -22,7 +22,7 @@ type ReactionResponse struct {
 }
 
 type UpdateMessageRequest struct {
-	Content   string `json:"content" binding:"required,max=1000"`
+	Content   string `json:"content" binding:"required,max=4000"`
 	Encrypted bool   `json:"encrypted"`
 }
 
@@ -34,6 +34,9 @@ type MessageResponse struct {
 	Content   string    `json:"content"`
 	Encrypted bool      `json:"encrypted"`
 	CreatedAt time.Time `json:"created_at"`
+	// UpdatedAt is when the content was last edited, if ever. Clients check
+	// that an edit was signed around then.
+	UpdatedAt time.Time `json:"updated_at,omitzero"`
 	ReplyToID string    `json:"reply_to_id,omitempty"`
 	// Reactions are always present (possibly empty) so clients can replace
 	// their list.

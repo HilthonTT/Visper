@@ -133,6 +133,15 @@ func (r *roomRepository) Delete(ctx context.Context, id string) error {
 		return err
 	}
 
+	// And the room's key cards and rekeys (see roomKeyRepository).
+	for _, key := range []string{roomCardsKey(id), roomRekeysKey(id), roomDepartedKey(id)} {
+		if err := r.cache.Delete(ctx, key); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to delete room keys")
+			return err
+		}
+	}
+
 	if err := r.cache.SRem(ctx, "rooms", id); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to remove room from rooms set")

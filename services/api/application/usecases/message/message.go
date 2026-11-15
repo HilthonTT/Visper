@@ -18,10 +18,12 @@ import (
 )
 
 const (
-	maxMessageLength = 2000
-	// maxReactionLength bounds an encrypted reaction (base64 of nonce, tag
-	// and a short emoji sequence).
-	maxReactionLength = 256
+	// maxMessageLength bounds message content: a signed, encrypted envelope
+	// (see the Go SDK's MaxContentLength).
+	maxMessageLength = 4000
+	// maxReactionLength bounds an encrypted reaction (base64 of nonce, tag,
+	// signature and a short signed envelope).
+	maxReactionLength = 512
 
 	defaultMessageLimit = 50
 	maxMessageLimit     = 200

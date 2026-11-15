@@ -21,5 +21,9 @@ func RoomRoutes(router *gin.RouterGroup, controller room.RoomController) {
 		rooms.POST("/:id/leave", controller.LeaveRoom)
 		rooms.GET("/:id/membership", controller.CheckMembership)
 		rooms.POST("/:id/membership/:userId", controller.KickMember)
+
+		rooms.GET("/:id/crypto", controller.GetCryptoState)
+		rooms.PUT("/:id/crypto/card", controller.PutKeyCard)
+		rooms.POST("/:id/crypto/rekey", controller.PostRekey)
 	}
 }

@@ -11,11 +11,14 @@ type WSMessage struct {
 }
 
 type MessagePayload struct {
-	ID        string            `json:"id"`
-	Content   string            `json:"content"`
-	UserID    string            `json:"userId"`
-	Username  string            `json:"username"`
-	Timestamp string            `json:"timestamp"`
+	ID        string `json:"id"`
+	Content   string `json:"content"`
+	UserID    string `json:"userId"`
+	Username  string `json:"username"`
+	Timestamp string `json:"timestamp"`
+	// UpdatedAt is when the content was last edited, if ever: clients check
+	// that an edit (which history replays as the content) was signed then.
+	UpdatedAt string            `json:"updatedAt,omitempty"`
 	Encrypted bool              `json:"encrypted"`
 	ReplyToID string            `json:"replyToId,omitempty"`
 	Reactions []ReactionPayload `json:"reactions,omitempty"`
@@ -76,6 +79,11 @@ type RoomUpdatedPayload struct {
 	JoinCode string `json:"joinCode"`
 }
 
+type MemberCardPayload struct {
+	UserID string `json:"userId"`
+	Card   string `json:"card"`
+}
+
 type ErrorKickedPayload struct {
 	UserID   string `json:"userId"`
 	Username string `json:"username"`
@@ -83,6 +91,10 @@ type ErrorKickedPayload struct {
 }
 
 func NewMessageReceived(roomID string, m *model.Message) *WSMessage {
+	var updatedAt string
+	if !m.UpdatedAt.IsZero() && m.UpdatedAt.After(m.CreatedAt) {
+		updatedAt = m.UpdatedAt.UTC().Format("2006-01-02T15:04:05.000Z07:00")
+	}
 	return &WSMessage{
 		Type:   MessageReceived,
 		RoomID: roomID,
@@ -93,6 +105,7 @@ func NewMessageReceived(roomID string, m *model.Message) *WSMessage {
 			Username: m.Username,
 			// Millisecond precision so clients can order messages sent within the same second.
 			Timestamp: m.CreatedAt.UTC().Format("2006-01-02T15:04:05.000Z07:00"),
+			UpdatedAt: updatedAt,
 			Encrypted: m.Encrypted,
 			ReplyToID: m.ReplyToID,
 			Reactions: toReactionPayloads(m.Reactions),
@@ -202,6 +215,16 @@ func NewRoomUpdated(roomID, joinCode string) *WSMessage {
 			JoinCode: joinCode,
 		},
 	}
+}
+
+func NewMemberCard(roomID, userID, card string) *WSMessage {
+	return &WSMessage{Type: MemberCard, RoomID: roomID, Data: MemberCardPayload{UserID: userID, Card: card}}
+}
+
+// NewRoomRekeyed relays a rekey; its keys are sealed, so all members get all
+// of it.
+func NewRoomRekeyed(roomID string, rekey *model.Rekey) *WSMessage {
+	return &WSMessage{Type: RoomRekeyed, RoomID: roomID, Data: rekey}
 }
 
 func NewErrorKicked(roomID, kickedUserID, kickedUsername, reason string) *WSMessage {

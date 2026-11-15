@@ -7,6 +7,7 @@ import (
 	fileUseCase "github.com/hilthontt/visper/services/api/application/usecases/file"
 	messageUseCase "github.com/hilthontt/visper/services/api/application/usecases/message"
 	roomUseCase "github.com/hilthontt/visper/services/api/application/usecases/room"
+	roomKeyUseCase "github.com/hilthontt/visper/services/api/application/usecases/roomkey"
 	userUseCase "github.com/hilthontt/visper/services/api/application/usecases/user"
 	"github.com/hilthontt/visper/services/api/domain/repository"
 	"github.com/hilthontt/visper/services/api/infrastructure/broker"
@@ -37,6 +38,7 @@ type Container struct {
 	MessageRepo  repository.MessageRepository
 	UserRepo     repository.UserRepository
 	RoomRepo     repository.RoomRepository
+	RoomKeyRepo  repository.RoomKeyRepository
 	FileRepo     repository.FileRepository
 	AuditLogRepo repository.AuditLogRepository
 
@@ -46,6 +48,7 @@ type Container struct {
 
 	MessageUC messageUseCase.MessageUseCase
 	RoomUC    roomUseCase.RoomUseCase
+	RoomKeyUC roomKeyUseCase.UseCase
 	UserUC    userUseCase.UserUseCase
 	FileUC    fileUseCase.FileUseCase
 

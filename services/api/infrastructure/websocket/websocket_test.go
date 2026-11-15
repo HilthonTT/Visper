@@ -318,3 +318,15 @@ func TestReadMarkersAreReplayedToNewConnections(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestMessageReceivedCarriesTheEditTime(t *testing.T) {
+	created := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	m := &model.Message{ID: "m1", CreatedAt: created}
+	if p := NewMessageReceived("r1", m).Data.(MessagePayload); p.UpdatedAt != "" {
+		t.Fatalf("unedited message: updatedAt = %q, want none", p.UpdatedAt)
+	}
+	m.UpdatedAt = created.Add(time.Hour)
+	if p := NewMessageReceived("r1", m).Data.(MessagePayload); p.UpdatedAt != "2026-01-01T11:00:00.000Z" {
+		t.Fatalf("edited message: updatedAt = %q", p.UpdatedAt)
+	}
+}

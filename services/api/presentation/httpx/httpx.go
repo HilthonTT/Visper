@@ -20,6 +20,7 @@ const (
 	CodeNotFound       = "not_found"
 	CodeGone           = "gone"
 	CodeTooLarge       = "too_large"
+	CodeConflict       = "conflict"
 	CodeInternal       = "internal_error"
 )
 
@@ -75,6 +76,8 @@ func statusOf(kind apperr.Kind) (int, string) {
 		return http.StatusGone, CodeGone
 	case apperr.TooLarge:
 		return http.StatusRequestEntityTooLarge, CodeTooLarge
+	case apperr.Conflict:
+		return http.StatusConflict, CodeConflict
 	default:
 		return http.StatusInternalServerError, CodeInternal
 	}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/hilthontt/visper/services/api/application/usecases/room"
+	"github.com/hilthontt/visper/services/api/application/usecases/roomkey"
 	"github.com/hilthontt/visper/services/api/application/usecases/user"
 	"github.com/hilthontt/visper/services/api/domain/model"
 	"github.com/hilthontt/visper/services/api/infrastructure/config"
@@ -30,11 +31,16 @@ type RoomController interface {
 	LeaveRoom(ctx *gin.Context)
 	CheckMembership(ctx *gin.Context)
 	KickMember(ctx *gin.Context)
+
+	GetCryptoState(ctx *gin.Context)
+	PutKeyCard(ctx *gin.Context)
+	PostRekey(ctx *gin.Context)
 }
 
 type roomController struct {
 	usecase     room.RoomUseCase
 	userUsecase user.UserUseCase
+	keys        roomkey.UseCase
 	wsCore      *websocket.Core
 	config      *config.Config
 }
@@ -42,12 +48,14 @@ type roomController struct {
 func NewRoomController(
 	usecase room.RoomUseCase,
 	userUsecase user.UserUseCase,
+	keys roomkey.UseCase,
 	wsCore *websocket.Core,
 	config *config.Config,
 ) RoomController {
 	return &roomController{
 		usecase:     usecase,
 		userUsecase: userUsecase,
+		keys:        keys,
 		wsCore:      wsCore,
 		config:      config,
 	}
@@ -248,6 +256,7 @@ func (c *roomController) LeaveRoom(ctx *gin.Context) {
 	}
 
 	security.ClearRoomAuth(ctx.Writer, roomID)
+	c.markDeparted(ctx, roomID, user.ID)
 	c.wsCore.Publish(websocket.NewMemberLeft(roomID, user.ID, user.Username))
 
 	ctx.JSON(http.StatusOK, httpx.SuccessResponse{Message: "successfully left room"})
@@ -296,6 +305,7 @@ func (c *roomController) KickMember(ctx *gin.Context) {
 		httpx.Error(ctx, err)
 		return
 	}
+	c.markDeparted(ctx, roomID, kickedID)
 	kicked, err := c.userUsecase.GetByID(ctx.Request.Context(), kickedID)
 	if err != nil {
 		// The member is out either way; announce them by ID alone.

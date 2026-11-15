@@ -26,4 +26,9 @@ const (
 
 	RoomDeleted = "room.deleted"
 	RoomUpdated = "room.updated"
+
+	// MemberCard carries a key card a member published.
+	MemberCard = "member.card"
+	// RoomRekeyed carries a new room key, sealed to each member.
+	RoomRekeyed = "room.rekeyed"
 )

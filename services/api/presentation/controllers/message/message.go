@@ -263,6 +263,7 @@ func toMessageResponse(msg *model.Message) MessageResponse {
 		Username:  msg.Username,
 		Content:   msg.Content,
 		CreatedAt: msg.CreatedAt,
+		UpdatedAt: msg.UpdatedAt,
 		Encrypted: msg.Encrypted,
 		ReplyToID: msg.ReplyToID,
 		Reactions: reactions,

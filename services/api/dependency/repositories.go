@@ -36,6 +36,7 @@ func (c *Container) initRepositories() {
 	c.MessageRepo = repository.NewMessageRepository(distributedCache, tracer)
 	c.UserRepo = repository.NewUserRepository(distributedCache, tracer)
 	c.RoomRepo = repository.NewRoomRepository(distributedCache, c.UserRepo, tracer)
+	c.RoomKeyRepo = repository.NewRoomKeyRepository(distributedCache)
 	c.FileRepo = repository.NewFileRepository(redisClient, c.RoomRepo)
 	c.AuditLogRepo = repository.NewAuditLogRepository(c.Logger.Log)
 
