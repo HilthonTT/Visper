@@ -499,6 +499,15 @@ func (rc *RoomCrypto) MarkDeparted(userID string) {
 	rc.departed[userID] = true
 }
 
+// ClearDeparted forgets that userID departed, for when they rejoin; without
+// it a member who left and came back was silently left out of every later
+// rekey.
+func (rc *RoomCrypto) ClearDeparted(userID string) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	delete(rc.departed, userID)
+}
+
 // IsOwner reports whether this client owns the room.
 func (rc *RoomCrypto) IsOwner() bool { return rc.me.userID == rc.ownerID }
 

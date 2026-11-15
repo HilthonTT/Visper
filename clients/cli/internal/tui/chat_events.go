@@ -266,6 +266,11 @@ func (m model) removeMessage(messageID string) model {
 }
 
 func (m model) memberJoinedUpdate(msg memberJoinedMsg) (model, tea.Cmd) {
+	// Only members can connect, so someone who departed and is back must be
+	// included in rekeys again.
+	if rc := m.state.chat.crypto; rc != nil {
+		rc.ClearDeparted(msg.member.ID)
+	}
 	if !m.state.chat.members.add(msg.member) || m.isCurrentUser(msg.member.ID) {
 		return m, m.waitForRoomEvent()
 	}

@@ -338,3 +338,20 @@ func TestEditedMessageInHistory(t *testing.T) {
 		t.Fatalf("edit without the edit time: err = %v, want ErrReplayed", err)
 	}
 }
+
+func TestRejoinedMemberIsRekeyedAgain(t *testing.T) {
+	m := newRoom(t, "alice", "bob")
+	alice := m[0].rc
+	alice.MarkDeparted("bob")
+	if rekey, _, _, err := alice.NewRekey([]string{"alice", "bob"}, 0); err != nil || len(rekey.Keys) != 0 {
+		t.Fatalf("departed bob: keys = %v, err = %v; want none", rekey, err)
+	}
+	alice.ClearDeparted("bob")
+	rekey, _, _, err := alice.NewRekey([]string{"alice", "bob"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rekey.Keys["bob"]; !ok {
+		t.Fatalf("rejoined bob not sealed into rekey: %v", rekey.Keys)
+	}
+}

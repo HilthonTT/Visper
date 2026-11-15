@@ -642,6 +642,14 @@ export class RoomCrypto {
 	}
 
 	/**
+	 * Forgets that userId departed, for when they rejoin; without it a member
+	 * who left and came back was silently left out of every later rekey.
+	 */
+	clearDeparted(userId: string): void {
+		this.departed.delete(userId);
+	}
+
+	/**
 	 * Makes a new room key for `members` (owner only): the signed rekey to
 	 * post, the new key, and the members without a card (who can't get it).
 	 * Call commitKey once the API accepted it.

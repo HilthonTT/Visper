@@ -255,6 +255,11 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 				return;
 			}
 			dispatch(action);
+			if (action.type === "joined") {
+				// Only members can connect: someone who departed and is back
+				// must be included in rekeys again.
+				crypto.clearDeparted(action.member.id);
+			}
 			if (
 				(action.type === "left" || action.type === "kicked") &&
 				action.userId !== me

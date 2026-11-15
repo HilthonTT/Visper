@@ -284,6 +284,16 @@ describe("files", () => {
 });
 
 describe("rekeying", () => {
+	it("includes a departed member again once they rejoin", async () => {
+		const [alice] = newRoom("alice", "bob");
+		alice.markDeparted("bob");
+		const first = await alice.newRekey(["alice", "bob"], 0);
+		expect(first.rekey.keys?.bob).toBeUndefined();
+		alice.clearDeparted("bob");
+		const second = await alice.newRekey(["alice", "bob"], 0);
+		expect(second.rekey.keys?.bob).toBeDefined();
+	});
+
 	it("leaves the departed member out and keeps history readable", async () => {
 		const [alice, bob, mallory] = newRoom("alice", "bob", "mallory");
 		const before = bob.sealMessage("before");
