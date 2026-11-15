@@ -54,6 +54,11 @@ export const ImageMessage = ({
 					throw new Error("image too large");
 				}
 				const plain = new Uint8Array(await crypto.decryptFile(data, fileHash));
+				if (controller.signal.aborted) {
+					// Unmounted while decrypting: cleanup already ran, so a URL
+					// made now would never be revoked.
+					return;
+				}
 				objectUrl = URL.createObjectURL(
 					new Blob([plain], { type: imageMimeType(imageName(content)) }),
 				);
