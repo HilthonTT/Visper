@@ -177,6 +177,9 @@ func (m model) messageContentView(msg apisdk.MessageResponse, width int) string 
 	}
 	if isImageURL(msg.Content) {
 		images := m.state.chat.images
+		if images.mismatched[msg.ID] {
+			return m.theme.TextSubtle().Italic(true).Render("[image doesn't match its message]")
+		}
 		if images.failed[msg.ID] {
 			return m.theme.TextSubtle().Italic(true).Render("[image unavailable]")
 		}

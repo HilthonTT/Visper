@@ -43,7 +43,8 @@ func TestMessageListAfterEscapesTimestamp(t *testing.T) {
 }
 
 func TestMessageSendEncryptsAndDecrypts(t *testing.T) {
-	keyB64, _ := GenerateKeyBase64()
+	rc := selfRoomCrypto(t, "u1")
+	now := time.Now().UTC().Truncate(time.Millisecond)
 	var sent SendMessageParams
 	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/rooms/r1/messages" || r.Method != http.MethodPost {
@@ -55,11 +56,10 @@ func TestMessageSendEncryptsAndDecrypts(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"id": "m1", "room_id": "r1", "user_id": "u1", "content": sent.Content, "encrypted": sent.Encrypted,
-			"created_at": "2026-01-01T00:00:00Z",
+			"created_at": now.Format(time.RFC3339Nano),
 		})
 	}))
-	client.Message.SetEncryptionKey(keyB64)
-	client.Message.SetSender("u1")
+	client.Message.SetRoomCrypto(rc)
 
 	res, err := client.Message.Send(context.Background(), "r1", SendMessageParams{Content: "hello"})
 	if err != nil {
@@ -71,7 +71,7 @@ func TestMessageSendEncryptsAndDecrypts(t *testing.T) {
 	if res.Content != "hello" || res.Encrypted {
 		t.Fatalf("response not decrypted: %+v", res)
 	}
-	if !res.CreatedAt.Equal(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) {
+	if !res.CreatedAt.Equal(now) {
 		t.Fatalf("CreatedAt = %v", res.CreatedAt)
 	}
 }
@@ -130,6 +130,7 @@ func TestJoinByCodeWithToken(t *testing.T) {
 
 func TestFileUploadEncryptsContentAndHidesName(t *testing.T) {
 	keyB64, _ := NewRoomKey()
+	var uploaded []byte
 	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/rooms/r1/files/upload" {
 			t.Errorf("path = %s", r.URL.Path)
@@ -151,6 +152,7 @@ func TestFileUploadEncryptsContentAndHidesName(t *testing.T) {
 			if plain, err := DecryptFile(b, keyB64); err != nil || string(plain) != "png-bytes" {
 				t.Errorf("DecryptFile = %q, %v", plain, err)
 			}
+			uploaded = b
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
@@ -167,6 +169,9 @@ func TestFileUploadEncryptsContentAndHidesName(t *testing.T) {
 	}
 	if res.URL != "http://x/d/r1/f1.enc" || res.CreatedAt.IsZero() || res.Uploader.ID != "u1" {
 		t.Fatalf("unexpected response %+v", res)
+	}
+	if res.Hash == "" || res.Hash != FileHash(uploaded) {
+		t.Fatalf("Hash = %q, want the hash of the uploaded ciphertext", res.Hash)
 	}
 }
 
@@ -341,7 +346,7 @@ func TestWebSocketCloseDoesNotWaitForBlockedWriter(t *testing.T) {
 }
 
 func TestReactionsAreEncryptedAndDecrypted(t *testing.T) {
-	keyB64, _ := GenerateKeyBase64()
+	rc := selfRoomCrypto(t, "u1")
 	var sent SetReactionParams
 	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/rooms/r1/messages/m1/reaction" || r.Method != http.MethodPut {
@@ -354,8 +359,7 @@ func TestReactionsAreEncryptedAndDecrypted(t *testing.T) {
 			"reactions": []map[string]any{{"user_id": "u1", "emoji": sent.Emoji, "encrypted": sent.Encrypted}},
 		})
 	}))
-	client.Message.SetEncryptionKey(keyB64)
-	client.Message.SetSender("u1")
+	client.Message.SetRoomCrypto(rc)
 
 	res, err := client.Message.SetReaction(context.Background(), "r1", "m1", "👍")
 	if err != nil {
@@ -382,5 +386,73 @@ func TestSendReplyCarriesReplyToID(t *testing.T) {
 	}
 	if body["reply_to_id"] != "m1" || res.ReplyToID != "m1" {
 		t.Fatalf("request %v, response %+v", body, res)
+	}
+}
+
+// selfRoomCrypto returns crypto state for userID in a new room, knowing its
+// own key card.
+func selfRoomCrypto(t *testing.T, userID string) *RoomCrypto {
+	t.Helper()
+	id, err := NewIdentity(userID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, _ := NewRoomKey()
+	rc, err := NewRoomCrypto(id, "r1", userID, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	card, err := rc.MyCard()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rc.AddCard(userID, card); err != nil {
+		t.Fatal(err)
+	}
+	return rc
+}
+
+func TestGetCryptoStateDecodes(t *testing.T) {
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/rooms/r1/crypto" || r.Method != http.MethodGet {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"key_epoch":2,"rekey_needed":true,
+			"rekey":{"epoch":2,"keys":{"u2":"c2VhbGVk"},"signature":"c2ln"},
+			"cards":{"u1":["a","b"],"u2":["c"]},"members":["u1","u2"]}`)
+	}))
+	state, err := client.Room.GetCryptoState(context.Background(), "r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.KeyEpoch != 2 || !state.RekeyNeeded || len(state.Members) != 2 {
+		t.Fatalf("state = %+v", state)
+	}
+	if state.Rekey == nil || state.Rekey.Epoch != 2 || state.Rekey.Keys["u2"] != "c2VhbGVk" || state.Rekey.Signature != "c2ln" {
+		t.Fatalf("rekey = %+v", state.Rekey)
+	}
+	if len(state.Cards["u1"]) != 2 || state.Cards["u2"][0] != "c" {
+		t.Fatalf("cards = %+v", state.Cards)
+	}
+}
+
+func TestPostRekeySendsTheRekey(t *testing.T) {
+	var body map[string]any
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/rooms/r1/crypto/rekey" || r.Method != http.MethodPost {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"message":"ok"}`)
+	}))
+	err := client.Room.PostRekey(context.Background(), "r1", Rekey{Epoch: 3, Keys: map[string]string{"u2": "s"}, Signature: "sig"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, _ := body["keys"].(map[string]any)
+	if body["epoch"] != float64(3) || body["signature"] != "sig" || keys["u2"] != "s" {
+		t.Fatalf("body = %v", body)
 	}
 }

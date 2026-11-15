@@ -53,9 +53,10 @@ func TestIsImageURL(t *testing.T) {
 }
 
 func TestMaxEncryptedMessageBytesFitsServerLimit(t *testing.T) {
-	// base64(nonce || secretbox(plaintext)) must not exceed maxMessageLen.
-	const nonce, overhead = 24, 16
-	n := maxEncryptedMessageBytes + nonce + overhead
+	// base64(nonce || secretbox(0x02 || signature || envelope)) must not
+	// exceed maxMessageLen.
+	const nonce, overhead, signed = 24, 16, 1 + 64
+	n := maxEncryptedMessageBytes + nonce + overhead + signed
 	if encoded := (n + 2) / 3 * 4; encoded > maxMessageLen {
 		t.Fatalf("encrypted length %d exceeds %d", encoded, maxMessageLen)
 	}

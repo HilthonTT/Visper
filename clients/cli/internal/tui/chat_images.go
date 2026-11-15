@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -52,6 +53,9 @@ type imageCache struct {
 	fetched  map[string][]byte
 	fetching map[string]bool
 	failed   map[string]bool
+	// mismatched holds images whose file is not the one their (signed)
+	// message names: the server swapped it, or the message had no hash.
+	mismatched map[string]bool
 	// previews are the images rendered for the current layout.
 	previews map[string]string
 }
@@ -64,16 +68,18 @@ type imageFetchedMsg struct {
 
 func newImageCache() imageCache {
 	return imageCache{
-		fetched:  make(map[string][]byte),
-		fetching: make(map[string]bool),
-		failed:   make(map[string]bool),
-		previews: make(map[string]string),
+		fetched:    make(map[string][]byte),
+		fetching:   make(map[string]bool),
+		failed:     make(map[string]bool),
+		mismatched: make(map[string]bool),
+		previews:   make(map[string]string),
 	}
 }
 
 // fetchImageFor starts downloading the image of msg if it is an image message
-// that isn't cached, being fetched or known to be broken.
-func (m model) fetchImageFor(messageID, content string) (model, tea.Cmd) {
+// that isn't cached, being fetched or known to be broken. An encrypted image
+// is checked against fileHash, the hash its signed message carries.
+func (m model) fetchImageFor(messageID, content, fileHash string) (model, tea.Cmd) {
 	c := &m.state.chat.images
 	if !isAutoLoadImage(content) || c.failed[messageID] || c.fetching[messageID] {
 		return m, nil
@@ -82,11 +88,15 @@ func (m model) fetchImageFor(messageID, content string) (model, tea.Cmd) {
 		return m, nil
 	}
 	c.fetching[messageID] = true
-	key := m.state.chat.roomKey
+	rc := m.state.chat.crypto
 	return m, func() tea.Msg {
 		bytes, err := fetchImageBytes(content)
 		if err == nil && isEncryptedImageURL(content) {
-			bytes, err = apisdk.DecryptFile(bytes, key)
+			if rc == nil {
+				err = apisdk.ErrDecryptionFailed
+			} else {
+				bytes, err = rc.DecryptFile(bytes, fileHash)
+			}
 		}
 		return imageFetchedMsg{messageID: messageID, bytes: bytes, err: err}
 	}
@@ -98,6 +108,9 @@ func (m model) imageFetchedUpdate(msg imageFetchedMsg) model {
 	if msg.err != nil {
 		log.Printf("Failed to fetch image for message %s: %v", msg.messageID, msg.err)
 		c.failed[msg.messageID] = true
+		if errors.Is(msg.err, apisdk.ErrFileMismatch) {
+			c.mismatched[msg.messageID] = true
+		}
 	} else {
 		c.fetched[msg.messageID] = msg.bytes
 		m = m.renderImagePreview(msg.messageID)

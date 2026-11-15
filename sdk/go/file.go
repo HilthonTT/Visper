@@ -39,6 +39,10 @@ type FileResponse struct {
 	URL       string       `json:"url"`
 	CreatedAt time.Time    `json:"createdAt"`
 	Uploader  FileUploader `json:"uploader"`
+	// Hash is the FileHash of the uploaded ciphertext, set by
+	// UploadEncrypted. Send it with the message pointing to the file
+	// (SendMessageParams.FileHash) so readers can check the download.
+	Hash string `json:"-"`
 }
 
 func (r *FileResponse) UnmarshalJSON(data []byte) error {
@@ -110,5 +114,6 @@ func (s *FileService) UploadEncrypted(ctx context.Context, roomID, filePath, key
 	if err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, nil, res, opts...); err != nil {
 		return nil, fmt.Errorf("upload failed: %w", err)
 	}
+	res.Hash = FileHash(ciphertext)
 	return res, nil
 }

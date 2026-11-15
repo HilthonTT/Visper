@@ -45,6 +45,11 @@ const (
 
 	RoomDeleted = "room.deleted"
 	RoomUpdated = "room.updated"
+
+	// MemberCard carries a key card a member published (MemberCardPayload).
+	MemberCard = "member.card"
+	// RoomRekeyed carries a new room key, sealed to each member (Rekey).
+	RoomRekeyed = "room.rekeyed"
 )
 
 type WSMessage struct {
@@ -59,6 +64,7 @@ type MessagePayload struct {
 	UserID    string            `json:"userId"`
 	Username  string            `json:"username"`
 	Timestamp string            `json:"timestamp"`
+	UpdatedAt string            `json:"updatedAt,omitempty"`
 	Encrypted bool              `json:"encrypted"`
 	ReplyToID string            `json:"replyToId,omitempty"`
 	Reactions []ReactionPayload `json:"reactions,omitempty"`
@@ -128,6 +134,12 @@ type BootPayload struct {
 
 type RoomDeletedPayload struct {
 	RoomID string `json:"roomid"`
+}
+
+// MemberCardPayload is the payload of a [MemberCard] event.
+type MemberCardPayload struct {
+	UserID string `json:"userId"`
+	Card   string `json:"card"`
 }
 
 type RoomUpdatedPayload struct {

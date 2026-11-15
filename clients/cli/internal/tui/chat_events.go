@@ -37,7 +37,7 @@ func (m model) chatEventUpdate(msg tea.Msg) (_ model, _ tea.Cmd, handled bool) {
 			return m, nil, true
 		}
 		m.state.chat.ws = msg.conn
-		return m, listenRoom(msg.session, msg.conn, m.state.chat.roomKey), true
+		return m, listenRoom(msg.session, msg.conn, m.state.chat.crypto), true
 	case roomConnectFailedMsg:
 		if msg.session != m.state.chat.session || msg.session.Err() != nil {
 			return m, nil, true // we already left this room
@@ -57,15 +57,27 @@ func (m model) chatEventUpdate(msg tea.Msg) (_ model, _ tea.Cmd, handled bool) {
 	case roomErrorMsg:
 		m, cmd = m.roomErrorUpdate(msg)
 
+	// Keys
+	case cryptoSyncedMsg:
+		m, cmd = m.cryptoSyncedUpdate(msg)
+	case rekeyAppliedMsg:
+		m, cmd = m.rekeyAppliedUpdate()
+	case rekeyRejectedMsg:
+		m, cmd = m.toast(theme.ToneDanger, "Ignored a new room key that wasn't signed by the room's owner.")
+		cmd = tea.Batch(cmd, m.waitForRoomEvent())
+	case keyRotatedMsg:
+		m, cmd = m.keyRotatedUpdate(msg)
+
 	// Messages
 	case messageReceivedMsg:
 		m, cmd = m.messageReceivedUpdate(msg)
 	case messageUpdatedMsg:
 		for i := range m.state.chat.messages {
 			if message := &m.state.chat.messages[i]; message.ID == msg.messageID {
-				// Only the message's (verified) author can have sealed the edit.
-				message.Content = decryptContent(m.state.chat.roomKey, msg.content, msg.encrypted,
-					sealedAs{edit: true, from: message.UserID, messageID: message.ID})
+				// Only the message's (verified) author can have signed the edit.
+				opened := decryptContent(m.state.chat.crypto, msg.content, msg.encrypted,
+					sealedAs{edit: true, from: message.UserID, messageID: message.ID, at: msg.at})
+				message.Content, message.FileHash = opened.text, opened.fileHash
 				break
 			}
 		}
@@ -88,7 +100,9 @@ func (m model) chatEventUpdate(msg tea.Msg) (_ model, _ tea.Cmd, handled bool) {
 			m.state.chat.companion.mood = "bye bye~"
 			m, cmd = m.toast(theme.ToneInfo, name+" left")
 		}
-		cmd = tea.Batch(cmd, m.waitForRoomEvent())
+		var rotateCmd tea.Cmd
+		m, rotateCmd = m.memberDeparted(msg.userID)
+		cmd = tea.Batch(cmd, rotateCmd, m.waitForRoomEvent())
 	case memberListMsg:
 		s := &m.state.chat.members
 		s.list = msg.members
@@ -193,7 +207,7 @@ func (m model) messageReceivedUpdate(msg messageReceivedMsg) (model, tea.Cmd) {
 	// A message ends its author's "typing…".
 	delete(c.social.typing, msg.message.UserID)
 
-	m, fetchCmd := m.fetchImageFor(msg.message.ID, msg.message.Content)
+	m, fetchCmd := m.fetchImageFor(msg.message.ID, msg.message.Content, msg.message.FileHash)
 
 	own := m.isCurrentUser(msg.message.UserID)
 	if own {
@@ -271,11 +285,12 @@ func (m model) kickedUpdate(msg kickedMsg) (model, tea.Cmd) {
 
 	name := m.state.chat.members.name(msg.userID)
 	m.state.chat.members.remove(msg.userID)
+	m, rotateCmd := m.memberDeparted(msg.userID)
 	if name == "" {
-		return m, m.waitForRoomEvent()
+		return m, tea.Batch(rotateCmd, m.waitForRoomEvent())
 	}
 	m, cmd := m.toast(theme.ToneWarning, name+" was kicked")
-	return m, tea.Batch(cmd, m.waitForRoomEvent())
+	return m, tea.Batch(cmd, rotateCmd, m.waitForRoomEvent())
 }
 
 func (m model) uploadResultUpdate(msg uploadResultMsg) (model, tea.Cmd) {
@@ -290,5 +305,5 @@ func (m model) uploadResultUpdate(msg uploadResultMsg) (model, tea.Cmd) {
 		return m, nil
 	}
 	m.state.chat.companion.mood = "cute pic!"
-	return m, m.sendContent("send image message", msg.fileURL, "")
+	return m, m.sendContent("send image message", msg.fileURL, "", msg.fileHash)
 }

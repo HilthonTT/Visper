@@ -13,11 +13,12 @@ import (
 )
 
 // The API rejects message content longer than maxMessageLen characters. For
-// encrypted rooms that limit applies to the base64 ciphertext (24-byte nonce +
-// 16-byte MAC + sealed envelope), which caps the envelope (the text plus its
-// sender and kind, see apisdk.SealMessage) at 710 bytes.
+// encrypted rooms that limit applies to the base64 ciphertext (24-byte nonce,
+// 16-byte MAC, signature and the signed envelope), which caps the envelope
+// (the text plus its sender, kind, nonce and time, see apisdk.RoomCrypto) at
+// apisdk.MaxSealedBytes.
 const (
-	maxMessageLen            = 1000
+	maxMessageLen            = apisdk.MaxContentLength
 	maxEncryptedMessageBytes = apisdk.MaxSealedBytes
 )
 
@@ -38,8 +39,11 @@ type (
 	}
 	uploadResultMsg struct {
 		fileURL string
-		err     error
-		session context.Context
+		// fileHash is the hash of the uploaded ciphertext, sealed into the
+		// message so readers can check the file they download.
+		fileHash string
+		err      error
+		session  context.Context
 	}
 )
 
@@ -73,8 +77,8 @@ func (m model) roomRequest(action string, fn func(ctx context.Context, client *a
 // against (bytes for encrypted rooms, characters otherwise).
 func (m model) messageLength() (int, int) {
 	v := m.state.chat.messageInput.Value()
-	if m.state.chat.encrypted() {
-		return apisdk.SealedMessageSize(m.userID, "", v), maxEncryptedMessageBytes
+	if rc := m.state.chat.crypto; rc != nil {
+		return rc.SealedSize("", v, ""), maxEncryptedMessageBytes
 	}
 	return len([]rune(v)), maxMessageLen
 }
@@ -86,9 +90,9 @@ func (m model) checkMessageLength(content, messageID string) (string, bool) {
 	if err := validate.NotEmpty("message")(content); err != nil {
 		return "Messages can't be empty", false
 	}
-	if m.state.chat.encrypted() {
-		if apisdk.SealedMessageSize(m.userID, messageID, content) > maxEncryptedMessageBytes {
-			budget := maxEncryptedMessageBytes - apisdk.SealedMessageSize(m.userID, messageID, "")
+	if rc := m.state.chat.crypto; rc != nil {
+		if rc.SealedSize(messageID, content, "") > maxEncryptedMessageBytes {
+			budget := maxEncryptedMessageBytes - rc.SealedSize(messageID, "", "")
 			return fmt.Sprintf("Encrypted messages can be up to about %d bytes", budget), false
 		}
 		return "", true
@@ -114,14 +118,15 @@ func (m model) sendMessage() (model, tea.Cmd) {
 	m.state.chat.messageInput.SetValue("")
 	m.state.chat.viewport.GotoBottom()
 	m.state.chat.unread = 0
-	return m, m.sendContent("send message", content, replyTo)
+	return m, m.sendContent("send message", content, replyTo, "")
 }
 
-// sendContent posts a message, answering replyTo if set; the SDK encrypts it
-// (and sets the encrypted flag) when the room has a key.
-func (m model) sendContent(action, content, replyTo string) tea.Cmd {
+// sendContent posts a message, answering replyTo if set; the SDK signs and
+// encrypts it (and sets the encrypted flag) in an encrypted room. fileHash is
+// the hash of the file an image message points to, or "".
+func (m model) sendContent(action, content, replyTo, fileHash string) tea.Cmd {
 	return m.roomRequest(action, func(ctx context.Context, c *apisdk.Client, roomID string, opts []option.RequestOption) error {
-		_, err := c.Message.Send(ctx, roomID, apisdk.SendMessageParams{Content: content, ReplyToID: replyTo}, opts...)
+		_, err := c.Message.Send(ctx, roomID, apisdk.SendMessageParams{Content: content, ReplyToID: replyTo, FileHash: fileHash}, opts...)
 		return err
 	})
 }
@@ -153,7 +158,9 @@ func (m model) generateJoinCode() tea.Cmd {
 	})
 }
 
-// rewriteDraft asks the AI to rewrite the draft message.
+// rewriteDraft asks the AI to rewrite the draft message. The AI service has
+// to read the draft, so it leaves this device unencrypted: the first time,
+// the user is asked to agree to that.
 func (m model) rewriteDraft() (model, tea.Cmd) {
 	content := m.state.chat.messageInput.Value()
 	if content == "" {
@@ -161,6 +168,9 @@ func (m model) rewriteDraft() (model, tea.Cmd) {
 	}
 	if m.state.chat.aiEnhancing {
 		return m, nil
+	}
+	if !m.aiConsent {
+		return m.openAIConsentDialog(), nil
 	}
 	m.state.chat.aiEnhancing = true
 
@@ -186,13 +196,17 @@ func (m model) uploadImage(path string) (model, tea.Cmd) {
 	m.state.chat.uploading = true
 
 	client, ctx, roomID, userToken, session := m.client, m.ctx, m.state.chat.room.ID, m.userToken, m.state.chat.session
-	key := m.state.chat.roomKey
+	key := m.state.chat.roomKey()
 	anim := m.restartAnim()
 	return m, tea.Batch(anim, func() tea.Msg {
 		result, err := client.File.UploadEncrypted(ctx, roomID, path, key, userToken)
 		if err != nil {
 			return uploadResultMsg{err: err, session: session}
 		}
-		return uploadResultMsg{fileURL: encryptedImageContent(result.URL, filepath.Base(path)), session: session}
+		return uploadResultMsg{
+			fileURL:  encryptedImageContent(result.URL, filepath.Base(path)),
+			fileHash: result.Hash,
+			session:  session,
+		}
 	})
 }

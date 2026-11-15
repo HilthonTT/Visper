@@ -29,7 +29,11 @@
   },
   {
     "question": "Is my chat private?",
-    "answer": "Chats are private to room members. Since no personal data is collected, your identity remains anonymous."
+    "answer": "Messages, reactions and images are end-to-end encrypted with the room's key and signed by their sender, so the server only stores ciphertext and members can't write as each other. When someone leaves or is kicked, the owner's app rotates the room key so they can't read what comes next (old invites stop working; press ctrl+p for the new one). No personal data is collected, so your identity remains anonymous."
+  },
+  {
+    "question": "Does AI rewrite (ctrl+a) keep my draft private?",
+    "answer": "No. To rewrite a draft, the AI service has to read it, so ctrl+a sends that draft to the Visper server's AI service unencrypted, where it is processed and briefly stored. You're asked to agree the first time in each session. Messages you send are always encrypted; only drafts you choose to rewrite are not."
   },
   {
     "question": "How many people can join a room?",

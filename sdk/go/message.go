@@ -19,9 +19,8 @@ import (
 type MessageService struct {
 	Options []option.RequestOption
 
-	mu            sync.RWMutex
-	encryptionKey string // Room encryption key (set when joining room)
-	sender        string // the current user's public ID, sealed into what we encrypt
+	mu     sync.RWMutex
+	crypto *RoomCrypto // the current room's keys (set when entering a room)
 }
 
 func NewMessageService(opts ...option.RequestOption) *MessageService {
@@ -29,47 +28,33 @@ func NewMessageService(opts ...option.RequestOption) *MessageService {
 	return m
 }
 
-// SetEncryptionKey sets the room's encryption key for automatic
-// encrypt/decrypt. Pass "" to disable encryption (e.g. after leaving a room).
-// It is safe to call concurrently with the other methods.
-func (m *MessageService) SetEncryptionKey(key string) {
+// SetRoomCrypto sets the current room's crypto state, which encrypts and
+// signs what is sent and decrypts and verifies what is read. Pass nil to stop
+// (e.g. after leaving a room). It is safe to call concurrently with the other
+// methods.
+func (m *MessageService) SetRoomCrypto(rc *RoomCrypto) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.encryptionKey = key
+	m.crypto = rc
 }
 
-// SetSender sets the current user's public ID (see UserIDFromToken). It is
-// sealed into everything encrypted, so readers can check who wrote it, and
-// must be set before sending to an encrypted room.
-func (m *MessageService) SetSender(userID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.sender = userID
-}
-
-func (m *MessageService) key() string {
+func (m *MessageService) roomCrypto() *RoomCrypto {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.encryptionKey
-}
-
-func (m *MessageService) keyAndSender() (string, string) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.encryptionKey, m.sender
+	return m.crypto
 }
 
 // Send encrypts and sends a message to a room
 func (m *MessageService) Send(ctx context.Context, roomID string, body SendMessageParams, opts ...option.RequestOption) (*MessageResponse, error) {
 	opts = slices.Concat(m.Options, opts)
-	key, sender := m.keyAndSender()
+	rc := m.roomCrypto()
 	if roomID == "" {
 		return nil, ErrMissingIDParameter
 	}
 
 	// Encrypt the message content before sending
-	if key != "" {
-		encryptedContent, err := SealMessage(body.Content, sender, "", key)
+	if rc != nil {
+		encryptedContent, err := rc.SealMessage(body.Content, body.FileHash)
 		if err != nil {
 			return nil, fmt.Errorf("encryption failed: %w", err)
 		}
@@ -85,13 +70,12 @@ func (m *MessageService) Send(ctx context.Context, roomID string, body SendMessa
 	}
 
 	// Decrypt response for convenience
-	if key != "" && res.Encrypted {
-		decrypted, err := OpenMessage(res.Content, key, res.UserID, res.ID)
+	if rc != nil && res.Encrypted {
+		opened, err := rc.OpenMessage(res.Content, res.UserID, res.ID, res.CreatedAt, res.UpdatedAt)
 		if err != nil {
 			return res, fmt.Errorf("decryption failed: %w", err)
 		}
-		res.Content = decrypted
-		res.Encrypted = false
+		res.Content, res.FileHash, res.Encrypted = opened.Text, opened.FileHash, false
 	}
 
 	return res, nil
@@ -102,14 +86,14 @@ func (m *MessageService) Send(ctx context.Context, roomID string, body SendMessa
 // content. It returns the message with its new reactions, decrypted.
 func (m *MessageService) SetReaction(ctx context.Context, roomID, messageID, emoji string, opts ...option.RequestOption) (*MessageResponse, error) {
 	opts = slices.Concat(m.Options, opts)
-	key, sender := m.keyAndSender()
+	rc := m.roomCrypto()
 	if roomID == "" || messageID == "" {
 		return nil, ErrMissingIDParameter
 	}
 
 	body := SetReactionParams{Emoji: emoji}
-	if key != "" {
-		encrypted, err := SealReaction(emoji, sender, messageID, key)
+	if rc != nil {
+		encrypted, err := rc.SealReaction(messageID, emoji)
 		if err != nil {
 			return nil, fmt.Errorf("encryption failed: %w", err)
 		}
@@ -121,14 +105,14 @@ func (m *MessageService) SetReaction(ctx context.Context, roomID, messageID, emo
 	if err := requestconfig.ExecuteNewRequest(ctx, http.MethodPut, path, body, &res, opts...); err != nil {
 		return nil, err
 	}
-	decryptMessage(res, key)
+	DecryptMessage(res, rc)
 	return res, nil
 }
 
 // RemoveReaction removes the current user's reaction to a message.
 func (m *MessageService) RemoveReaction(ctx context.Context, roomID, messageID string, opts ...option.RequestOption) (*MessageResponse, error) {
 	opts = slices.Concat(m.Options, opts)
-	key := m.key()
+	rc := m.roomCrypto()
 	if roomID == "" || messageID == "" {
 		return nil, ErrMissingIDParameter
 	}
@@ -138,46 +122,46 @@ func (m *MessageService) RemoveReaction(ctx context.Context, roomID, messageID s
 	if err := requestconfig.ExecuteNewRequest(ctx, http.MethodDelete, path, nil, &res, opts...); err != nil {
 		return nil, err
 	}
-	decryptMessage(res, key)
+	DecryptMessage(res, rc)
 	return res, nil
 }
 
-// decryptMessage decrypts a message's content and reactions in place,
-// checking each against its sender (see OpenMessage). Failures are shown in
-// place of the text rather than failing the call.
-func decryptMessage(msg *MessageResponse, key string) {
-	msg.Content, msg.Encrypted = decryptField(msg.Content, msg.Encrypted, key, func(ct string) (string, error) {
-		return OpenMessage(ct, key, msg.UserID, msg.ID)
-	})
+// DecryptMessage decrypts and verifies a message's content and reactions in
+// place (see RoomCrypto.OpenMessage). Failures are shown in place of the
+// text rather than returned. A nil rc leaves the message as it is.
+func DecryptMessage(msg *MessageResponse, rc *RoomCrypto) {
+	if rc == nil {
+		return
+	}
+	if !msg.Encrypted {
+		// In an encrypted room, plaintext can only have come from the server.
+		msg.Content = FailedText(ErrUnverified)
+	} else if opened, err := rc.OpenMessage(msg.Content, msg.UserID, msg.ID, msg.CreatedAt, msg.UpdatedAt); err != nil {
+		msg.Content = FailedText(err)
+	} else {
+		msg.Content, msg.FileHash = opened.Text, opened.FileHash
+	}
+	msg.Encrypted = false
 	for i := range msg.Reactions {
 		r := &msg.Reactions[i]
-		r.Emoji, r.Encrypted = decryptField(r.Emoji, r.Encrypted, key, func(ct string) (string, error) {
-			return OpenReaction(ct, key, r.UserID, msg.ID)
-		})
+		if !r.Encrypted {
+			r.Emoji = FailedText(ErrUnverified)
+		} else if emoji, err := rc.OpenReaction(r.Emoji, r.UserID, msg.ID); err != nil {
+			r.Emoji = FailedText(err)
+		} else {
+			r.Emoji = emoji
+		}
+		r.Encrypted = false
 	}
 }
 
-// decryptField decrypts one encrypted field with open; it reports whether
-// the result is still encrypted (no key). In an encrypted room, plaintext
-// can only have come from the server, so it is not shown as the sender's.
-func decryptField(value string, encrypted bool, key string, open func(string) (string, error)) (string, bool) {
-	if key == "" {
-		return value, encrypted
-	}
-	if !encrypted {
-		return FailedText(ErrUnverified), false
-	}
-	decrypted, err := open(value)
-	if err != nil {
-		return FailedText(err), false
-	}
-	return decrypted, false
-}
-
-// FailedText is what to show in place of content that failed OpenMessage or
-// OpenReaction.
+// FailedText is what to show in place of content that failed to decrypt or
+// verify.
 func FailedText(err error) string {
-	if errors.Is(err, ErrUnverified) {
+	switch {
+	case errors.Is(err, ErrReplayed):
+		return "[Replayed message]"
+	case errors.Is(err, ErrUnverified):
 		return "[Unverified message]"
 	}
 	return "[Decryption failed]"
@@ -186,14 +170,14 @@ func FailedText(err error) string {
 // Update encrypts and updates a message
 func (m *MessageService) Update(ctx context.Context, roomID, messageID string, body UpdateMessageParams, opts ...option.RequestOption) (*MessageUpdatedResponse, error) {
 	opts = slices.Concat(m.Options, opts)
-	key, sender := m.keyAndSender()
+	rc := m.roomCrypto()
 	if roomID == "" || messageID == "" {
 		return nil, ErrMissingIDParameter
 	}
 
 	// Encrypt before updating, bound to this message
-	if key != "" {
-		encryptedContent, err := SealMessage(body.Content, sender, messageID, key)
+	if rc != nil {
+		encryptedContent, err := rc.SealEdit(messageID, body.Content)
 		if err != nil {
 			return nil, fmt.Errorf("encryption failed: %w", err)
 		}
@@ -209,12 +193,12 @@ func (m *MessageService) Update(ctx context.Context, roomID, messageID string, b
 	}
 
 	// Decrypt response
-	if key != "" && res.Encrypted {
-		decrypted, err := OpenEdit(res.Content, key, sender, messageID)
+	if rc != nil && res.Encrypted {
+		opened, err := rc.OpenEdit(res.Content, rc.Identity().UserID(), messageID, time.Time{})
 		if err != nil {
 			return res, fmt.Errorf("decryption failed: %w", err)
 		}
-		res.Content = decrypted
+		res.Content = opened.Text
 		res.Encrypted = false
 	}
 
@@ -224,7 +208,7 @@ func (m *MessageService) Update(ctx context.Context, roomID, messageID string, b
 // List retrieves and decrypts messages from a room
 func (m *MessageService) List(ctx context.Context, roomID string, query MessageListParams, opts ...option.RequestOption) (*MessagesResponse, error) {
 	opts = slices.Concat(m.Options, opts)
-	key := m.key()
+	rc := m.roomCrypto()
 	if roomID == "" {
 		return nil, ErrMissingIDParameter
 	}
@@ -241,7 +225,7 @@ func (m *MessageService) List(ctx context.Context, roomID string, query MessageL
 	}
 
 	for i := range res.Messages {
-		decryptMessage(&res.Messages[i], key)
+		DecryptMessage(&res.Messages[i], rc)
 	}
 
 	return res, nil
@@ -250,7 +234,7 @@ func (m *MessageService) List(ctx context.Context, roomID string, query MessageL
 // ListAfter retrieves and decrypts messages after a specific timestamp
 func (m *MessageService) ListAfter(ctx context.Context, roomID string, query MessageListAfterParams, opts ...option.RequestOption) (*MessagesResponse, error) {
 	opts = slices.Concat(m.Options, opts)
-	key := m.key()
+	rc := m.roomCrypto()
 	if roomID == "" {
 		return nil, ErrMissingIDParameter
 	}
@@ -271,7 +255,7 @@ func (m *MessageService) ListAfter(ctx context.Context, roomID string, query Mes
 	}
 
 	for i := range res.Messages {
-		decryptMessage(&res.Messages[i], key)
+		DecryptMessage(&res.Messages[i], rc)
 	}
 
 	return res, nil
@@ -308,6 +292,10 @@ type SendMessageParams struct {
 	Encrypted bool   `json:"encrypted,omitempty"`
 	// ReplyToID is the message this one answers, if any.
 	ReplyToID string `json:"reply_to_id,omitempty"`
+	// FileHash is the hash of the encrypted file an image message points
+	// to (see RoomCrypto.EncryptFile). It is sealed into the content, never
+	// sent in the clear.
+	FileHash string `json:"-"`
 }
 
 type SetReactionParams struct {
@@ -347,8 +335,12 @@ type MessageResponse struct {
 	Content   string     `json:"content"`
 	Encrypted bool       `json:"encrypted"`
 	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 	ReplyToID string     `json:"reply_to_id,omitempty"`
 	Reactions []Reaction `json:"reactions,omitempty"`
+	// FileHash is the verified hash of the file an image message points to,
+	// filled in by decryption (see RoomCrypto.DecryptFile).
+	FileHash string `json:"-"`
 }
 
 func (r *MessageResponse) UnmarshalJSON(data []byte) error {

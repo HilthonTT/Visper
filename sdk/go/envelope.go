@@ -2,133 +2,151 @@ package apisdk
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 )
 
-// Encrypted message content and reactions are sealed in an envelope that
-// names what they are and who wrote them, so the server, which relays the
-// sender's user ID in plaintext, cannot pass one member's words off as
-// another's or turn a reaction into a message:
+// Everything a member encrypts (message text, edits, reactions and key
+// cards) is a signed envelope, sealed with the room key:
 //
-//	{"v":1,"k":"m"|"r","f":"<sender user ID>","m":"<message ID>","t":"<text>"}
+//	secretbox( 0x02 || Ed25519 signature (64) || envelope JSON )
 //
-// "m" binds a reaction to the message it reacts to, and an edit to the
-// message it edits; a new message has none (its ID is assigned by the
-// server). The envelope is encrypted with the room key like before
-// (EncryptWithKeyB64), and the web client builds the same JSON.
+//	{"v":2,"k":"m"|"r"|"c","f":"<sender user ID>","m":"<message ID>",
+//	 "n":"<random nonce>","ts":<unix ms>,"t":"<text>","h":"<file hash>"}
+//
+// The signature is made with the sender's signing key, which other members
+// learn from the sender's key card (see RoomCrypto). The room key keeps the
+// server out; the signature keeps members from writing as each other.
+//
+//   - "m" binds a reaction to the message it reacts to, and an edit to the
+//     message it edits; a new message has none (the server assigns its ID).
+//   - "n" and "ts" let readers reject a new message the server replays under
+//     another ID, or long after it was written.
+//   - "h" is the SHA-256 of the encrypted file an image message points to, so
+//     the server can't swap the file.
+//
+// The web client builds the same bytes (clients/web/src/lib/room-crypto.ts).
 const (
-	envelopeVersion = 1
+	envelopeVersion = 2
+	sealedVersion   = 0x02
 	kindMessage     = "m"
 	kindReaction    = "r"
+	kindCard        = "c"
+
+	signatureSize = ed25519.SignatureSize
+	nonceBytes    = 16
 )
 
-// MaxSealedBytes is the largest envelope whose ciphertext fits the API's
-// 1000-character limit on message content: base64(nonce || secretbox(env)).
-const MaxSealedBytes = 1000/4*3 - NonceSize - secretboxOverhead
+// MaxContentLength is the API's limit on the (encrypted) content of a
+// message, in characters.
+const MaxContentLength = 4000
+
+// MaxSealedBytes is the largest signed envelope whose ciphertext fits
+// MaxContentLength: base64(nonce || secretbox(0x02 || signature || JSON)).
+const MaxSealedBytes = MaxContentLength/4*3 - NonceSize - secretboxOverhead - 1 - signatureSize
 
 const secretboxOverhead = 16
 
-// ErrUnverified means content decrypted with the room key but does not carry
-// the sender, kind or message it was presented with.
-var ErrUnverified = errors.New("content does not match its sender or message")
+// MaxClockSkew is how far an envelope's timestamp may be from the time the
+// server says it received it.
+const MaxClockSkew = 15 * time.Minute
 
-// ErrNoSender is returned when encrypting without a sender ID set.
-var ErrNoSender = errors.New("encrypted messages need the sender's user ID (MessageService.SetSender)")
+var (
+	// ErrUnverified means content decrypted with a room key but was not
+	// signed by its claimed sender, or does not carry the sender, kind or
+	// message it was presented with.
+	ErrUnverified = errors.New("content does not match its sender or message")
+	// ErrUnknownSender means there is no key card for the content's sender.
+	ErrUnknownSender = fmt.Errorf("%w: no key card for the sender", ErrUnverified)
+	// ErrReplayed means the content is genuine but was replayed: under
+	// another message ID, long after it was written, or older than what it
+	// replaces.
+	ErrReplayed = fmt.Errorf("%w: replayed or out-of-date content", ErrUnverified)
+)
 
 type envelope struct {
-	V    int    `json:"v"`
-	Kind string `json:"k"`
-	From string `json:"f"`
-	Msg  string `json:"m,omitempty"`
-	Text string `json:"t"`
+	V        int    `json:"v"`
+	Kind     string `json:"k"`
+	From     string `json:"f"`
+	Msg      string `json:"m,omitempty"`
+	Nonce    string `json:"n"`
+	TS       int64  `json:"ts"`
+	Text     string `json:"t"`
+	FileHash string `json:"h,omitempty"`
 }
 
-func marshalEnvelope(kind, from, messageID, text string) []byte {
+// time returns when the envelope says it was written.
+func (e *envelope) time() time.Time {
+	return time.UnixMilli(e.TS)
+}
+
+func newEnvelope(kind, from, messageID, text, fileHash string, now time.Time) envelope {
+	nonce := make([]byte, nonceBytes)
+	_, _ = rand.Read(nonce)
+	return envelope{
+		V:        envelopeVersion,
+		Kind:     kind,
+		From:     from,
+		Msg:      messageID,
+		Nonce:    base64.RawURLEncoding.EncodeToString(nonce),
+		TS:       now.UnixMilli(),
+		Text:     text,
+		FileHash: fileHash,
+	}
+}
+
+func (e *envelope) marshal() []byte {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false) // keep the size close to the text's
-	// Encoding a struct of strings cannot fail.
-	_ = enc.Encode(envelope{V: envelopeVersion, Kind: kind, From: from, Msg: messageID, Text: text})
+	// Encoding a struct of strings and numbers cannot fail.
+	_ = enc.Encode(e)
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 }
 
-// SealedMessageSize returns the size of the envelope that sending (or, with
-// messageID, editing) text as from would encrypt. It must not exceed
-// MaxSealedBytes.
-func SealedMessageSize(from, messageID, text string) int {
-	return len(marshalEnvelope(kindMessage, from, messageID, text))
+// sealEnvelope signs env and encrypts it with keyB64.
+func sealEnvelope(env envelope, signer ed25519.PrivateKey, keyB64 string) (string, error) {
+	body := env.marshal()
+	if len(body) > MaxSealedBytes {
+		return "", fmt.Errorf("message too long: %d bytes sealed, at most %d", len(body), MaxSealedBytes)
+	}
+	plain := make([]byte, 0, 1+signatureSize+len(body))
+	plain = append(plain, sealedVersion)
+	plain = append(plain, ed25519.Sign(signer, body)...)
+	plain = append(plain, body...)
+	return EncryptWithKeyB64(string(plain), keyB64)
 }
 
-// SealMessage encrypts message text written by from. Pass the message's ID
-// when editing it, "" for a new message.
-func SealMessage(text, from, messageID, keyB64 string) (string, error) {
-	return seal(kindMessage, from, messageID, text, keyB64)
-}
-
-// SealReaction encrypts emoji, from's reaction to messageID.
-func SealReaction(emoji, from, messageID, keyB64 string) (string, error) {
-	return seal(kindReaction, from, messageID, emoji, keyB64)
-}
-
-func seal(kind, from, messageID, text, keyB64 string) (string, error) {
-	if from == "" {
-		return "", ErrNoSender
-	}
-	env := marshalEnvelope(kind, from, messageID, text)
-	if len(env) > MaxSealedBytes {
-		return "", fmt.Errorf("message too long: %d bytes sealed, at most %d", len(env), MaxSealedBytes)
-	}
-	return EncryptWithKeyB64(string(env), keyB64)
-}
-
-// OpenMessage decrypts the content of message messageID, shown as sent by
-// from, and checks that from wrote it for that message (or as a new message).
-func OpenMessage(ciphertext, keyB64, from, messageID string) (string, error) {
-	env, err := open(ciphertext, keyB64)
-	if err != nil {
-		return "", err
-	}
-	if env.Kind != kindMessage || env.From != from || (env.Msg != "" && env.Msg != messageID) {
-		return "", ErrUnverified
-	}
-	return env.Text, nil
-}
-
-// OpenEdit decrypts an edit of message messageID and checks that from sealed
-// it for that message (edits always name the message they edit).
-func OpenEdit(ciphertext, keyB64, from, messageID string) (string, error) {
-	env, err := open(ciphertext, keyB64)
-	if err != nil {
-		return "", err
-	}
-	if env.Kind != kindMessage || env.From != from || env.Msg != messageID {
-		return "", ErrUnverified
-	}
-	return env.Text, nil
-}
-
-// OpenReaction decrypts from's reaction to messageID and checks that it is one.
-func OpenReaction(ciphertext, keyB64, from, messageID string) (string, error) {
-	env, err := open(ciphertext, keyB64)
-	if err != nil {
-		return "", err
-	}
-	if env.Kind != kindReaction || env.From != from || env.Msg != messageID {
-		return "", ErrUnverified
-	}
-	return env.Text, nil
-}
-
-func open(ciphertext, keyB64 string) (*envelope, error) {
+// openEnvelope decrypts a signed envelope with keyB64. It returns the
+// envelope and its signature, which the caller must still check.
+func openEnvelope(ciphertext, keyB64 string) (*envelope, []byte, []byte, error) {
 	plain, err := DecryptWithKeyB64(ciphertext, keyB64)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
+	raw := []byte(plain)
+	// Unsigned (version 1) envelopes are refused: accepting them would let
+	// any member drop the signature and write as someone else.
+	if len(raw) < 1+signatureSize || raw[0] != sealedVersion {
+		return nil, nil, nil, ErrUnverified
+	}
+	sig, body := raw[1:1+signatureSize], raw[1+signatureSize:]
 	var env envelope
-	if err := json.Unmarshal([]byte(plain), &env); err != nil || env.V != envelopeVersion || env.From == "" {
-		return nil, ErrUnverified // e.g. content from a client without envelopes
+	if err := json.Unmarshal(body, &env); err != nil || env.V != envelopeVersion || env.From == "" || env.Nonce == "" {
+		return nil, nil, nil, ErrUnverified
 	}
-	return &env, nil
+	return &env, sig, body, nil
+}
+
+// SealedMessageSize returns the size of the envelope that sending (or, with
+// messageID, editing) text as from would sign and encrypt. It must not
+// exceed MaxSealedBytes.
+func SealedMessageSize(from, messageID, text, fileHash string) int {
+	env := newEnvelope(kindMessage, from, messageID, text, fileHash, time.Now())
+	return len(env.marshal())
 }

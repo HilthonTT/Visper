@@ -2,10 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/hilthontt/visper/clients/cli/internal/resource"
 	"github.com/hilthontt/visper/clients/cli/internal/tui/qr"
 	"github.com/hilthontt/visper/clients/cli/internal/tui/theme"
 )
@@ -26,6 +28,8 @@ const (
 	dialogRoomInvite
 	dialogRoomExpired
 	dialogFileExplorer
+	// dialogAIConsent asks before the first draft goes to the AI service.
+	dialogAIConsent
 )
 
 const dialogMaxWidth = 58
@@ -144,6 +148,24 @@ func (m model) openQRCodeDialog() model {
 	})
 }
 
+// openAIConsentDialog asks the user to agree to sending drafts to the AI
+// service, which has to read them: unlike messages, they are not encrypted.
+func (m model) openAIConsentDialog() model {
+	host := "the Visper server"
+	if u, err := url.Parse(resource.Resource.Api.Url); err == nil && u.Host != "" {
+		host = u.Host
+	}
+	return m.openDialog(dialogState{
+		kind:  dialogAIConsent,
+		tone:  theme.ToneWarning,
+		title: "Send your draft unencrypted?",
+		content: fmt.Sprintf("AI rewrite sends this draft to the Visper AI service at %s "+
+			"WITHOUT end-to-end encryption: whoever runs that server can read it, and it is "+
+			"processed and briefly stored there. Your messages stay encrypted.\n\n"+
+			"Allow this for the rest of this session?", host),
+	})
+}
+
 func (m model) openRoomInviteDialog(roomID string) model {
 	return m.openDialog(dialogState{
 		kind:    dialogRoomInvite,
@@ -181,6 +203,8 @@ func buttonLabels(k dialogKind) (string, string) {
 		return "Generate", "Cancel"
 	case dialogRoomInvite:
 		return "Join", "Decline"
+	case dialogAIConsent:
+		return "Send", "Cancel"
 	default:
 		return "Yes", "No"
 	}

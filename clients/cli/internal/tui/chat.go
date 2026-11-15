@@ -21,6 +21,7 @@ import (
 //	chat_messages.go the message list and its rendering
 //	chat_images.go   image messages
 //	chat_expiry.go   the expiry countdown
+//	chat_crypto.go   key cards, key rotation and verification
 //	chat_view.go     layout and view
 
 type chatState struct {
@@ -32,10 +33,15 @@ type chatState struct {
 
 	room     *apisdk.RoomResponse
 	roomCode string
-	// roomKey encrypts the room's messages and files. It is created by the
-	// room's owner and travels only inside invites.
-	roomKey     string
+	// crypto holds the room's keys (the first one made by the owner and
+	// shared in invites, later ones from key rotations), the members' key
+	// cards, and what we have seen, to catch replays.
+	crypto      *apisdk.RoomCrypto
 	isRoomOwner bool
+	// rekeying is set while a key rotation is in flight; rekeyPending asks
+	// for another one once it finishes (someone else left meanwhile).
+	rekeying     bool
+	rekeyPending bool
 
 	ws     *apisdk.RoomWebSocket
 	events chan tea.Msg
@@ -116,14 +122,18 @@ func (m model) enterChat(room *apisdk.RoomResponse, roomKey string) (model, tea.
 			return visibleError{message: "That room can't be opened without its key. Ask for the full invite code."}
 		}
 	}
-	if room.QRCodeURL != "" {
-		// The key rides in the link's fragment, which browsers never send.
-		if u, err := apisdk.WithRoomKeyFragment(room.QRCodeURL, roomKey); err == nil {
-			r := *room // copy: don't mutate the caller's room
-			r.QRCodeURL = u
-			room = &r
+	// The owner is pinned now: only rekeys signed by this member are
+	// accepted for as long as we stay.
+	rc, err := apisdk.NewRoomCrypto(m.identity, room.ID, room.Owner.ID, roomKey)
+	if err != nil {
+		isOwner := room.CurrentUser.ID != "" && room.CurrentUser.ID == room.Owner.ID
+		leave := leaveRoomFunc(m.client, room.ID, isOwner, m.requestOpts())
+		return m, func() tea.Msg {
+			leave()
+			return visibleError{message: "That room key is invalid. Ask for the full invite code again."}
 		}
 	}
+	room = withInviteKey(room, roomKey)
 
 	m = m.stopNotificationListener()
 	// Never let a previous room's listener or countdown outlive it.
@@ -138,14 +148,12 @@ func (m model) enterChat(room *apisdk.RoomResponse, roomKey string) (model, tea.
 		m = m.closeDialog()
 	}
 
-	// Always reset the key so a previous room's key is never reused.
-	m.client.Message.SetEncryptionKey(roomKey)
+	// Always reset the keys so a previous room's are never reused.
+	m.client.Message.SetRoomCrypto(rc)
 
 	if room.CurrentUser.ID != "" {
 		m.userID = room.CurrentUser.ID
 	}
-	// Sealed into what we encrypt so other members can check who wrote it.
-	m.client.Message.SetSender(m.userID)
 
 	messageInput := m.newTextInput("Write a message…")
 	messageInput.Focus()
@@ -156,7 +164,7 @@ func (m model) enterChat(room *apisdk.RoomResponse, roomKey string) (model, tea.
 		endSession:   endSession,
 		room:         room,
 		roomCode:     room.JoinCode,
-		roomKey:      roomKey,
+		crypto:       rc,
 		isRoomOwner:  room.CurrentUser.ID == room.Owner.ID,
 		viewport:     newMessagesViewport(),
 		messageInput: messageInput,
@@ -173,7 +181,9 @@ func (m model) enterChat(room *apisdk.RoomResponse, roomKey string) (model, tea.
 	m = m.withCompanionImage()
 	m = m.refreshMessages()
 
-	return m, tea.Batch(m.connectRoom(room.ID), m.startExpirationCountdown())
+	// Load the members' key cards and publish ours before the WebSocket
+	// replays the history, so it can be verified (see cryptoSyncedMsg).
+	return m, tea.Batch(m.syncRoomCrypto(), m.startExpirationCountdown())
 }
 
 // newMessagesViewport returns the scrollable message list.
@@ -200,7 +210,7 @@ func newMessagesViewport() viewport.Model {
 func (m model) clearChat() model {
 	m.state.chat.closeConnections()
 	if m.client != nil {
-		m.client.Message.SetEncryptionKey("")
+		m.client.Message.SetRoomCrypto(nil)
 	}
 	m.state.chat = chatState{}
 	return m
@@ -265,12 +275,36 @@ func (m model) withJoinCodeInQRURL(joinCode string) model {
 
 // encrypted reports whether the room encrypts its messages.
 func (c chatState) encrypted() bool {
-	return c.room != nil && c.roomKey != ""
+	return c.room != nil && c.crypto != nil
 }
 
-// inviteCode is the code to share for the room: its join code and its key.
+// roomKey returns the room's current key, or "" outside an encrypted room.
+func (c chatState) roomKey() string {
+	if c.crypto == nil {
+		return ""
+	}
+	return c.crypto.CurrentKey()
+}
+
+// withInviteKey returns room with keyB64 in its invite link's fragment,
+// which browsers never send to a server.
+func withInviteKey(room *apisdk.RoomResponse, keyB64 string) *apisdk.RoomResponse {
+	if room == nil || room.QRCodeURL == "" {
+		return room
+	}
+	u, err := apisdk.WithRoomKeyFragment(room.QRCodeURL, keyB64)
+	if err != nil {
+		return room
+	}
+	r := *room // copy: don't mutate the caller's (or a pending command's) room
+	r.QRCodeURL = u
+	return &r
+}
+
+// inviteCode is the code to share for the room: its join code and its
+// current key.
 func (c chatState) inviteCode() string {
-	code, err := apisdk.FormatInviteCode(c.roomCode, c.roomKey)
+	code, err := apisdk.FormatInviteCode(c.roomCode, c.roomKey())
 	if err != nil {
 		return c.roomCode
 	}

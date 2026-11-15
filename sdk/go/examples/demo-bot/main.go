@@ -59,8 +59,20 @@ func main() {
 	if err != nil {
 		log.Fatalf("create room: %v", err)
 	}
-	client.Message.SetEncryptionKey(key)
-	client.Message.SetSender(userID)
+	// The bot signs what it sends with a per-process identity, and checks
+	// the guest's messages against the key card the guest publishes.
+	identity, err := apisdk.NewIdentity(userID, nil)
+	if err != nil {
+		log.Fatalf("create identity: %v", err)
+	}
+	rc, err := apisdk.NewRoomCrypto(identity, room.ID, room.Owner.ID, key)
+	if err != nil {
+		log.Fatalf("room crypto: %v", err)
+	}
+	if err := client.Room.PublishKeyCard(ctx, room.ID, rc); err != nil {
+		log.Fatalf("publish key card: %v", err)
+	}
+	client.Message.SetRoomCrypto(rc)
 	inviteCode, err := apisdk.FormatInviteCode(room.JoinCode, key)
 	if err != nil {
 		log.Fatalf("format invite code: %v", err)
@@ -94,6 +106,10 @@ func main() {
 	for line := 0; line < len(script); {
 		if err := sleep(ctx, 1500*time.Millisecond); err != nil {
 			log.Fatalf("stopped: %v", err)
+		}
+		// Pick up the guest's key card (and any new room key) first.
+		if _, _, err := client.Room.SyncCrypto(ctx, room.ID, rc); err != nil {
+			log.Printf("sync room keys: %v", err)
 		}
 		msgs, err := client.Message.List(ctx, room.ID, apisdk.MessageListParams{Limit: 50})
 		if err != nil {

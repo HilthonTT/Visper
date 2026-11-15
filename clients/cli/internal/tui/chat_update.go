@@ -278,6 +278,9 @@ func (m model) confirmDialog() (model, tea.Cmd) {
 	case dialogDeleteMessage:
 		m = m.exitEditMode()
 		return m, m.deleteMessage(m.state.chat.edit.messageID)
+	case dialogAIConsent:
+		m.aiConsent = true
+		return m.rewriteDraft()
 	}
 	return m, nil
 }

@@ -49,6 +49,8 @@ type (
 		messageID string
 		content   string
 		encrypted bool
+		// at is when the server says the edit was made (zero if unknown).
+		at time.Time
 	}
 	messageDeletedMsg struct {
 		messageID string
@@ -92,9 +94,10 @@ func (m model) connectRoom(roomID string) tea.Cmd {
 }
 
 // listenRoom starts reading conn and returns the channel its events are
-// delivered on, as a roomListeningMsg. encryptionKey decrypts the messages of
-// an encrypted room.
-func listenRoom(session context.Context, conn *apisdk.RoomWebSocket, encryptionKey string) tea.Cmd {
+// delivered on, as a roomListeningMsg. rc decrypts and verifies the content
+// of an encrypted room; key cards and rekeys are applied to it here, in the
+// order they arrive, so the messages after them are read with them.
+func listenRoom(session context.Context, conn *apisdk.RoomWebSocket, rc *apisdk.RoomCrypto) tea.Cmd {
 	return func() tea.Msg {
 		events := make(chan tea.Msg, 100)
 		send := func(msg tea.Msg) {
@@ -103,12 +106,18 @@ func listenRoom(session context.Context, conn *apisdk.RoomWebSocket, encryptionK
 			case <-session.Done():
 			}
 		}
-		decrypt := func(content string, encrypted bool, want sealedAs) string {
-			return decryptContent(encryptionKey, content, encrypted, want)
+		decrypt := func(content string, encrypted bool, want sealedAs) decrypted {
+			return decryptContent(rc, content, encrypted, want)
 		}
 
 		conn.SetMessageHandler(func(wsMsg apisdk.WSMessage) {
 			if session.Err() != nil {
+				return
+			}
+			if msg, handled := handleCryptoEvent(wsMsg, rc); handled {
+				if msg != nil {
+					send(msg)
+				}
 				return
 			}
 			if msg, ok := parseRoomEvent(wsMsg, decrypt); ok {
@@ -180,23 +189,28 @@ func parseRoomEvent(wsMsg apisdk.WSMessage, decrypt decryptFunc) (tea.Msg, bool)
 			return nil, false
 		}
 		encrypted, _ := data["encrypted"].(bool)
-		createdAt := time.Now()
-		if ts, ok := stringField(data, "timestamp"); ok {
-			if t, err := time.Parse(time.RFC3339, ts); err == nil {
-				createdAt = t
-			}
+		sentAt := eventTime(data)
+		createdAt := sentAt
+		if createdAt.IsZero() {
+			createdAt = time.Now()
 		}
 		replyTo, _ := stringField(data, "replyToId")
+		var updated time.Time
+		if ts, ok := stringField(data, "updatedAt"); ok {
+			updated, _ = time.Parse(time.RFC3339, ts)
+		}
+		opened := decrypt(content, encrypted, sealedAs{from: userID, messageID: id, at: sentAt, updated: updated})
 		return messageReceivedMsg{message: apisdk.MessageResponse{
 			ID:        id,
 			RoomID:    wsMsg.RoomID,
 			UserID:    userID,
 			Username:  username,
-			Content:   decrypt(content, encrypted, sealedAs{from: userID, messageID: id}),
+			Content:   opened.text,
 			Encrypted: encrypted,
 			CreatedAt: createdAt.Local(),
 			ReplyToID: replyTo,
 			Reactions: parseReactions(data["reactions"], id, decrypt),
+			FileHash:  opened.fileHash,
 		}}, true
 
 	case apisdk.MessageReactions:
@@ -240,7 +254,7 @@ func parseRoomEvent(wsMsg apisdk.WSMessage, decrypt decryptFunc) (tea.Msg, bool)
 			return nil, false
 		}
 		encrypted, _ := data["encrypted"].(bool)
-		return messageUpdatedMsg{messageID: id, content: content, encrypted: encrypted}, true
+		return messageUpdatedMsg{messageID: id, content: content, encrypted: encrypted, at: eventTime(data)}, true
 
 	case apisdk.MessageDeleted:
 		id, ok := stringField(data, "id", "ID", "message_id", "messageId")
@@ -335,7 +349,7 @@ func parseReactions(raw any, messageID string, decrypt decryptFunc) []apisdk.Rea
 		encrypted, _ := fields["encrypted"].(bool)
 		reactions = append(reactions, apisdk.Reaction{
 			UserID: userID,
-			Emoji:  decrypt(emoji, encrypted, sealedAs{reaction: true, from: userID, messageID: messageID}),
+			Emoji:  decrypt(emoji, encrypted, sealedAs{reaction: true, from: userID, messageID: messageID}).text,
 		})
 	}
 	return reactions
@@ -358,45 +372,74 @@ func stringField(data map[string]any, keys ...string) (string, bool) {
 	return "", false
 }
 
+// eventTime returns the event's "timestamp", or the zero time if it has
+// none.
+func eventTime(data map[string]any) time.Time {
+	ts, ok := stringField(data, "timestamp")
+	if !ok {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
 // sealedAs is what an encrypted field claims to be: a message (or a reaction
-// to messageID) written by from. Decryption checks the sealed envelope
-// matches, so the server can't relabel content (see apisdk.OpenMessage).
+// to messageID) written by from. Decryption checks the signed envelope
+// matches, so neither the server nor another member can relabel content
+// (see apisdk.RoomCrypto).
 type sealedAs struct {
 	reaction  bool
 	edit      bool // an edit, sealed for messageID
 	from      string
 	messageID string
+	// at is when the server says the content was sent (or, for an edit,
+	// made); zero if unknown.
+	at time.Time
+	// updated is when the server says a message was last edited (zero if
+	// never): history shows the latest edit as the content.
+	updated time.Time
+}
+
+// decrypted is an encrypted field's verified text, or the placeholder shown
+// instead when it failed.
+type decrypted struct {
+	text string
+	// fileHash is the hash of the file an image message points to.
+	fileHash string
 }
 
 // decryptFunc decrypts a field that should be sealed as want.
-type decryptFunc func(content string, encrypted bool, want sealedAs) string
+type decryptFunc func(content string, encrypted bool, want sealedAs) decrypted
 
-// decryptContent decrypts an encrypted field with the room's key; failures
-// are shown in place of the content.
-func decryptContent(key, content string, encrypted bool, want sealedAs) string {
+// decryptContent decrypts and verifies an encrypted field with the room's
+// crypto state; failures are shown in place of the content.
+func decryptContent(rc *apisdk.RoomCrypto, content string, encrypted bool, want sealedAs) decrypted {
+	if rc == nil {
+		return decrypted{text: content}
+	}
 	if !encrypted {
-		if key != "" {
-			// Every member of an encrypted room encrypts: plaintext can only
-			// have been injected by the server.
-			return apisdk.FailedText(apisdk.ErrUnverified)
-		}
-		return content
+		// Every member of an encrypted room encrypts: plaintext can only
+		// have been injected by the server.
+		return decrypted{text: apisdk.FailedText(apisdk.ErrUnverified)}
 	}
-	if key == "" {
-		log.Printf("Cannot decrypt: no encryption key available")
-		return "[Decryption failed: no key]"
-	}
-	open := apisdk.OpenMessage
+	var (
+		opened apisdk.Opened
+		err    error
+	)
 	switch {
 	case want.reaction:
-		open = apisdk.OpenReaction
+		opened.Text, err = rc.OpenReaction(content, want.from, want.messageID)
 	case want.edit:
-		open = apisdk.OpenEdit
+		opened, err = rc.OpenEdit(content, want.from, want.messageID, want.at)
+	default:
+		opened, err = rc.OpenMessage(content, want.from, want.messageID, want.at, want.updated)
 	}
-	decrypted, err := open(content, key, want.from, want.messageID)
 	if err != nil {
 		log.Printf("Failed to decrypt message: %v", err)
-		return apisdk.FailedText(err)
+		return decrypted{text: apisdk.FailedText(err)}
 	}
-	return decrypted
+	return decrypted{text: opened.Text, fileHash: opened.FileHash}
 }

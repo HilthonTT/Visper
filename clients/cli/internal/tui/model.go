@@ -87,6 +87,14 @@ type model struct {
 	// API without the API being able to read it (see the device code on the
 	// settings page). It lives only as long as the process.
 	deviceKey *apisdk.DeviceKey
+	// identity holds the signing key that signs everything this client
+	// sends, with the device key above. Like the user token it lives only as
+	// long as the process; other members learn it from the key card we
+	// publish in each room (see apisdk.RoomCrypto).
+	identity *apisdk.Identity
+	// aiConsent is set once the user agreed to send drafts to the AI
+	// service, which reads them unencrypted.
+	aiConsent bool
 
 	page page
 	// switched is set by a key that changed the page during this Update, so
@@ -118,12 +126,17 @@ func NewModel() (tea.Model, error) {
 	if err != nil {
 		return nil, err
 	}
+	identity, err := apisdk.NewIdentity(userID, deviceKey)
+	if err != nil {
+		return nil, err
+	}
 
 	return model{
 		ctx:             context.Background(),
 		userToken:       userToken,
 		userID:          userID,
 		deviceKey:       deviceKey,
+		identity:        identity,
 		page:            splashPage,
 		theme:           theme.BasicTheme(true, nil),
 		faqs:            loadFaqs(),

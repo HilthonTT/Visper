@@ -242,3 +242,125 @@ type MembershipResponse struct {
 func (r *MembershipResponse) UnmarshalJSON(data []byte) error {
 	return apijson.UnmarshalRoot(data, r)
 }
+
+// ---------------------------------------------------------------------------
+// Room keys (see RoomCrypto)
+
+// CryptoStateResponse is what a member needs to verify the room's content
+// and follow its key: every member's key cards, the latest rekey and whether
+// one is due.
+type CryptoStateResponse struct {
+	// KeyEpoch is the epoch of the latest rekey (0 if none).
+	KeyEpoch int `json:"key_epoch"`
+	// RekeyNeeded is set when a member left or was kicked since the latest
+	// rekey; the owner's client should rekey.
+	RekeyNeeded bool `json:"rekey_needed"`
+	// Rekey is the latest rekey, if any.
+	Rekey *Rekey `json:"rekey"`
+	// Cards holds each user's sealed key cards, oldest first, including
+	// users who have since left (their messages are still in the history).
+	Cards map[string][]string `json:"cards"`
+	// Members lists the room's current members' user IDs.
+	Members []string `json:"members"`
+}
+
+func (r *CryptoStateResponse) UnmarshalJSON(data []byte) error {
+	return apijson.UnmarshalRoot(data, r)
+}
+
+// GetCryptoState returns the room's key cards and latest rekey.
+func (r *RoomService) GetCryptoState(ctx context.Context, roomID string, opts ...option.RequestOption) (*CryptoStateResponse, error) {
+	opts = slices.Concat(r.Options, opts)
+	if roomID == "" {
+		return nil, ErrMissingIDParameter
+	}
+	path := fmt.Sprintf("api/v1/rooms/%s/crypto", url.PathEscape(roomID))
+	res := &CryptoStateResponse{}
+	err := requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...)
+	return res, err
+}
+
+// PutKeyCardParams uploads the caller's key card (RoomCrypto.MyCard).
+type PutKeyCardParams struct {
+	Card string `json:"card"`
+}
+
+func (r *PutKeyCardParams) MarshalJSON() ([]byte, error) {
+	return apijson.MarshalRoot(r)
+}
+
+// PutKeyCard publishes the caller's key card to the room. The API relays it
+// to the members as a MemberCard event.
+func (r *RoomService) PutKeyCard(ctx context.Context, roomID string, body PutKeyCardParams, opts ...option.RequestOption) error {
+	opts = slices.Concat(r.Options, opts)
+	if roomID == "" {
+		return ErrMissingIDParameter
+	}
+	path := fmt.Sprintf("api/v1/rooms/%s/crypto/card", url.PathEscape(roomID))
+	return requestconfig.ExecuteNewRequest(ctx, http.MethodPut, path, body, nil, opts...)
+}
+
+// PostRekey publishes a rekey made by RoomCrypto.NewRekey (owner only). The
+// API refuses it unless its epoch follows the latest one; it relays accepted
+// rekeys to the members as a RoomRekeyed event.
+func (r *RoomService) PostRekey(ctx context.Context, roomID string, body Rekey, opts ...option.RequestOption) error {
+	opts = slices.Concat(r.Options, opts)
+	if roomID == "" {
+		return ErrMissingIDParameter
+	}
+	path := fmt.Sprintf("api/v1/rooms/%s/crypto/rekey", url.PathEscape(roomID))
+	return requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, nil, opts...)
+}
+
+// PublishKeyCard uploads rc's card for the current key.
+func (r *RoomService) PublishKeyCard(ctx context.Context, roomID string, rc *RoomCrypto, opts ...option.RequestOption) error {
+	card, err := rc.MyCard()
+	if err != nil {
+		return err
+	}
+	if err := rc.AddCard(rc.Identity().UserID(), card); err != nil {
+		return err
+	}
+	return r.PutKeyCard(ctx, roomID, PutKeyCardParams{Card: card}, opts...)
+}
+
+// SyncCrypto loads the room's key cards into rc and applies its latest
+// rekey; if that changed the key, it uploads a new card. It returns the
+// state it read.
+func (r *RoomService) SyncCrypto(ctx context.Context, roomID string, rc *RoomCrypto, opts ...option.RequestOption) (*CryptoStateResponse, bool, error) {
+	state, err := r.GetCryptoState(ctx, roomID, opts...)
+	if err != nil {
+		return nil, false, err
+	}
+	rc.AddCards(state.Cards)
+	changed, err := rc.ApplyRekey(state.Rekey)
+	if err != nil {
+		return state, false, err
+	}
+	if changed {
+		if err := r.PublishKeyCard(ctx, roomID, rc, opts...); err != nil {
+			return state, true, err
+		}
+	}
+	return state, changed, nil
+}
+
+// RotateKey makes and publishes a new room key for the room's members, as
+// the owner, and switches rc to it. It returns the members who could not be
+// given the key (no key card); they need a new invite.
+func (r *RoomService) RotateKey(ctx context.Context, roomID string, rc *RoomCrypto, opts ...option.RequestOption) ([]string, error) {
+	state, err := r.GetCryptoState(ctx, roomID, opts...)
+	if err != nil {
+		return nil, err
+	}
+	rc.AddCards(state.Cards)
+	rekey, newKey, missing, err := rc.NewRekey(state.Members, state.KeyEpoch)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.PostRekey(ctx, roomID, *rekey, opts...); err != nil {
+		return nil, err
+	}
+	rc.CommitKey(newKey, rekey.Epoch)
+	return missing, r.PublishKeyCard(ctx, roomID, rc, opts...)
+}

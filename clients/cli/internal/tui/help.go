@@ -27,7 +27,7 @@ var helpSections = []helpSection{
 		{"ctrl+e", "select a message: reply, react, edit"},
 		{"ctrl+f", "search messages"},
 		{"ctrl+u", "share an image"},
-		{"ctrl+a", "rewrite draft with AI"},
+		{"ctrl+a", "rewrite draft with AI (sent unencrypted)"},
 		{"ctrl+s", "search members"},
 		{"ctrl+p", "QR invite"},
 		{"ctrl+n", "new join code (owner)"},

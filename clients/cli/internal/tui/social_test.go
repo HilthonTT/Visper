@@ -16,7 +16,7 @@ func withMessages(m model, msgs ...apisdk.MessageResponse) model {
 }
 
 func TestParseSocialRoomEvents(t *testing.T) {
-	identity := func(s string, _ bool, _ sealedAs) string { return s }
+	identity := func(s string, _ bool, _ sealedAs) decrypted { return decrypted{text: s} }
 	tests := []struct {
 		msg  apisdk.WSMessage
 		want any
@@ -35,11 +35,11 @@ func TestParseSocialRoomEvents(t *testing.T) {
 		}
 	}
 
-	decrypt := func(s string, enc bool, _ sealedAs) string {
+	decrypt := func(s string, enc bool, _ sealedAs) decrypted {
 		if enc {
-			return "dec(" + s + ")"
+			return decrypted{text: "dec(" + s + ")"}
 		}
-		return s
+		return decrypted{text: s}
 	}
 	got, ok := parseRoomEvent(apisdk.WSMessage{Type: apisdk.MessageReceived, Data: map[string]any{
 		"id": "m2", "userId": "a", "username": "Ann", "content": "c", "encrypted": true,
