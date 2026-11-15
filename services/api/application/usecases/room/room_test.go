@@ -2,6 +2,7 @@ package room
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -181,5 +182,18 @@ func TestKickRotatesCodes(t *testing.T) {
 	}
 	if room.IsMember("member") {
 		t.Fatal("kicked member still listed")
+	}
+}
+
+func TestOwnerActionsRefuseExpiredRooms(t *testing.T) {
+	owner := model.User{ID: "owner"}
+	repo := &fakeRoomRepo{rooms: map[string]*model.Room{
+		"r1": {ID: "r1", Owner: owner, CreatedAt: time.Now().Add(-2 * time.Hour), Expiry: time.Hour,
+			Members: []model.User{owner, {ID: "member"}}},
+	}}
+	uc := newTestUseCase(repo)
+
+	if _, err := uc.GenerateNewJoinCode(context.Background(), "owner", "r1"); !errors.Is(err, ErrRoomExpired) {
+		t.Fatalf("new join code on expired room: got %v, want ErrRoomExpired", err)
 	}
 }

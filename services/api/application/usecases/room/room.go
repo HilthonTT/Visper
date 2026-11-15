@@ -224,7 +224,7 @@ func (uc *roomUseCase) LeaveRoom(ctx context.Context, roomID, userID string) err
 	if userID == "" {
 		return ErrUserIDRequired
 	}
-	room, err := uc.loadRoomByID(ctx, roomID)
+	room, err := uc.GetByID(ctx, roomID)
 	if err != nil {
 		return err
 	}
@@ -355,18 +355,10 @@ func (uc *roomUseCase) loadRoom(ctx context.Context, id string) (*model.Room, er
 	return room, nil
 }
 
-// loadRoomByID is loadRoom with the ID validated.
-func (uc *roomUseCase) loadRoomByID(ctx context.Context, id string) (*model.Room, error) {
-	if id == "" {
-		return nil, ErrRoomIDRequired
-	}
-	return uc.loadRoom(ctx, id)
-}
-
-// loadOwnedRoom loads a room that userID must own; notOwner is returned when
-// they don't.
+// loadOwnedRoom loads an unexpired room that userID must own; notOwner is
+// returned when they don't.
 func (uc *roomUseCase) loadOwnedRoom(ctx context.Context, id, userID string, notOwner error) (*model.Room, error) {
-	room, err := uc.loadRoomByID(ctx, id)
+	room, err := uc.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
