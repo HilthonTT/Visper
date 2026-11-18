@@ -37,7 +37,7 @@ jobs:
       - name: Test the CLI and SDK
         run: go test ./clients/cli/... ./sdk/go/...
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: "~> v2"
