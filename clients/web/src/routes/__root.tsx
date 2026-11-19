@@ -15,7 +15,7 @@ export const Route = createRootRoute({
 				name: "description",
 				content: "Visper - anonymous, encrypted real-time chat.",
 			},
-			{ name: "theme-color", content: "#161d27" },
+			{ name: "theme-color", content: "#15131f" },
 		],
 		links: [
 			{ rel: "stylesheet", href: appCss },
