@@ -61,6 +61,9 @@ type cryptoVectors struct {
 	Rekey        Rekey  `json:"rekey"`
 	RekeyMessage string `json:"rekey_message"` // what the owner signed
 	NewKey       string `json:"new_key"`       // base64; bob's sealed key opens to it
+
+	AliceFingerprint string `json:"alice_fingerprint"`
+	BobFingerprint   string `json:"bob_fingerprint"`
 }
 
 func fixedIdentity(t *testing.T, userID string, seedByte byte) (*Identity, vectorIdentity) {
@@ -133,6 +136,7 @@ func generateVectors(t *testing.T) cryptoVectors {
 	}
 	v.Rekey, v.NewKey = *rekey, newKey
 	v.RekeyMessage = string(rekeyMessage(v.RoomID, rekey.Epoch, rekey.Keys))
+	v.AliceFingerprint, v.BobFingerprint = arc.MyFingerprint(), brc.MyFingerprint()
 	return v
 }
 
@@ -152,6 +156,9 @@ func checkVectors(t *testing.T, v cryptoVectors) {
 	}
 	if err := rc.AddCard(v.Bob.UserID, v.BobCard); err != nil {
 		t.Fatalf("bob's card: %v", err)
+	}
+	if rc.MyFingerprint() != v.BobFingerprint || rc.Fingerprint(v.Alice.UserID) != v.AliceFingerprint {
+		t.Fatalf("fingerprints = %q, %q", rc.MyFingerprint(), rc.Fingerprint(v.Alice.UserID))
 	}
 
 	at := func(m vectorMessage) time.Time { return time.UnixMilli(m.At) }

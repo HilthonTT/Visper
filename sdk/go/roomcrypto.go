@@ -4,7 +4,9 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"slices"
@@ -73,9 +75,75 @@ var ErrNoSender = errors.New("encrypted rooms need the sender's user ID")
 // when they enter a room and again whenever its key changes.
 
 type memberCard struct {
-	sign   ed25519.PublicKey
-	device string // base64url X25519 public key
+	sign        ed25519.PublicKey
+	device      string // base64url X25519 public key
+	fingerprint string
 }
+
+// ---------------------------------------------------------------------------
+// Fingerprints
+//
+// The server relays key cards, so on its own a client can't tell a member's
+// real card from one the server (helped by someone who has the room key)
+// made in their name. Members rule that out by comparing fingerprints over a
+// channel they trust: in person, or on a call.
+//
+//	fingerprint = SHA-512( "visper/keycard/v1\n<user ID>\n" +
+//	                       "<signing key>\n<device key>\n" )   (keys base64url)
+//
+// shown as six groups of five digits: group i is bytes 5i..5i+4 read as a
+// big-endian integer, mod 100000. Verifying a member pins the card with that
+// fingerprint: from then on only it is accepted for their signatures
+// (including the owner's rekeys), the owner's rekeys go only to its device,
+// and any other card for them shows as a changed key.
+
+const (
+	fingerprintContext = "visper/keycard/v1"
+	fingerprintGroups  = 6
+)
+
+// KeyFingerprint returns the fingerprint of userID's key card holding
+// signKey and deviceKey (both base64url).
+func KeyFingerprint(userID, signKey, deviceKey string) string {
+	sum := sha512.Sum512([]byte(fingerprintContext + "\n" + userID + "\n" + signKey + "\n" + deviceKey + "\n"))
+	groups := make([]string, fingerprintGroups)
+	for i := range groups {
+		var b [8]byte
+		copy(b[3:], sum[i*5:i*5+5])
+		groups[i] = fmt.Sprintf("%05d", binary.BigEndian.Uint64(b[:])%100000)
+	}
+	return strings.Join(groups, " ")
+}
+
+// normalizeFingerprint keeps only the digits of a typed or pasted
+// fingerprint.
+func normalizeFingerprint(fp string) string {
+	var b strings.Builder
+	for _, r := range fp {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// KeyStatus is whether a member's key card has been verified.
+type KeyStatus int
+
+const (
+	// KeyUnverified means no fingerprint was compared for the member.
+	KeyUnverified KeyStatus = iota
+	// KeyVerified means the member's fingerprint was compared and pinned.
+	KeyVerified
+	// KeyChanged means the member was verified, but a different card has
+	// since appeared for them. Only the pinned card is trusted until they
+	// are verified again.
+	KeyChanged
+)
+
+// ErrFingerprintMismatch is returned when verifying a member with a
+// fingerprint none of their key cards has.
+var ErrFingerprintMismatch = errors.New("the fingerprint doesn't match any of the member's keys")
 
 // ---------------------------------------------------------------------------
 // RoomCrypto
@@ -96,6 +164,8 @@ type RoomCrypto struct {
 	nonces   map[string]string    // new-message nonce -> message ID
 	versions map[string]time.Time // message ID -> time of the version shown
 	departed map[string]bool      // members seen leaving or being kicked
+	verified map[string]string    // member -> pinned card's fingerprint
+	changed  map[string]bool      // verified members with a new, unpinned card
 }
 
 // NewRoomCrypto returns the crypto state for a room entered with keyB64
@@ -118,6 +188,8 @@ func NewRoomCrypto(me *Identity, roomID, ownerID, keyB64 string) (*RoomCrypto, e
 		nonces:   map[string]string{},
 		versions: map[string]time.Time{},
 		departed: map[string]bool{},
+		verified: map[string]string{},
+		changed:  map[string]bool{},
 	}, nil
 }
 
@@ -167,15 +239,19 @@ func (rc *RoomCrypto) open(ciphertext string) (*envelope, []byte, []byte, error)
 }
 
 // verifySender checks sig over body against the signing keys on from's
-// cards.
+// cards; once from is verified, only the pinned card counts.
 func (rc *RoomCrypto) verifySender(from string, body, sig []byte) error {
 	rc.mu.RLock()
 	cards := rc.cards[from]
+	pinned, isPinned := rc.verified[from]
 	rc.mu.RUnlock()
 	if len(cards) == 0 {
 		return ErrUnknownSender
 	}
 	for _, c := range cards {
+		if isPinned && c.fingerprint != pinned {
+			continue
+		}
 		if ed25519.Verify(c.sign, body, sig) {
 			return nil
 		}
@@ -218,14 +294,18 @@ func (rc *RoomCrypto) AddCard(userID, sealed string) error {
 		return ErrUnverified
 	}
 
+	fp := KeyFingerprint(userID, signPart, devicePart)
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	for _, c := range rc.cards[userID] {
-		if c.device == devicePart && c.sign.Equal(ed25519.PublicKey(signKey)) {
+		if c.fingerprint == fp {
 			return nil
 		}
 	}
-	rc.cards[userID] = append(rc.cards[userID], memberCard{sign: signKey, device: devicePart})
+	rc.cards[userID] = append(rc.cards[userID], memberCard{sign: signKey, device: devicePart, fingerprint: fp})
+	if pinned, ok := rc.verified[userID]; ok && pinned != fp {
+		rc.changed[userID] = true
+	}
 	return nil
 }
 
@@ -245,6 +325,69 @@ func (rc *RoomCrypto) HasCard(userID string) bool {
 	rc.mu.RLock()
 	defer rc.mu.RUnlock()
 	return len(rc.cards[userID]) > 0
+}
+
+// MyFingerprint returns the fingerprint of this client's key card, for
+// members to compare with what their client shows for us.
+func (rc *RoomCrypto) MyFingerprint() string {
+	return KeyFingerprint(rc.me.userID, rc.me.SigningPublicKey(), rc.me.device.PublicKey())
+}
+
+// Fingerprint returns the fingerprint to compare for userID: the pinned
+// card's while they are verified and nothing changed, otherwise their
+// latest card's. It is "" if no card is known for them.
+func (rc *RoomCrypto) Fingerprint(userID string) string {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+	if pinned, ok := rc.verified[userID]; ok && !rc.changed[userID] {
+		return pinned
+	}
+	cards := rc.cards[userID]
+	if len(cards) == 0 {
+		return ""
+	}
+	return cards[len(cards)-1].fingerprint
+}
+
+// VerifyMember pins the card of userID whose fingerprint is fingerprint
+// (spaces and other separators are ignored), once the user compared it with
+// the member over a channel they trust. It replaces an earlier pin and
+// clears a changed key.
+func (rc *RoomCrypto) VerifyMember(userID, fingerprint string) error {
+	want := normalizeFingerprint(fingerprint)
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	for _, c := range rc.cards[userID] {
+		if normalizeFingerprint(c.fingerprint) == want {
+			rc.verified[userID] = c.fingerprint
+			delete(rc.changed, userID)
+			return nil
+		}
+	}
+	return ErrFingerprintMismatch
+}
+
+// UnverifyMember forgets that userID was verified, so any of their cards is
+// accepted again.
+func (rc *RoomCrypto) UnverifyMember(userID string) {
+	rc.mu.Lock()
+	defer rc.mu.Unlock()
+	delete(rc.verified, userID)
+	delete(rc.changed, userID)
+}
+
+// KeyStatus reports whether userID's key card was verified, and whether a
+// different one has appeared since.
+func (rc *RoomCrypto) KeyStatus(userID string) KeyStatus {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+	switch {
+	case rc.changed[userID]:
+		return KeyChanged
+	case rc.verified[userID] != "":
+		return KeyVerified
+	}
+	return KeyUnverified
 }
 
 // ---------------------------------------------------------------------------
@@ -541,8 +684,17 @@ func (rc *RoomCrypto) NewRekey(members []string, currentEpoch int) (*Rekey, stri
 			missing = append(missing, id)
 			continue
 		}
-		// The latest card is the member's current device.
-		targets = append(targets, struct{ id, device string }{id, cards[len(cards)-1].device})
+		// The latest card is the member's current device; once they are
+		// verified, only the pinned card is trusted.
+		card := cards[len(cards)-1]
+		if pinned, ok := rc.verified[id]; ok {
+			for _, c := range cards {
+				if c.fingerprint == pinned {
+					card = c
+				}
+			}
+		}
+		targets = append(targets, struct{ id, device string }{id, card.device})
 	}
 	rc.mu.RUnlock()
 
