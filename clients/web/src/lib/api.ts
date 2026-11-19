@@ -4,7 +4,9 @@ import { parseDeviceCode, parseRoomKey, sealRoomKey } from "./room-key";
 export function getBackendUrl(): string {
 	const url = import.meta.env.VITE_BACKEND_API_URL;
 	if (!url) {
-		throw new Error("VITE_BACKEND_API_URL is not configured");
+		throw new Error(
+			"The API address isn't configured: set VITE_BACKEND_API_URL in clients/web/.env (copy .env.example) and restart the dev server.",
+		);
 	}
 	return url.replace(/\/+$/, "");
 }

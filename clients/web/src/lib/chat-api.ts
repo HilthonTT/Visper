@@ -87,9 +87,12 @@ async function request<T>(
 		init.body = JSON.stringify(body);
 	}
 
+	// Outside the try: a missing VITE_BACKEND_API_URL is a setup error with
+	// its own message, not a network or CORS failure.
+	const url = `${getBackendUrl()}/api/v1/${path}`;
 	let response: Response;
 	try {
-		response = await fetch(`${getBackendUrl()}/api/v1/${path}`, init);
+		response = await fetch(url, init);
 	} catch (e) {
 		if (signal?.aborted) {
 			throw e;

@@ -131,7 +131,12 @@ export const AppShell = ({ hints, children }: AppShellProps) => {
 			</Header>
 
 			<Body>
-				<Main role="tabpanel">{children}</Main>
+				<Main
+					role="tabpanel"
+					$besideCompanion={!companionHidden && page !== "settings"}
+				>
+					{children}
+				</Main>
 				{/* Settings shows its own, larger preview. */}
 				{!companionHidden && page !== "settings" && <CompanionPanel />}
 			</Body>
@@ -281,12 +286,19 @@ const Body = styled.div`
   min-height: 0;
 `;
 
-const Main = styled.main`
+// Beside the companion, keep a gutter before its divider so wide pages (the
+// chat's toolbar, panels and composer) don't run into it.
+const Main = styled.main<{ $besideCompanion: boolean }>`
   display: flex;
   flex-direction: column;
   flex: 1;
   min-width: 0;
   overflow-y: auto;
+  padding-right: ${({ $besideCompanion }) => ($besideCompanion ? "1.25rem" : "0")};
+
+  @media (max-width: 1100px) {
+    padding-right: 0;
+  }
 `;
 
 const Companion = styled.aside`
