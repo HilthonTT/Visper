@@ -95,14 +95,45 @@ were in the room. Beyond that:
   server database) could read it. If the owner never comes back (a CLI owner
   who quit can't, since CLI identities last one session), the key is never
   rotated.
-- **A departed member working with the server** can get the new key. The
-  server can show the owner a key card the departed member made for a
-  remaining member, and the owner then seals the new key to it. Defending
-  against that would need members to verify each other's keys out of band,
-  which Visper doesn't do yet.
+- **A departed member working with the server** can get the new key, unless
+  the owner has verified the remaining members. The server can show the owner
+  a key card the departed member made for a remaining member, and the owner
+  then seals the new key to it. The same forged card would also let them sign
+  messages in that member's name. See [Verifying keys](#verifying-keys).
 - **Members without a key card** (a client that couldn't publish one) don't
   get rotated keys. The owner's client names them, and they need a new
   invite.
+
+## Verifying keys
+
+Each key card has a fingerprint: six groups of five digits, derived from the
+member's user ID and their signing and device keys:
+
+```
+SHA-512("visper/keycard/v1\n<user ID>\n<signing key>\n<device key>\n")
+```
+
+The keys are base64url. Group *i* is bytes 5*i* to 5*i*+4, read as a
+big-endian number, mod 100000. To verify someone, open their key
+(CLI: `ctrl+s`, pick them, `ctrl+k`; web: click their name under
+**members**). Then ask them to read out *their own* key over a call or in
+person, and mark them verified only if the digits match. Don't compare
+fingerprints through the room itself, since the server relays it.
+
+Verifying a member pins that card in your client:
+
+- Only the pinned card is accepted for their signatures. Messages signed with
+  another card show as unverified. If you verify the owner, rekeys signed with
+  another card are refused.
+- As owner, your rekeys seal the new key to the pinned card's device, never
+  to a newer card in their name.
+- If a different card appears for them, they're marked as having a changed
+  key (`!`) and you're warned. Their client may have restarted, or someone may
+  be posing as them. Compare again before you trust the new key.
+
+Verification only lasts as long as your session. Fingerprints change whenever
+an identity does: each CLI run, and each time the web client loads. Verify
+the owner and the members who matter to you each time.
 
 ## Invites
 

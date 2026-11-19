@@ -24,6 +24,9 @@ Sleep 2.5s
 Type "hey can u send me the notes from the meeting pls"
 Sleep 800ms
 Ctrl+A
-Sleep 10s
+# The first rewrite of a session asks before the draft leaves unencrypted.
+Sleep 2.5s
+Type "y"
+Sleep 12s
 Enter
 Sleep 2.5s

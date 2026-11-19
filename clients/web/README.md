@@ -28,7 +28,11 @@ The layout follows the CLI's TUI: a header with the logo, page tabs and API stat
 | --- | --- |
 | ![Light theme](../../docs/assets/screenshots/web-light.png) | <img src="../../docs/assets/screenshots/web-mobile.png" alt="Mobile layout" width="260"> |
 
-Screenshots are taken at 2× with Playwright against `pnpm dev`. Retake them after visual changes.
+**Verify keys:** click a member's name to compare key fingerprints with them, read out over a call or in person ([how it works](../../docs/security-model.md#verifying-keys)).
+
+![Keys panel with a verified member](../../docs/assets/screenshots/web-keys.png)
+
+Screenshots are taken at 2× with Playwright against the production build: `bash docs/demos/record-web.sh screenshots` ([docs/demos](../../docs/demos/README.md#web-demos)). Retake them after visual changes.
 
 ## Pages and shortcuts
 

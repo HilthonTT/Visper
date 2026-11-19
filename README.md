@@ -29,7 +29,7 @@ and the web client's limits, is in
 
 ![Joining a Visper room and chatting](docs/assets/demos/chat.gif)
 
-More demos (QR invites, editing, image sharing, AI rewrite):
+More demos (QR invites, editing, image sharing, key verification, AI rewrite):
 **[docs/demos](docs/demos/README.md)**.
 
 The web client mirrors the TUI's layout (header tabs, footer key hints and

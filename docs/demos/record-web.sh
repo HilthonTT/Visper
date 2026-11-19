@@ -3,7 +3,7 @@
 #
 #   docker compose -f docker-compose.yml -f docs/demos/web-demo.compose.yml --profile app up -d api
 #   bash docs/demos/record-web.sh              # all scenes
-#   bash docs/demos/record-web.sh chat         # one scene (chat, reactions, tour)
+#   bash docs/demos/record-web.sh chat         # one scene (chat, reactions, tour, screenshots)
 #
 # The API must allow the web origin for credentialed requests, hence the
 # compose overlay. Playwright records the production build of clients/web in
@@ -26,7 +26,7 @@ cd "$ROOT"
 mkdir -p "$WORK" docs/assets/demos
 
 scenes=("$@")
-[ ${#scenes[@]} -eq 0 ] && scenes=(chat reactions tour)
+[ ${#scenes[@]} -eq 0 ] && scenes=(chat reactions tour screenshots)
 
 echo "building the demo bot"
 (cd sdk/go && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$ROOT/$WORK/demo-bot" ./examples/demo-bot)
@@ -46,7 +46,7 @@ MSYS_NO_PATHCONV=1 docker run --rm \
 		set -euo pipefail
 		# Colour emoji for the reactions.
 		apt-get -qq update >/dev/null && apt-get -qq install -y fonts-noto-color-emoji >/dev/null
-		mkdir -p /tmp/pw && cp docs/demos/web/scenes.mjs /tmp/pw/
+		mkdir -p /tmp/pw && cp docs/demos/web/scenes.mjs docs/demos/web/screenshots.mjs /tmp/pw/
 		(cd /tmp/pw && npm init -y >/dev/null && npm i --silent --no-audit --no-fund "playwright@$PLAYWRIGHT_VERSION")
 
 		PORT=3000 node clients/web/.output/server/index.mjs >/tmp/web.log 2>&1 &
@@ -66,13 +66,19 @@ MSYS_NO_PATHCONV=1 docker run --rm \
 				[ -s /tmp/code ] || { cat /tmp/bot.log; exit 1; }
 				code=$(cat /tmp/code)
 			fi
-			(cd /tmp/pw && SCENE="$scene" INVITE_CODE="$code" OUT="/repo/$WORK" node scenes.mjs) || { cat /tmp/bot.log /tmp/web.log 2>/dev/null | tail -40; exit 1; }
+			if [ "$scene" = screenshots ]; then
+				# Still images for the READMEs, straight into docs/assets/screenshots.
+				(cd /tmp/pw && INVITE_CODE="$code" OUT=/repo/docs/assets/screenshots node screenshots.mjs) || { cat /tmp/bot.log /tmp/web.log 2>/dev/null | tail -40; exit 1; }
+			else
+				(cd /tmp/pw && SCENE="$scene" INVITE_CODE="$code" OUT="/repo/$WORK" node scenes.mjs) || { cat /tmp/bot.log /tmp/web.log 2>/dev/null | tail -40; exit 1; }
+			fi
 			[ -n "$code" ] && kill "$bot" 2>/dev/null || true
 		done
 	'
 
 echo "converting to GIF"
 for scene in "${scenes[@]}"; do
+	[ "$scene" = screenshots ] && continue # PNGs, already in place
 	# Clean frames compress well: unchanged pixels are reused between frames.
 	MSYS_NO_PATHCONV=1 docker run --rm -v "$ROOT:/repo" -w "/repo/$WORK/$scene-frames" "$FFMPEG_IMAGE" \
 		-y -loglevel error -f concat -i frames.txt \

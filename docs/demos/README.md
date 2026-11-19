@@ -31,6 +31,15 @@ and `Ctrl+D` deletes it.
 
 ![Uploading an image that previews inline](../assets/demos/file-share.gif)
 
+## Verify someone's key
+
+`Ctrl+S` lists the members and `Ctrl+K` shows your key fingerprint next to the
+highlighted member's. Read the digits to each other over a call or in person,
+then press `y` if they match. From then on, a different key in their name is
+refused (see [the security model](../security-model.md#verifying-keys)).
+
+![Comparing and verifying a member's key](../assets/demos/verify-keys.gif)
+
 ## Rewrite a message with local AI
 
 `Ctrl+A` rewrites your draft with a local [Ollama](https://ollama.com) model. The
@@ -93,9 +102,13 @@ API with the overlay that allows the demo origin:
 
 ```bash
 docker compose -f docker-compose.yml -f docs/demos/web-demo.compose.yml --profile app up -d api
-bash docs/demos/record-web.sh              # chat, reactions, tour -> docs/assets/demos/web-*.gif
+bash docs/demos/record-web.sh              # chat, reactions, tour -> docs/assets/demos/web-*.gif, plus screenshots
 bash docs/demos/record-web.sh reactions    # just this one
+bash docs/demos/record-web.sh screenshots  # just docs/assets/screenshots/web-*.png
 ```
+
+The `screenshots` scene ([`web/screenshots.mjs`](web/screenshots.mjs)) takes
+the still images in the web client's README at 2×.
 
 The scenes are in [`web/scenes.mjs`](web/scenes.mjs). They are captured as
 lossless screenshots (about 10 per second) rather than Playwright's video, whose
