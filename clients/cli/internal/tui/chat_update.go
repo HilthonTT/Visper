@@ -254,6 +254,7 @@ func (m model) chatDialogUpdate(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		return m, nil
 	case answerNo:
 		m.state.chat.members.kickUserID = ""
+		m.state.chat.members.keysUserID = ""
 		return m.closeDialog(), nil
 	case answerYes:
 		return m.confirmDialog()
@@ -281,6 +282,10 @@ func (m model) confirmDialog() (model, tea.Cmd) {
 	case dialogAIConsent:
 		m.aiConsent = true
 		return m.rewriteDraft()
+	case dialogVerifyKey, dialogUnverifyKey:
+		userID := m.state.chat.members.keysUserID
+		m.state.chat.members.keysUserID = ""
+		return m.verifyMember(userID, kind == dialogUnverifyKey)
 	}
 	return m, nil
 }

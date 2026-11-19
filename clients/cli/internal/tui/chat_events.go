@@ -67,6 +67,8 @@ func (m model) chatEventUpdate(msg tea.Msg) (_ model, _ tea.Cmd, handled bool) {
 		cmd = tea.Batch(cmd, m.waitForRoomEvent())
 	case keyRotatedMsg:
 		m, cmd = m.keyRotatedUpdate(msg)
+	case keyChangedMsg:
+		m, cmd = m.keyChangedUpdate(msg)
 
 	// Messages
 	case messageReceivedMsg:

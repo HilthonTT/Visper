@@ -25,6 +25,8 @@ type memberState struct {
 	search    textinput.Model
 	// kickUserID is the member the kick dialog is for.
 	kickUserID string
+	// keysUserID is the member the key verification dialog is for.
+	keysUserID string
 }
 
 // memberSearchResultMsg lists the IDs of the members matching query, best
@@ -166,6 +168,9 @@ func (m model) memberSearchKeyUpdate(msg tea.KeyPressMsg) (_ model, _ tea.Cmd, h
 		return m, nil, true
 	case "enter":
 		mm, cmd := m.kickHighlightedMember()
+		return mm, cmd, true
+	case "ctrl+k":
+		mm, cmd := m.openVerifyKeyDialog()
 		return mm, cmd, true
 	case "esc":
 		return m.closeMemberSearch(), nil, true

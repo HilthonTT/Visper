@@ -30,6 +30,10 @@ const (
 	dialogFileExplorer
 	// dialogAIConsent asks before the first draft goes to the AI service.
 	dialogAIConsent
+	// dialogVerifyKey compares a member's key fingerprint and pins it;
+	// dialogUnverifyKey is the same for a member already verified.
+	dialogVerifyKey
+	dialogUnverifyKey
 )
 
 const dialogMaxWidth = 58
@@ -205,6 +209,10 @@ func buttonLabels(k dialogKind) (string, string) {
 		return "Join", "Decline"
 	case dialogAIConsent:
 		return "Send", "Cancel"
+	case dialogVerifyKey:
+		return "Verify", "Cancel"
+	case dialogUnverifyKey:
+		return "Unverify", "Close"
 	default:
 		return "Yes", "No"
 	}

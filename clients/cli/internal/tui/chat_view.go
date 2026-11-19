@@ -8,6 +8,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	apisdk "github.com/hilthontt/visper/sdk/go"
 )
 
 // ---------------------------------------------------------------------------
@@ -216,6 +217,13 @@ func (m model) membersPanelView(width, height int) string {
 		}
 		if m.isCurrentUser(p.ID) {
 			badges += m.theme.TextSubtle().Render(" you")
+		} else if c.crypto != nil {
+			switch c.crypto.KeyStatus(p.ID) {
+			case apisdk.KeyVerified:
+				badges += m.theme.TextSuccess().Render(" ✓")
+			case apisdk.KeyChanged:
+				badges += m.theme.TextWarning().Render(" !")
+			}
 		}
 		nameWidth := inner - 2 - lipgloss.Width(badges)
 		name := m.theme.Base().Foreground(m.theme.UserColor(p.Username)).Render(truncate(p.Username, nameWidth))
@@ -238,9 +246,9 @@ func (m model) membersPanelView(width, height int) string {
 	var hints []keyHint
 	switch {
 	case s.searching && c.isRoomOwner:
-		hints = []keyHint{{"enter", "kick"}, {"esc", "close"}}
+		hints = []keyHint{{"enter", "kick"}, {"ctrl+k", "keys"}, {"esc", "close"}}
 	case s.searching:
-		hints = []keyHint{{"esc", "close"}}
+		hints = []keyHint{{"ctrl+k", "keys"}, {"esc", "close"}}
 	default:
 		hints = []keyHint{{"ctrl+s", "search"}}
 	}

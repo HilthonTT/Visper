@@ -98,8 +98,12 @@ func handleCryptoEvent(wsMsg apisdk.WSMessage, rc *apisdk.RoomCrypto) (msg tea.M
 		userID, okID := stringField(data, "userId")
 		card, okCard := stringField(data, "card")
 		if okID && okCard {
+			before := rc.KeyStatus(userID)
 			if err := rc.AddCard(userID, card); err != nil {
 				log.Printf("Ignoring key card of %s: %v", userID, err)
+			}
+			if before == apisdk.KeyVerified && rc.KeyStatus(userID) == apisdk.KeyChanged {
+				return keyChangedMsg{userID: userID}, true
 			}
 		}
 		return nil, true
