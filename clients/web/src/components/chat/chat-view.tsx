@@ -20,6 +20,7 @@ import {
 import { isEncryptedImageUrl, isPlainImageUrl } from "@/lib/room-crypto";
 import { InvitePanel } from "./invite-panel";
 import type { ChatSession } from "./join-form";
+import { KeysPanel } from "./keys-panel";
 import { MessageItem } from "./message-item";
 
 type Mode =
@@ -50,6 +51,9 @@ export const ChatView = ({
 	const [showMembers, setShowMembers] = useState(false);
 	// A room you just created is empty: start with what to share.
 	const [showInvite, setShowInvite] = useState(Boolean(session.created));
+	// The member whose key fingerprint is shown: null for only ours,
+	// undefined when the keys panel is closed.
+	const [keysFor, setKeysFor] = useState<string | null | undefined>();
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [now, setNow] = useState(() => Date.now());
@@ -274,6 +278,15 @@ export const ChatView = ({
 				</BarButton>
 				<BarButton
 					type="button"
+					aria-pressed={keysFor !== undefined}
+					onClick={() =>
+						setKeysFor((k) => (k === undefined ? null : undefined))
+					}
+				>
+					keys
+				</BarButton>
+				<BarButton
+					type="button"
 					className="members-toggle"
 					aria-pressed={showMembers}
 					onClick={() => setShowMembers((s) => !s)}
@@ -290,6 +303,33 @@ export const ChatView = ({
 					joinUrl={session.room.qr_code_url}
 					roomKey={chat.inviteKey}
 					onClose={() => setShowInvite(false)}
+				/>
+			)}
+			{keysFor !== undefined && (
+				<KeysPanel
+					member={
+						keysFor === null
+							? null
+							: (state.members.find((m) => m.id === keysFor) ?? {
+									id: keysFor,
+									username: memberName(state, keysFor),
+								})
+					}
+					myFingerprint={chat.crypto.myFingerprint()}
+					fingerprint={keysFor ? chat.crypto.fingerprint(keysFor) : ""}
+					status={keysFor ? chat.crypto.keyStatus(keysFor) : "unverified"}
+					onVerify={() => {
+						if (!keysFor) {
+							return;
+						}
+						try {
+							chat.verifyMember(keysFor, chat.crypto.fingerprint(keysFor));
+						} catch (e) {
+							fail(e);
+						}
+					}}
+					onUnverify={() => keysFor && chat.unverifyMember(keysFor)}
+					onClose={() => setKeysFor(undefined)}
 				/>
 			)}
 
@@ -343,13 +383,38 @@ export const ChatView = ({
 								Number(onlineSet.has(b.id)) - Number(onlineSet.has(a.id)) ||
 								a.username.localeCompare(b.username),
 						)
-						.map((m) => (
-							<MemberRow key={m.id} $online={onlineSet.has(m.id)}>
-								<span>{onlineSet.has(m.id) ? "●" : "○"}</span>{" "}
-								{m.id === state.me ? `${m.username} (you)` : m.username}
-								{m.id === state.ownerId && <Muted> owner</Muted>}
-							</MemberRow>
-						))}
+						.map((m) => {
+							const status =
+								m.id === state.me ? null : chat.crypto.keyStatus(m.id);
+							return (
+								<MemberRow key={m.id} $online={onlineSet.has(m.id)}>
+									<span>{onlineSet.has(m.id) ? "●" : "○"}</span>
+									<MemberButton
+										type="button"
+										title={
+											m.id === state.me
+												? "show your key"
+												: `compare keys with ${m.username}`
+										}
+										onClick={() => setKeysFor(m.id === state.me ? null : m.id)}
+									>
+										{m.username}
+									</MemberButton>
+									{m.id === state.me && <Muted>you</Muted>}
+									{status === "verified" && (
+										<Trust $tone="success" title="key verified">
+											✓
+										</Trust>
+									)}
+									{status === "changed" && (
+										<Trust $tone="warning" title="key changed since verified">
+											!
+										</Trust>
+									)}
+									{m.id === state.ownerId && <Muted>owner</Muted>}
+								</MemberRow>
+							);
+						})}
 				</Members>
 			</Body>
 
@@ -506,14 +571,17 @@ const Hint = styled.div`
 `;
 
 const Members = styled.aside<{ $open: boolean }>`
-  width: 13rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  width: 15rem;
   flex: none;
-  padding: 0.5rem 0 0.5rem 0.9rem;
+  padding: 0.5rem 0.25rem 0.5rem 0.9rem;
   border-left: 1px solid ${({ theme }) => theme.colors.border};
   overflow-y: auto;
 
   ${NARROW} {
-    display: ${({ $open }) => ($open ? "block" : "none")};
+    display: ${({ $open }) => ($open ? "flex" : "none")};
     width: 11rem;
   }
 `;
@@ -523,12 +591,19 @@ const MembersTitle = styled.div`
   color: ${({ theme }) => theme.colors.text[300]};
 `;
 
+// The name gives way to the badges: a long name truncates, but ✓, ! and
+// "owner" always stay in view.
 const MemberRow = styled.div<{ $online: boolean }>`
-  overflow: hidden;
+  display: flex;
+  align-items: baseline;
+  gap: 1ch;
   color: ${({ theme, $online }) =>
 		$online ? theme.colors.text[100] : theme.colors.text[300]};
-  text-overflow: ellipsis;
   white-space: nowrap;
+
+  & > span {
+    flex: none;
+  }
 
   span {
     color: ${({ theme, $online }) =>
@@ -538,6 +613,24 @@ const MemberRow = styled.div<{ $online: boolean }>`
 
 const Muted = styled.span`
   color: ${({ theme }) => theme.colors.text[300]} !important;
+`;
+
+const MemberButton = styled.button`
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-overflow: ellipsis;
+
+  &:hover {
+    color: ${({ theme }) => theme.colors.primary};
+  }
+`;
+
+const Trust = styled.span<{ $tone: "success" | "warning" }>`
+  color: ${({ theme, $tone }) => theme.colors[$tone]} !important;
+  font-weight: 700;
 `;
 
 const Typing = styled.div`

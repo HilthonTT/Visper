@@ -44,6 +44,8 @@ const ROOM_GONE_STATUSES = [403, 404, 410];
 
 const ROTATED_NOTICE =
 	"The room key was rotated: old invites no longer work. Open invite for the new one.";
+const KEY_CHANGED_NOTICE =
+	"A member you verified has a new key. Only their old one is trusted until you check it again in members.";
 
 /**
  * One joined room: its live state, fed by the room WebSocket (and the REST
@@ -79,6 +81,8 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 	const [keyVersion, setKeyVersion] = useState(0);
 	/** A note about the room's keys (e.g. that the key was rotated). */
 	const [notice, setNotice] = useState("");
+	/** Bumped when a member's key verification changes, to redraw it. */
+	const [trustVersion, setTrustVersion] = useState(0);
 
 	const publishCard = useCallback(async () => {
 		const card = crypto.myCard();
@@ -222,10 +226,19 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 			};
 			if (type === "member.card") {
 				if (typeof d.userId === "string" && typeof d.card === "string") {
+					const before = crypto.keyStatus(d.userId);
 					try {
 						crypto.addCard(d.userId, d.card);
 					} catch {
 						// Forged, or sealed with a key we don't have.
+					}
+					if (
+						before === "verified" &&
+						crypto.keyStatus(d.userId) === "changed" &&
+						!stopped
+					) {
+						setTrustVersion((v) => v + 1);
+						setNotice(KEY_CHANGED_NOTICE);
 					}
 				}
 				return;
@@ -524,10 +537,31 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 		dispatch({ type: "closed", reason: "You left the room." });
 	}, [roomId]);
 
+	/** Pins userId's key with the fingerprint the user compared. */
+	const verifyMember = useCallback(
+		(userId: string, fingerprint: string) => {
+			crypto.verifyMember(userId, fingerprint);
+			setTrustVersion((v) => v + 1);
+		},
+		[crypto],
+	);
+
+	const unverifyMember = useCallback(
+		(userId: string) => {
+			crypto.unverifyMember(userId);
+			setTrustVersion((v) => v + 1);
+		},
+		[crypto],
+	);
+
 	return {
 		state,
 		connection,
 		crypto,
+		/** Changes whenever a member's key status may have changed. */
+		trustVersion,
+		verifyMember,
+		unverifyMember,
 		/** The key to put in invites; changes when the room key is rotated. */
 		inviteKey: useMemo(
 			// keyVersion marks when crypto's current key changed.

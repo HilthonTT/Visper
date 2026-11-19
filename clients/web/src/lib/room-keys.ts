@@ -65,6 +65,8 @@ export class ReplayedError extends UnverifiedError {}
 export class FileMismatchError extends Error {}
 /** A rekey not signed by the room's owner. */
 export class BadRekeyError extends Error {}
+/** Verifying a member with a fingerprint none of their cards has. */
+export class FingerprintMismatchError extends Error {}
 
 /** The placeholder shown for content that failed to decrypt or verify. */
 export function failedText(e: unknown): string {
@@ -267,7 +269,50 @@ export class Identity {
 // ---------------------------------------------------------------------------
 // RoomCrypto
 
-type MemberCard = { sign: Uint8Array; device: string };
+type MemberCard = { sign: Uint8Array; device: string; fingerprint: string };
+
+/*
+ * Fingerprints (see the Go SDK's KeyFingerprint). The server relays key
+ * cards, so on its own a client can't tell a member's real card from one the
+ * server (helped by someone with the room key) made in their name. Members
+ * rule that out by comparing fingerprints over a channel they trust:
+ *
+ *   SHA-512( "visper/keycard/v1\n<user ID>\n<signing key>\n<device key>\n" )
+ *
+ * shown as six groups of five digits (bytes 5i..5i+4, big-endian, mod
+ * 100000). Verifying a member pins that card: only it is accepted for their
+ * signatures (and, for the owner, rekeys), the owner's rekeys go only to its
+ * device, and any other card for them shows as a changed key.
+ */
+
+const FINGERPRINT_CONTEXT = "visper/keycard/v1";
+
+/** The fingerprint of userId's card holding these keys (base64url). */
+export function keyFingerprint(
+	userId: string,
+	signKey: string,
+	deviceKey: string,
+): string {
+	const sum = nacl.hash(
+		utf8.encode(
+			`${FINGERPRINT_CONTEXT}\n${userId}\n${signKey}\n${deviceKey}\n`,
+		),
+	);
+	const groups: string[] = [];
+	for (let i = 0; i < 6; i++) {
+		let n = 0;
+		for (const b of sum.subarray(i * 5, i * 5 + 5)) {
+			n = n * 256 + b; // < 2^40, exact in a double
+		}
+		groups.push(String(n % 100000).padStart(5, "0"));
+	}
+	return groups.join(" ");
+}
+
+const digitsOnly = (fp: string) => fp.replace(/\D/g, "");
+
+/** Whether a member's key card was verified (and has changed since). */
+export type KeyStatus = "unverified" | "verified" | "changed";
 
 export type Rekey = {
 	epoch: number;
@@ -318,6 +363,10 @@ export class RoomCrypto {
 	private readonly nonces = new Map<string, string>();
 	private readonly versions = new Map<string, number>();
 	private readonly departed = new Set<string>();
+	/** Member -> the pinned card's fingerprint. */
+	private readonly verified = new Map<string, string>();
+	/** Verified members for whom a new, unpinned card appeared. */
+	private readonly changed = new Set<string>();
 
 	/**
 	 * `ownerId` is the room's owner as seen when entering the room, the only
@@ -365,7 +414,15 @@ export class RoomCrypto {
 		if (!cards?.length) {
 			throw new UnknownSenderError("no key card for the sender");
 		}
-		if (!cards.some((c) => nacl.sign.detached.verify(body, sig, c.sign))) {
+		// Once from is verified, only the pinned card counts.
+		const pinned = this.verified.get(from);
+		if (
+			!cards.some(
+				(c) =>
+					(pinned === undefined || c.fingerprint === pinned) &&
+					nacl.sign.detached.verify(body, sig, c.sign),
+			)
+		) {
 			throw new UnverifiedError("bad signature");
 		}
 	}
@@ -416,14 +473,18 @@ export class RoomCrypto {
 			throw new UnverifiedError("malformed card");
 		}
 		const deviceKey = env.text.slice(at + 1);
+		const fingerprint = keyFingerprint(
+			userId,
+			base64UrlEncode(sign),
+			deviceKey,
+		);
 		const list = this.cards.get(userId) ?? [];
-		const signKey = base64UrlEncode(sign);
-		if (
-			!list.some(
-				(c) => c.device === deviceKey && base64UrlEncode(c.sign) === signKey,
-			)
-		) {
-			list.push({ sign, device: deviceKey });
+		if (!list.some((c) => c.fingerprint === fingerprint)) {
+			list.push({ sign, device: deviceKey, fingerprint });
+			const pinned = this.verified.get(userId);
+			if (pinned !== undefined && pinned !== fingerprint) {
+				this.changed.add(userId);
+			}
 		}
 		this.cards.set(userId, list);
 	}
@@ -443,6 +504,63 @@ export class RoomCrypto {
 
 	hasCard(userId: string): boolean {
 		return (this.cards.get(userId)?.length ?? 0) > 0;
+	}
+
+	// Verification
+
+	/** Our card's fingerprint, for members to compare with what they see. */
+	myFingerprint(): string {
+		return keyFingerprint(
+			this.me.userId,
+			this.me.signingPublicKey(),
+			this.me.devicePublicKey(),
+		);
+	}
+
+	/**
+	 * The fingerprint to compare for userId: the pinned card's while they are
+	 * verified and nothing changed, otherwise their latest card's; "" if no
+	 * card is known.
+	 */
+	fingerprint(userId: string): string {
+		const pinned = this.verified.get(userId);
+		if (pinned !== undefined && !this.changed.has(userId)) {
+			return pinned;
+		}
+		const cards = this.cards.get(userId);
+		return cards?.length ? cards[cards.length - 1].fingerprint : "";
+	}
+
+	/**
+	 * Pins userId's card with this fingerprint (separators ignored), once it
+	 * was compared with them over a channel the user trusts. Replaces an
+	 * earlier pin and clears a changed key.
+	 */
+	verifyMember(userId: string, fingerprint: string): void {
+		const want = digitsOnly(fingerprint);
+		const card = this.cards
+			.get(userId)
+			?.find((c) => digitsOnly(c.fingerprint) === want);
+		if (!card) {
+			throw new FingerprintMismatchError(
+				"the fingerprint doesn't match any of the member's keys",
+			);
+		}
+		this.verified.set(userId, card.fingerprint);
+		this.changed.delete(userId);
+	}
+
+	/** Forgets that userId was verified; any of their cards counts again. */
+	unverifyMember(userId: string): void {
+		this.verified.delete(userId);
+		this.changed.delete(userId);
+	}
+
+	keyStatus(userId: string): KeyStatus {
+		if (this.changed.has(userId)) {
+			return "changed";
+		}
+		return this.verified.has(userId) ? "verified" : "unverified";
 	}
 
 	// Sealing
@@ -685,10 +803,15 @@ export class RoomCrypto {
 				missing.push(id);
 				continue;
 			}
-			// The latest card is the member's current device.
+			// The latest card is the member's current device; once they are
+			// verified, only the pinned card is trusted.
+			const pinned = this.verified.get(id);
+			const card =
+				(pinned !== undefined && cards.find((c) => c.fingerprint === pinned)) ||
+				cards[cards.length - 1];
 			keys[id] = await sealRoomKey(
 				newKey,
-				new Uint8Array(base64UrlDecode(cards[cards.length - 1].device)),
+				new Uint8Array(base64UrlDecode(card.device)),
 			);
 		}
 		const epoch = currentEpoch + 1;

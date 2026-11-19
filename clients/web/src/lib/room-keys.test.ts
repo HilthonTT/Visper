@@ -7,8 +7,10 @@ import {
 	__test,
 	BadRekeyError,
 	FileMismatchError,
+	FingerprintMismatchError,
 	failedText,
 	Identity,
+	keyFingerprint,
 	MAX_CLOCK_SKEW_MS,
 	MAX_CONTENT_LENGTH,
 	MAX_SEALED_BYTES,
@@ -49,6 +51,8 @@ type Vectors = {
 	rekey: { epoch: number; keys: Record<string, string>; signature: string };
 	rekey_message: string;
 	new_key: string;
+	alice_fingerprint: string;
+	bob_fingerprint: string;
 };
 
 const vectors: Vectors = JSON.parse(
@@ -129,6 +133,13 @@ describe("compatibility with the Go SDK", () => {
 		expect(await rc.applyRekey(rekey)).toBe(true);
 		expect(toB64(rc.currentKey())).toBe(vectors.new_key);
 		expect(rc.epoch()).toBe(1);
+	});
+
+	it("shows the same fingerprints", () => {
+		expect(rc.myFingerprint()).toBe(vectors.bob_fingerprint);
+		expect(rc.fingerprint(vectors.alice.user_id)).toBe(
+			vectors.alice_fingerprint,
+		);
 	});
 });
 
@@ -386,5 +397,86 @@ describe("size limits", () => {
 		);
 		expect(me.fits(content, "", hash)).toBe(true);
 		expect(content.endsWith(".png")).toBe(true);
+	});
+});
+
+describe("key verification", () => {
+	/** A card in victimId's name, made by someone who only has the room key. */
+	function forge(key: RoomKey, victimId: string) {
+		const fake = new RoomCrypto(
+			Identity.create(victimId),
+			"room-1",
+			"alice",
+			key,
+		);
+		return { fake, card: fake.myCard() };
+	}
+
+	it("formats and matches fingerprints", () => {
+		const [alice, bob] = newRoom("alice", "bob");
+		const fp = bob.myFingerprint();
+		expect(fp).toMatch(/^\d{5}( \d{5}){5}$/);
+		expect(alice.fingerprint("bob")).toBe(fp);
+		expect(alice.fingerprint("carol")).toBe("");
+		expect(
+			keyFingerprint(
+				"carol",
+				bob.me.signingPublicKey(),
+				bob.me.devicePublicKey(),
+			),
+		).not.toBe(fp);
+
+		expect(alice.keyStatus("bob")).toBe("unverified");
+		expect(() => alice.verifyMember("bob", "0".repeat(30))).toThrow(
+			FingerprintMismatchError,
+		);
+		alice.verifyMember("bob", fp.replaceAll(" ", ""));
+		expect(alice.keyStatus("bob")).toBe("verified");
+		alice.addCard("bob", bob.myCard());
+		expect(alice.keyStatus("bob")).toBe("verified");
+		alice.unverifyMember("bob");
+		expect(alice.keyStatus("bob")).toBe("unverified");
+	});
+
+	it("stops a forged card replacing a verified member", async () => {
+		const [alice, bob] = newRoom("alice", "bob", "mallory");
+		alice.verifyMember("bob", bob.myFingerprint());
+		const { fake, card } = forge(alice.currentKey(), "bob");
+		alice.addCard("bob", card);
+		expect(alice.keyStatus("bob")).toBe("changed");
+		expect(alice.fingerprint("bob")).not.toBe(bob.myFingerprint());
+
+		expect(() =>
+			alice.openMessage(fake.sealMessage("it's bob"), "bob", "m1", Date.now()),
+		).toThrow(UnverifiedError);
+		expect(
+			alice.openMessage(bob.sealMessage("real bob"), "bob", "m2", Date.now())
+				.text,
+		).toBe("real bob");
+
+		alice.markDeparted("mallory");
+		const { rekey, newKey } = await alice.newRekey(["alice", "bob"], 0);
+		const sealed = rekey.keys?.bob ?? "";
+		await expect(fake.me.openRoomKey(sealed)).rejects.toThrow();
+		expect(await bob.applyRekey(rekey)).toBe(true);
+		expect(toB64(bob.currentKey())).toBe(toB64(newKey));
+
+		// Unpinned, the latest card wins: what verification prevents.
+		alice.unverifyMember("bob");
+		const unpinned = await alice.newRekey(["alice", "bob"], 1);
+		await expect(
+			fake.me.openRoomKey(unpinned.rekey.keys?.bob ?? ""),
+		).resolves.toBeDefined();
+	});
+
+	it("refuses rekeys signed by a forged owner card", async () => {
+		const [alice, bob] = newRoom("alice", "bob");
+		bob.verifyMember("alice", alice.myFingerprint());
+		const { fake, card } = forge(alice.currentKey(), "alice");
+		bob.addCard("alice", card);
+		fake.addCard("bob", bob.myCard());
+		const { rekey } = await fake.newRekey(["alice", "bob"], 0);
+		await expect(bob.applyRekey(rekey)).rejects.toThrow(BadRekeyError);
+		expect(bob.keyStatus("alice")).toBe("changed");
 	});
 });
