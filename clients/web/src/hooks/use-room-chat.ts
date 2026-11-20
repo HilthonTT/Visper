@@ -31,6 +31,7 @@ import {
 	type Rekey,
 	RoomCrypto,
 } from "@/lib/room-keys";
+import { forgetRoom, saveRoom } from "@/lib/saved-rooms";
 
 export type Connection = "connecting" | "open" | "reconnecting" | "closed";
 
@@ -58,8 +59,17 @@ const KEY_CHANGED_NOTICE =
  *
  * `active` is whether the chat is on screen: read receipts are only sent for
  * messages the user can actually see.
+ *
+ * `opts.restored` is a remembered room's crypto state (same identity, keys
+ * and owner pin as before the reload); `opts.remember` starts with the room
+ * remembered, which saves that state to this browser as it changes.
  */
-export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
+export function useRoomChat(
+	room: ApiRoom,
+	key: RoomKey,
+	active: boolean,
+	opts: { restored?: RoomCrypto; remember?: boolean } = {},
+) {
 	const [state, dispatch] = useReducer(chatReducer, room, initialChatState);
 	const [connection, setConnection] = useState<Connection>("connecting");
 	const socket = useRef<WebSocket | null>(null);
@@ -69,12 +79,17 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 	const me = room.current_user.id;
 	const ownerId = room.owner.id;
 
-	// This session's identity and the room's keys. The owner is pinned here:
-	// only their rekeys are ever accepted.
+	// This session's identity and the room's keys. The owner is pinned here
+	// (or was, when the remembered room was first entered): only their
+	// rekeys are ever accepted.
+	const restored = opts.restored;
 	const crypto = useMemo(
-		() => new RoomCrypto(Identity.create(me), roomId, ownerId, key),
-		[me, roomId, ownerId, key],
+		() => restored ?? new RoomCrypto(Identity.create(me), roomId, ownerId, key),
+		[restored, me, roomId, ownerId, key],
 	);
+	const [remember, setRemember] = useState(Boolean(opts.remember));
+	/** Set when the user asked to remember the room but the browser refused. */
+	const [rememberFailed, setRememberFailed] = useState(false);
 	/** Set once our key card is published and the others' are loaded. */
 	const [ready, setReady] = useState(false);
 	/** Bumped when the room key changes, to refresh the invite. */
@@ -364,6 +379,41 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 		return () => window.clearTimeout(id);
 	}, [expiresAt, closed]);
 
+	// A remembered room is saved whenever its keys, pins or members change,
+	// and forgotten once it closes for us (left, removed, deleted, expired)
+	// or the user stops remembering it.
+	const members = state.members;
+	const joinCode = state.joinCode;
+	useEffect(() => {
+		if (closed || !remember) {
+			void forgetRoom(roomId);
+			return;
+		}
+		// keyVersion, trustVersion and members mark changes inside crypto.
+		void [keyVersion, trustVersion, members];
+		saveRoom({
+			roomId,
+			userId: me,
+			joinCode,
+			ownerName: room.owner.username,
+			expiresAt,
+			savedAt: Date.now(),
+			crypto: crypto.save(),
+		}).then((ok) => setRememberFailed(!ok));
+	}, [
+		closed,
+		remember,
+		roomId,
+		me,
+		joinCode,
+		room.owner.username,
+		expiresAt,
+		crypto,
+		keyVersion,
+		trustVersion,
+		members,
+	]);
+
 	// History over REST too (once the cards are in): the socket replays only
 	// the latest messages.
 	useEffect(() => {
@@ -538,12 +588,14 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 				throw e;
 			}
 		}
+		void forgetRoom(roomId);
 		dispatch({ type: "closed", reason: "You left the room." });
 	}, [roomId]);
 
 	/** Deletes the room for everyone (owner only). */
 	const deleteRoom = useCallback(async () => {
 		await chatApi.deleteRoom(roomId);
+		void forgetRoom(roomId);
 		dispatch({ type: "closed", reason: "You deleted the room." });
 	}, [roomId]);
 
@@ -625,5 +677,9 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 		kick,
 		listFiles,
 		deleteFile,
+		/** Whether this browser keeps the room's keys to reopen it later. */
+		remember,
+		setRemember,
+		rememberFailed,
 	};
 }

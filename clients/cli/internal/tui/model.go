@@ -85,13 +85,15 @@ type model struct {
 	userID string
 	// deviceKey lets the web client send this terminal a room key through the
 	// API without the API being able to read it (see the device code on the
-	// settings page). It lives only as long as the process.
+	// settings page).
 	deviceKey *apisdk.DeviceKey
 	// identity holds the signing key that signs everything this client
-	// sends, with the device key above. Like the user token it lives only as
-	// long as the process; other members learn it from the key card we
-	// publish in each room (see apisdk.RoomCrypto).
+	// sends, with the device key above. Other members learn it from the key
+	// card we publish in each room (see apisdk.RoomCrypto).
 	identity *apisdk.Identity
+	// identityStore keeps the user token, the identity and the rooms we are
+	// in across runs (see identity.go); nil if they last only this run.
+	identityStore *settings.IdentityStore
 	// aiConsent is set once the user agreed to send drafts to the AI
 	// service, which reads them unencrypted.
 	aiConsent bool
@@ -118,25 +120,20 @@ type model struct {
 
 // NewModel returns the root model of the TUI.
 func NewModel() (tea.Model, error) {
-	userToken := apisdk.NewUserToken()
-	userID := apisdk.UserIDFromToken(userToken)
-	log.Printf("USERID: %s\n", userID)
-
-	deviceKey, err := apisdk.NewDeviceKey()
+	store, userToken, identity, err := loadIdentity(identityPath())
 	if err != nil {
 		return nil, err
 	}
-	identity, err := apisdk.NewIdentity(userID, deviceKey)
-	if err != nil {
-		return nil, err
-	}
+	userID := identity.UserID()
+	log.Printf("USERID: %s (kept across runs: %v)\n", userID, store != nil)
 
 	return model{
 		ctx:             context.Background(),
 		userToken:       userToken,
 		userID:          userID,
-		deviceKey:       deviceKey,
+		deviceKey:       identity.Device(),
 		identity:        identity,
+		identityStore:   store,
 		page:            splashPage,
 		theme:           theme.BasicTheme(true, nil),
 		faqs:            loadFaqs(),

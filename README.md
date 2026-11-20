@@ -53,6 +53,12 @@ export VISPER_BASE_URL=https://visper.example.com   # default http://localhost:5
 visper
 ```
 
+The CLI remembers who you are between runs: its identity and the keys of the
+rooms you're in are kept in `visper/identity.json` in your user config
+directory (owner-only, unencrypted), so quitting keeps you in your rooms and
+the Join page reopens them. `ctrl+b` leaves a room; `visper -forget` deletes
+the file. See [Stored keys](docs/security-model.md#stored-keys).
+
 The binaries are not code-signed, so macOS Gatekeeper and Windows SmartScreen
 may warn on first run. To build from source instead: `make build` (the binary
 lands in `./bin`). Maintainers cut a release by pushing a tag

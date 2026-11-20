@@ -64,7 +64,7 @@ export const KeysPanel = ({
 			<Note>
 				{member
 					? `Ask ${member.username} to read out "your key" from their screen, over a call or in person. Mark them verified only if it matches the digits above.`
-					: "Pick a member to compare keys with them. Fingerprints change when you reload this page."}
+					: "Pick a member to compare keys with them. Your fingerprint changes when you reload this page, unless this browser remembers the room."}
 			</Note>
 			<Buttons>
 				{member && fingerprint && status !== "verified" && (

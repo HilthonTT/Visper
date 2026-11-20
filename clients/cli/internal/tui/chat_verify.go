@@ -69,6 +69,7 @@ func (m model) verifyMember(userID string, unverify bool) (model, tea.Cmd) {
 	if name == "" {
 		name = "That member"
 	}
+	defer m.rememberRoom() // the pin outlives a restart
 	if unverify {
 		rc.UnverifyMember(userID)
 		return m.toast(theme.ToneInfo, name+" is no longer verified.")

@@ -22,7 +22,8 @@ import (
 //
 // An Identity is one running client's keys: a signing key (Ed25519) that
 // signs everything it sends, and a device key (X25519) that new room keys are
-// sealed to. Both live only as long as the process, like the user token.
+// sealed to. A client can keep both (with its user token) across runs with
+// ExportSigningKey, DeviceKey.Export and RestoreIdentity.
 
 // Identity is a client's user ID with its signing and device keys.
 type Identity struct {
@@ -47,6 +48,31 @@ func NewIdentity(userID string, device *DeviceKey) (*Identity, error) {
 		}
 	}
 	return &Identity{userID: userID, sign: priv, device: device}, nil
+}
+
+// RestoreIdentity returns the identity for userID with a signing key saved by
+// ExportSigningKey and its device key.
+func RestoreIdentity(userID, signingKey string, device *DeviceKey) (*Identity, error) {
+	if userID == "" {
+		return nil, ErrNoSender
+	}
+	if device == nil {
+		return nil, ErrInvalidDeviceKey
+	}
+	seed, err := base64.RawURLEncoding.DecodeString(signingKey)
+	if err != nil || len(seed) != ed25519.SeedSize {
+		return nil, ErrInvalidSigningKey
+	}
+	return &Identity{userID: userID, sign: ed25519.NewKeyFromSeed(seed), device: device}, nil
+}
+
+// ErrInvalidSigningKey is returned when restoring a malformed signing key.
+var ErrInvalidSigningKey = errors.New("invalid signing key")
+
+// ExportSigningKey returns the private signing key (its seed, base64url) for
+// RestoreIdentity. It is a secret: store it where only the user can read it.
+func (id *Identity) ExportSigningKey() string {
+	return base64.RawURLEncoding.EncodeToString(id.sign.Seed())
 }
 
 // UserID returns the identity's public user ID.
@@ -191,6 +217,59 @@ func NewRoomCrypto(me *Identity, roomID, ownerID, keyB64 string) (*RoomCrypto, e
 		verified: map[string]string{},
 		changed:  map[string]bool{},
 	}, nil
+}
+
+// RoomCryptoState is the part of a RoomCrypto worth keeping across runs:
+// the room's keys and which members were verified. Key cards are fetched
+// again from the API, and replay tracking starts over.
+type RoomCryptoState struct {
+	// Keys are the room keys (base64), oldest first; the last is current.
+	Keys []string `json:"keys"`
+	// Epoch is the rekey epoch of the current key.
+	Epoch int `json:"epoch"`
+	// Verified maps verified members to their pinned card's fingerprint.
+	Verified map[string]string `json:"verified,omitempty"`
+}
+
+// State returns a copy of the state to save with RestoreRoomCrypto.
+func (rc *RoomCrypto) State() RoomCryptoState {
+	rc.mu.RLock()
+	defer rc.mu.RUnlock()
+	st := RoomCryptoState{Keys: slices.Clone(rc.keys), Epoch: rc.epoch}
+	if len(rc.verified) > 0 {
+		st.Verified = make(map[string]string, len(rc.verified))
+		for id, fp := range rc.verified {
+			st.Verified[id] = fp
+		}
+	}
+	return st
+}
+
+// RestoreRoomCrypto returns a room's crypto state saved with State. Like
+// NewRoomCrypto, ownerID is the owner pinned when the room was first
+// entered. Verified members stay pinned: their pinned card is the only one
+// trusted once the cards are loaded again.
+func RestoreRoomCrypto(me *Identity, roomID, ownerID string, st RoomCryptoState) (*RoomCrypto, error) {
+	if len(st.Keys) == 0 {
+		return nil, ErrInvalidKey
+	}
+	rc, err := NewRoomCrypto(me, roomID, ownerID, st.Keys[0])
+	if err != nil {
+		return nil, err
+	}
+	for _, k := range st.Keys[1:] {
+		if _, err := roomKeyBytes(k); err != nil {
+			return nil, err
+		}
+		rc.addKeyLocked(k)
+	}
+	rc.epoch = st.Epoch
+	for id, fp := range st.Verified {
+		if id != "" && fp != "" {
+			rc.verified[id] = fp
+		}
+	}
+	return rc, nil
 }
 
 // Identity returns the client's identity.

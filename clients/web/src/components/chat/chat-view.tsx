@@ -41,7 +41,10 @@ export const ChatView = ({
 	active: boolean;
 	onLeft: () => void;
 }) => {
-	const chat = useRoomChat(session.room, session.key, active);
+	const chat = useRoomChat(session.room, session.key, active, {
+		restored: session.crypto,
+		remember: session.remember,
+	});
 	const { state, connection } = chat;
 	const { setMood } = useShell();
 
@@ -357,6 +360,27 @@ export const ChatView = ({
 				>
 					members
 				</BarButton>
+				<BarButton
+					type="button"
+					aria-pressed={chat.remember}
+					title={
+						chat.remember
+							? "forget this room's keys on this browser"
+							: "keep this room's keys on this browser to reopen it after a reload"
+					}
+					onClick={() => {
+						if (
+							chat.remember ||
+							window.confirm(
+								"Remember this room on this browser? Its keys are stored here, unencrypted, until you leave or forget it: anyone using this browser profile could read the room.",
+							)
+						) {
+							chat.setRemember(!chat.remember);
+						}
+					}}
+				>
+					{chat.remember ? "forget" : "remember"}
+				</BarButton>
 				{isOwner && (
 					<BarButton
 						type="button"
@@ -544,6 +568,12 @@ export const ChatView = ({
 						dismiss
 					</BarButton>
 				</NoticeLine>
+			)}
+			{chat.remember && chat.rememberFailed && (
+				<ErrorLine role="alert">
+					✕ This browser won't store the room (private window or blocked site
+					data): it will be gone after a reload.
+				</ErrorLine>
 			)}
 			{error && <ErrorLine role="alert">✕ {error}</ErrorLine>}
 

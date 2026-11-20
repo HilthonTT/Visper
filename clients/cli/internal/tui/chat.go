@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"net/url"
+	"slices"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -124,7 +125,7 @@ func (m model) enterChat(room *apisdk.RoomResponse, roomKey string) (model, tea.
 		}
 	}
 	// The owner is pinned now: only rekeys signed by this member are
-	// accepted for as long as we stay.
+	// accepted, now and (the room being remembered) after a restart.
 	rc, err := apisdk.NewRoomCrypto(m.identity, room.ID, room.Owner.ID, roomKey)
 	if err != nil {
 		isOwner := room.CurrentUser.ID != "" && room.CurrentUser.ID == room.Owner.ID
@@ -134,7 +135,29 @@ func (m model) enterChat(room *apisdk.RoomResponse, roomKey string) (model, tea.
 			return visibleError{message: "That room key is invalid. Ask for the full invite code again."}
 		}
 	}
-	room = withInviteKey(room, roomKey)
+	if stored, ok := m.storedRoom(room.ID); ok && stored.OwnerID == room.Owner.ID {
+		// Back in a room we were already in (e.g. through a new invite):
+		// keep the keys and verified members we had, plus the invite's key.
+		keys := stored.Keys
+		if !slices.Contains(keys, roomKey) {
+			keys = append(slices.Clone(keys), roomKey) // newer than ours
+		}
+		if prev, err := apisdk.RestoreRoomCrypto(m.identity, room.ID, stored.OwnerID, apisdk.RoomCryptoState{
+			Keys: keys, Epoch: stored.Epoch, Verified: stored.Verified,
+		}); err == nil {
+			rc = prev
+		}
+	}
+	return m.enterRoom(room, rc)
+}
+
+// enterRoom opens the chat page for room with its crypto state rc: a room
+// just created or joined, or a remembered one reopened.
+func (m model) enterRoom(room *apisdk.RoomResponse, rc *apisdk.RoomCrypto) (model, tea.Cmd) {
+	if m.page == chatPage && m.state.chat.room != nil {
+		return m, nil // see enterChat
+	}
+	room = withInviteKey(room, rc.CurrentKey())
 
 	m = m.stopNotificationListener()
 	// Never let a previous room's listener or countdown outlive it.
@@ -181,6 +204,7 @@ func (m model) enterChat(room *apisdk.RoomResponse, roomKey string) (model, tea.
 	m = m.syncChatLayout()
 	m = m.withCompanionImage()
 	m = m.refreshMessages()
+	m.rememberRoom()
 
 	// Load the members' key cards and publish ours before the WebSocket
 	// replays the history, so it can be verified (see cryptoSyncedMsg).
@@ -220,6 +244,7 @@ func (m model) clearChat() model {
 // leaveChat asks the server to let us leave the room, then returns to the
 // start page.
 func (m model) leaveChat() (model, tea.Cmd) {
+	m.forgetCurrentRoom()
 	leave := m.leaveCurrentRoomFunc()
 	m = m.clearChat()
 	m, cmd := m.gotoNewRoom()

@@ -80,9 +80,12 @@ func (m model) leaveCurrentRoomFunc() func() {
 	return leaveRoomFunc(m.client, room.ID, m.state.chat.isRoomOwner, m.requestOpts())
 }
 
-// cleanup leaves the current room and closes every connection.
+// cleanup closes every connection. When the identity is kept across runs
+// we stay in the room, to reopen it next time (ctrl+b leaves for good);
+// otherwise nobody could ever come back as us, so we leave (or, as owner,
+// delete) it.
 func (m model) cleanup() {
-	if m.page == chatPage {
+	if m.page == chatPage && m.identityStore == nil {
 		m.leaveCurrentRoomFunc()()
 	}
 	m.state.chat.closeConnections()

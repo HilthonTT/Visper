@@ -62,7 +62,7 @@ Room credentials can be prefilled from an invite link: `/?joinCode=...&secureCod
 
 ## Chat in the browser
 
-Join with an invite link (`/?joinCode=…&secureCode=…#key=…`, from a CLI's `ctrl+p`) or by pasting an invite code (`ABC123.<key>`). Or start a new room (it lives 1 hour, 24 hours or 7 days): the room key is generated in the page, and the **invite** button in the room bar shows the invite code and link to share, both carrying the key. Everything is end-to-end encrypted in the page with the room key (NaCl secretbox via [tweetnacl](https://github.com/dchest/tweetnacl-js), the same format as the Go SDK): messages, reactions and images. The key is kept in memory only, so reloading the page means joining again.
+Join with an invite link (`/?joinCode=…&secureCode=…#key=…`, from a CLI's `ctrl+p`) or by pasting an invite code (`ABC123.<key>`). Or start a new room (it lives 1 hour, 24 hours or 7 days): the room key is generated in the page, and the **invite** button in the room bar shows the invite code and link to share, both carrying the key. Everything is end-to-end encrypted in the page with the room key (NaCl secretbox via [tweetnacl](https://github.com/dchest/tweetnacl-js), the same format as the Go SDK): messages, reactions and images. The key is kept in memory only, so reloading the page means joining again, unless you ask this browser to remember the room (see [Remembered rooms](#remembered-rooms)).
 
 In a room:
 
@@ -75,6 +75,12 @@ In a room:
 - **Search** filters the loaded messages. It runs in the page: the server only has ciphertext, so it can't search.
 - **Files** lists the room's uploaded files with their size, uploader and date. The server stores them as `file.enc`, so names come from the loaded messages that share them (click one to jump to it); older ones show as "encrypted file". You can delete your own files; the owner can delete any.
 - **Owner tools**: the owner sees **kick** next to each member (on hover), **new code** (the old join code stops letting people in; the room key is unchanged) and **delete** (removes the room for everyone). Kicking someone rotates the room key, as when they leave.
+
+### Remembered rooms
+
+By default nothing survives a reload. Tick **remember the room on this browser** when joining or creating, or press **remember** in the room bar, and the page keeps the room's keys, your identity for it (so your key fingerprint stays the same) and the members you verified in IndexedDB. The Chat page then lists the room to reopen without an invite. Reopening checks that the API still knows this browser as the same member, and that the owner is the one pinned when you first entered.
+
+The keys are stored **unencrypted**: anyone with this browser profile, and any script the site serves, can read them. Only remember rooms on a device you trust. **forget** in the room bar or in the list deletes them; leaving, being kicked, the room being deleted or expiring forgets the room too. The browser's API session lasts 30 days: after it expires, a remembered room can't be reopened.
 
 The browser is identified by the API's HttpOnly `visper_user_id` cookie, which holds a private user token (a browser WebSocket can't send the `X-User-Token` header), so chat requests are sent with credentials. **The API must list this site in `VISPER_CORS_ALLOWORIGINS`** (e.g. `http://localhost:3000`): with `*`, browsers refuse to send credentials and the Chat page reports that it can't reach the API.
 

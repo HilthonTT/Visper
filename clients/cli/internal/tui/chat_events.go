@@ -135,11 +135,13 @@ func (m model) chatEventUpdate(msg tea.Msg) (_ model, _ tea.Cmd, handled bool) {
 		changed := m.state.chat.roomCode != "" && m.state.chat.roomCode != msg.joinCode
 		m.state.chat.roomCode = msg.joinCode
 		m = m.withJoinCodeInQRURL(msg.joinCode)
+		m.rememberRoom()
 		if changed {
 			m, cmd = m.toast(theme.ToneSuccess, "New join code: "+msg.joinCode+". Press ctrl+p for the new invite.")
 		}
 		cmd = tea.Batch(cmd, m.waitForRoomEvent())
 	case roomDeletedMsg:
+		m.forgetCurrentRoom()
 		m = m.alert(theme.ToneDanger, "Room deleted", "The owner deleted this room. Taking you back to the start…")
 		cmd = m.closeRoomAfter(roomDeletedDelay)
 	case expiryTickMsg:
@@ -287,6 +289,7 @@ func (m model) memberJoinedUpdate(msg memberJoinedMsg) (model, tea.Cmd) {
 
 func (m model) kickedUpdate(msg kickedMsg) (model, tea.Cmd) {
 	if m.isCurrentUser(msg.userID) {
+		m.forgetCurrentRoom()
 		content := "The room owner removed you."
 		if msg.reason != "" {
 			content += "\nReason: " + msg.reason

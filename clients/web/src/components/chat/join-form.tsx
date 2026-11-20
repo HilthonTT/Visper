@@ -10,6 +10,7 @@ import {
 	roomKeyFromUrl,
 } from "@/lib/room-crypto";
 import { RoomKeyError } from "@/lib/room-key";
+import type { RoomCrypto } from "@/lib/room-keys";
 import {
 	Box,
 	Button,
@@ -17,12 +18,17 @@ import {
 	PageContent,
 	PageTitle,
 } from "../pages/page-styles";
+import { SavedRoomsList } from "./saved-rooms-list";
 
 export type ChatSession = {
 	room: ApiRoom;
 	key: RoomKey;
 	/** True when this browser just created the room. */
 	created?: boolean;
+	/** Whether this browser keeps the room's keys to reopen it later. */
+	remember?: boolean;
+	/** The room's crypto state, when reopening a remembered room. */
+	crypto?: RoomCrypto;
 };
 
 type Status =
@@ -63,6 +69,7 @@ export const JoinForm = ({
 	const [focused, setFocused] = useState<string | null>(null);
 	const [status, setStatus] = useState<Status>({ kind: "idle" });
 	const [expiryHours, setExpiryHours] = useState<number>(DEFAULT_EXPIRY_HOURS);
+	const [remember, setRemember] = useState(false);
 
 	const join = async (how: "link" | "code") => {
 		setStatus({ kind: "joining" });
@@ -82,7 +89,7 @@ export const JoinForm = ({
 				key = parsed.key;
 				room = await chatApi.joinByCode(parsed.joinCode, name);
 			}
-			onJoined({ room, key });
+			onJoined({ room, key, remember });
 		} catch (e) {
 			setStatus({
 				kind: "error",
@@ -97,7 +104,7 @@ export const JoinForm = ({
 			// The key is made here and never sent to the server.
 			const key = newRoomKey();
 			const room = await chatApi.create(expiryHours);
-			onJoined({ room, key, created: true });
+			onJoined({ room, key, created: true, remember });
 		} catch (e) {
 			setStatus({
 				kind: "error",
@@ -115,6 +122,24 @@ export const JoinForm = ({
 				Messages are encrypted here with the room's key before they leave the
 				page; the server only stores ciphertext.
 			</Lead>
+
+			<SavedRoomsList onJoined={onJoined} />
+
+			<RememberLabel htmlFor="remember-room">
+				<input
+					id="remember-room"
+					type="checkbox"
+					checked={remember}
+					disabled={joining}
+					onChange={(e) => setRemember(e.target.checked)}
+				/>{" "}
+				remember the room on this browser
+				<Muted>
+					{" "}
+					to reopen it after a reload. Its keys are kept here, unencrypted,
+					until you leave or forget it: only tick this on a device you trust.
+				</Muted>
+			</RememberLabel>
 
 			{fromLink && (
 				<Section>
@@ -246,6 +271,16 @@ const CreateSection = styled.section`
   p {
     margin-bottom: 0.5rem;
     color: ${({ theme }) => theme.colors.text[200]};
+  }
+`;
+
+const RememberLabel = styled.label`
+  display: block;
+  margin-bottom: 1.5rem;
+  color: ${({ theme }) => theme.colors.text[200]};
+
+  input {
+    accent-color: ${({ theme }) => theme.colors.primary};
   }
 `;
 

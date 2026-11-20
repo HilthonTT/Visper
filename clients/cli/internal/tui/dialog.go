@@ -102,6 +102,9 @@ func (m model) openLeaveRoomDialog() model {
 	if m.state.chat.isRoomOwner {
 		content = "You own this room, so leaving deletes it for everyone. Messages are gone for good."
 	}
+	if m.identityStore != nil {
+		content += "\n\nTo step away instead, quit (ctrl+c): you stay in the room and can reopen it from the Join page."
+	}
 	return m.openDialog(dialogState{kind: dialogLeaveRoom, tone: theme.ToneDanger, title: "Leave this room?", content: content})
 }
 

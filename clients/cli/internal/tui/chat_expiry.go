@@ -86,6 +86,7 @@ func (m model) roomExpiredUpdate(msg roomExpiredMsg) (model, tea.Cmd) {
 		return m, nil
 	}
 	m.state.chat.expiry.cancel()
+	m.forgetCurrentRoom()
 	return m.openRoomExpiredDialog(), m.closeRoomAfter(roomClosedDelay)
 }
 

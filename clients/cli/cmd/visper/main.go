@@ -11,6 +11,7 @@ import (
 	"runtime/debug"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/hilthontt/visper/clients/cli/internal/settings"
 	"github.com/hilthontt/visper/clients/cli/internal/tui"
 )
 
@@ -19,10 +20,20 @@ var version = ""
 
 func main() {
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	forget := flag.Bool("forget", false, "delete the saved identity and room keys, then exit")
 	flag.Usage = usage
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("visper", buildVersion())
+		return
+	}
+	if *forget {
+		path := settings.IdentityPath()
+		if err := settings.ForgetIdentity(path); err != nil {
+			fmt.Fprintln(os.Stderr, "Error forgetting the identity:", err)
+			os.Exit(1)
+		}
+		fmt.Println("Forgot the saved identity and room keys (" + path + "). The next run starts as someone new.")
 		return
 	}
 
@@ -55,12 +66,16 @@ func usage() {
 	out := flag.CommandLine.Output()
 	fmt.Fprintf(out, `visper %s: anonymous, end-to-end encrypted chat rooms in your terminal.
 
-Usage: visper [-version]
+Usage: visper [-version] [-forget]
+
+Your identity (user token, signing and device keys) and the keys of the rooms
+you're in are kept in %s (owner-only), so you can
+reopen rooms after a restart. -forget deletes that file.
 
 Environment:
   VISPER_BASE_URL  URL of the Visper API or proxy (default http://localhost:5005)
 
-`, buildVersion())
+`, buildVersion(), settings.IdentityPath())
 	flag.PrintDefaults()
 }
 

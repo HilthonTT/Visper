@@ -16,6 +16,7 @@ import {
 	MAX_SEALED_BYTES,
 	ReplayedError,
 	RoomCrypto,
+	RoomStateError,
 	UnknownSenderError,
 	UnverifiedError,
 } from "./room-keys";
@@ -478,5 +479,77 @@ describe("key verification", () => {
 		const { rekey } = await fake.newRekey(["alice", "bob"], 0);
 		await expect(bob.applyRekey(rekey)).rejects.toThrow(BadRekeyError);
 		expect(bob.keyStatus("alice")).toBe("changed");
+	});
+});
+
+describe("remembered rooms", () => {
+	/** A save as it comes back from IndexedDB: plain JSON. */
+	const roundTrip = (rc: RoomCrypto) =>
+		RoomCrypto.restore(JSON.parse(JSON.stringify(rc.save())));
+
+	it("restores the identity, keys, epoch, pins and departures", async () => {
+		const [alice, bob] = newRoom("alice", "bob", "mallory");
+		alice.verifyMember("bob", bob.myFingerprint());
+		alice.markDeparted("mallory");
+		const { rekey, newKey } = await alice.newRekey(
+			["alice", "bob", "mallory"],
+			0,
+		);
+		alice.commitKey(newKey, rekey.epoch);
+		const old = bob.sealMessage("before the rekey");
+
+		const back = roundTrip(alice);
+		expect(back.myFingerprint()).toBe(alice.myFingerprint());
+		expect(back.ownerId).toBe("alice");
+		expect(back.isOwner()).toBe(true);
+		expect(back.epoch()).toBe(rekey.epoch);
+		expect(back.currentKey()).toEqual(newKey);
+
+		// Cards are fetched again after a reload; the pin still applies.
+		back.addCard("bob", bob.myCard());
+		expect(back.keyStatus("bob")).toBe("verified");
+		expect(back.openMessage(old, "bob", "m1", Date.now()).text).toBe(
+			"before the rekey",
+		);
+		// A card in bob's name that bob never made.
+		const fake = new RoomCrypto(
+			Identity.create("bob"),
+			"room-1",
+			"alice",
+			newKey,
+		);
+		back.addCard("bob", fake.myCard());
+		expect(back.keyStatus("bob")).toBe("changed");
+
+		// The departed member stays out of the next rekey.
+		const next = await back.newRekey(["alice", "bob", "mallory"], rekey.epoch);
+		expect(next.rekey.keys?.mallory).toBeUndefined();
+		expect(next.rekey.keys?.bob).toBeDefined();
+	});
+
+	it("lets members still verify what a restored identity signs", () => {
+		const [alice, bob] = newRoom("alice", "bob");
+		const back = roundTrip(bob);
+		const msg = back.sealMessage("still me");
+		expect(alice.openMessage(msg, "bob", "m1", Date.now()).text).toBe(
+			"still me",
+		);
+	});
+
+	it("refuses malformed saves", () => {
+		const [alice] = newRoom("alice");
+		const good = alice.save();
+		const bad = [
+			{ ...good, v: 2 },
+			{ ...good, keys: [] },
+			{ ...good, keys: ["not base64!"] },
+			{ ...good, keys: ["AAAA"] },
+			{ ...good, epoch: -1 },
+			{ ...good, identity: { ...good.identity, sign: "AAAA" } },
+			{ ...good, identity: { ...good.identity, userId: "" } },
+		];
+		for (const s of bad) {
+			expect(() => RoomCrypto.restore(s as never)).toThrow(RoomStateError);
+		}
 	});
 });

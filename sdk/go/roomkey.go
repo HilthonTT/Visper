@@ -137,6 +137,25 @@ func NewDeviceKey() (*DeviceKey, error) {
 	return &DeviceKey{priv: priv}, nil
 }
 
+// RestoreDeviceKey returns the device key saved with Export.
+func RestoreDeviceKey(s string) (*DeviceKey, error) {
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil {
+		return nil, ErrInvalidDeviceKey
+	}
+	priv, err := ecdh.X25519().NewPrivateKey(raw)
+	if err != nil {
+		return nil, ErrInvalidDeviceKey
+	}
+	return &DeviceKey{priv: priv}, nil
+}
+
+// Export returns the device's private key (base64url) for RestoreDeviceKey.
+// It is a secret: store it where only the user can read it.
+func (k *DeviceKey) Export() string {
+	return base64.RawURLEncoding.EncodeToString(k.priv.Bytes())
+}
+
 // PublicKey returns the device's public key, base64url encoded.
 func (k *DeviceKey) PublicKey() string {
 	return base64.RawURLEncoding.EncodeToString(k.priv.PublicKey().Bytes())

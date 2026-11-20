@@ -12,11 +12,13 @@ are tested against the same vectors,
 | Key | Algorithm | Made by | Who has it |
 | --- | --- | --- | --- |
 | Room key | 256-bit, NaCl secretbox (XSalsa20-Poly1305) | the client creating the room, and the owner's client on every rekey | members, through invites and rekeys |
-| Signing key | Ed25519 | each client, per session | that client only |
-| Device key | X25519 | each client, per session | that client only |
+| Signing key | Ed25519 | each CLI install; each web client page load (or remembered room) | that client only |
+| Device key | X25519 | each CLI install; each web client page load (or remembered room) | that client only |
 
-None of these ever reaches the server in usable form. Keys live in memory
-and disappear when the CLI exits or the browser tab reloads.
+None of these ever reaches the server in usable form. The CLI keeps its keys
+on disk and the web client can be asked to; see
+[Stored keys](#stored-keys). Otherwise keys live in memory and disappear when
+the browser tab reloads.
 
 - **Invites** carry the room key in the invite code (`<join code>.<key>`) or
   in the invite link's `#key=` fragment, which browsers never send to a
@@ -92,8 +94,8 @@ were in the room. Beyond that:
   holds after the owner's client rotates the key, which it does as soon as it
   sees the departure, or when the owner next opens the room. Until then, a
   departed member who can still get ciphertext (for example, from a leaked
-  server database) could read it. If the owner never comes back (a CLI owner
-  who quit can't, since CLI identities last one session), the key is never
+  server database) could read it. If the owner never comes back (a web
+  owner who reloaded without remembering the room can't), the key is never
   rotated.
 - **A departed member working with the server** can get the new key, unless
   the owner has verified the remaining members. The server can show the owner
@@ -131,9 +133,47 @@ Verifying a member pins that card in your client:
   key (`!`) and you're warned. Their client may have restarted, or someone may
   be posing as them. Compare again before you trust the new key.
 
-Verification only lasts as long as your session. Fingerprints change whenever
-an identity does: each CLI run, and each time the web client loads. Verify
-the owner and the members who matter to you each time.
+Verification lasts as long as your identity. The CLI keeps its identity and
+the members you verified between runs (see [Stored keys](#stored-keys)). The
+web client keeps them only for rooms you ask it to remember; otherwise its
+fingerprint changes each time the page loads and verification is lost. When
+someone's fingerprint changes, verify them again.
+
+## Stored keys
+
+**CLI.** The CLI keeps one identity on disk so you can quit, come back as the
+same member and reopen rooms from the Join page without a new invite. It is
+`visper/identity.json` in your user config directory (`~/.config` on Linux,
+`~/Library/Application Support` on macOS, `%AppData%` on Windows), written
+owner-only (mode 0600; on Windows, it relies on the per-user profile folder).
+It holds, **unencrypted**:
+
+- your user token (your credential with the API);
+- your signing and device private keys;
+- for each room you are in: its keys, the owner pinned when you first
+  joined, and the members you verified.
+
+Anyone who can read this file can read those rooms and post as you. Two CLIs
+on the same machine share it and act as the same member. `visper -forget`
+deletes it. Quitting (`ctrl+c`) keeps you in your rooms; `ctrl+b` leaves (or,
+as owner, deletes the room). Rooms are dropped from the file when you leave,
+are kicked, the room is deleted or expires. If the file can't be written,
+the CLI falls back to an in-memory identity and leaves its rooms on quit, as
+before.
+
+Because the owner's CLI now returns as the same identity, a key rotation
+that was missed while the owner was away happens the next time they open the
+room.
+
+**Web client.** Nothing is stored unless you tick **remember the room on
+this browser** (or press **remember** in the room bar). Then the room's keys,
+your identity for that room and your verified members go into the browser's
+IndexedDB, **unencrypted**. Anyone with access to that browser profile can read
+them, and so can any script the site serves: a modified web client can now
+take stored keys, not only those of an open tab. **forget** deletes them;
+leaving, being kicked, deletion and expiry do too. Reopening a remembered room
+checks that the API still knows the browser as the same member and that the
+owner is the one pinned on first entry.
 
 ## Invites
 

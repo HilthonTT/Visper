@@ -224,6 +224,26 @@ export async function fileHash(encrypted: Uint8Array): Promise<string> {
  * key (X25519) new room keys are sealed to. They live in memory only, like
  * the room key.
  */
+/** A saved identity or room state that can't be restored. */
+export class RoomStateError extends Error {}
+
+/** An Identity's private keys (base64url): the Ed25519 seed and X25519 key. */
+export type SavedIdentity = { userId: string; sign: string; device: string };
+
+/** RoomCrypto.save()'s output: plain JSON, safe to structured-clone. */
+export type SavedRoomCrypto = {
+	v: 1;
+	identity: SavedIdentity;
+	roomId: string;
+	ownerId: string;
+	/** Oldest first; the last is the current key. */
+	keys: string[];
+	epoch: number;
+	/** Member -> pinned fingerprint. */
+	verified: Record<string, string>;
+	departed: string[];
+};
+
 export class Identity {
 	private constructor(
 		readonly userId: string,
@@ -246,6 +266,34 @@ export class Identity {
 			nacl.sign.keyPair.fromSeed(signSeed),
 			nacl.box.keyPair.fromSecretKey(devicePrivate),
 		);
+	}
+
+	/** The private keys, for a browser that remembers the room (see saved-rooms.ts). */
+	toSaved(): SavedIdentity {
+		return {
+			userId: this.userId,
+			sign: base64UrlEncode(this.sign.secretKey.subarray(0, 32)),
+			device: base64UrlEncode(this.device.secretKey),
+		};
+	}
+
+	/** An identity saved with toSaved; throws RoomStateError if malformed. */
+	static fromSaved(s: SavedIdentity): Identity {
+		let sign: Uint8Array;
+		let device: Uint8Array;
+		try {
+			sign = base64UrlDecode(s.sign);
+			device = base64UrlDecode(s.device);
+		} catch {
+			throw new RoomStateError("malformed saved identity");
+		}
+		if (typeof s.userId !== "string" || !s.userId) {
+			throw new RoomStateError("saved identity has no user");
+		}
+		if (sign.length !== 32 || device.length !== 32) {
+			throw new RoomStateError("malformed saved identity");
+		}
+		return Identity.fromSeeds(s.userId, sign, device);
 	}
 
 	signingPublicKey(): string {
@@ -357,6 +405,68 @@ function rekeyMessage(
  * the uploader's ID (a member can't publish one for someone else).
  */
 export class RoomCrypto {
+	/**
+	 * What a browser that remembers the room keeps: our identity, the room's
+	 * keys, the owner we pinned on entry, verified members and those whose
+	 * departure must keep them out of rekeys. Cards are fetched again; seen
+	 * nonces start over, as on any fresh join.
+	 */
+	save(): SavedRoomCrypto {
+		return {
+			v: 1,
+			identity: this.me.toSaved(),
+			roomId: this.roomId,
+			ownerId: this.ownerId,
+			keys: this.keys.map((k) => base64UrlEncode(k)),
+			epoch: this.epochValue,
+			verified: Object.fromEntries(this.verified),
+			departed: [...this.departed],
+		};
+	}
+
+	/** Restores a save(); throws RoomStateError if it is malformed. */
+	static restore(s: SavedRoomCrypto): RoomCrypto {
+		if (
+			s?.v !== 1 ||
+			typeof s.roomId !== "string" ||
+			typeof s.ownerId !== "string" ||
+			!Array.isArray(s.keys) ||
+			s.keys.length === 0 ||
+			!Number.isSafeInteger(s.epoch) ||
+			s.epoch < 0
+		) {
+			throw new RoomStateError("malformed saved room");
+		}
+		let keys: RoomKey[];
+		try {
+			keys = s.keys.map((k) => base64UrlDecode(k) as RoomKey);
+		} catch {
+			throw new RoomStateError("malformed saved room key");
+		}
+		if (keys.some((k) => k.length !== nacl.secretbox.keyLength)) {
+			throw new RoomStateError("malformed saved room key");
+		}
+		const rc = new RoomCrypto(
+			Identity.fromSaved(s.identity),
+			s.roomId,
+			s.ownerId,
+			keys[0],
+		);
+		rc.keys = keys;
+		rc.epochValue = s.epoch;
+		for (const [id, fp] of Object.entries(s.verified ?? {})) {
+			if (typeof fp === "string") {
+				rc.verified.set(id, fp);
+			}
+		}
+		for (const id of s.departed ?? []) {
+			if (typeof id === "string") {
+				rc.departed.add(id);
+			}
+		}
+		return rc;
+	}
+
 	private keys: RoomKey[];
 	private epochValue = 0;
 	private readonly cards = new Map<string, MemberCard[]>();

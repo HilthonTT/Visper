@@ -72,6 +72,8 @@ func (m model) cryptoSyncedUpdate(msg cryptoSyncedMsg) (model, tea.Cmd) {
 		log.Printf("Failed to sync room keys: %v", msg.err)
 		m, toastCmd = m.toast(theme.ToneWarning, "Couldn't load the members' keys, so messages may show as unverified.")
 	}
+	// Syncing may have applied a rekey we missed.
+	m.rememberRoom()
 	if msg.rekeyNeeded && m.state.chat.isRoomOwner {
 		// Someone left while no owner's client was around to rotate.
 		m, rotateCmd = m.rotateRoomKey()
@@ -141,6 +143,7 @@ func parseRekey(data map[string]any) *apisdk.Rekey {
 // invite at it.
 func (m model) rekeyAppliedUpdate() (model, tea.Cmd) {
 	m = m.refreshInviteKey()
+	m.rememberRoom()
 	rc := m.state.chat.crypto
 	publish := m.roomRequest("publish your key card", func(ctx context.Context, c *apisdk.Client, roomID string, opts []option.RequestOption) error {
 		return c.Room.PublishKeyCard(ctx, roomID, rc, opts...)
@@ -212,6 +215,7 @@ func (m model) keyRotatedUpdate(msg keyRotatedMsg) (model, tea.Cmd) {
 	}
 
 	m = m.refreshInviteKey()
+	m.rememberRoom()
 	text := keyRotatedText
 	if n := len(msg.missing); n > 0 {
 		names := make([]string, 0, n)
