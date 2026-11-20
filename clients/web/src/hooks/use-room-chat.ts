@@ -194,7 +194,11 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 		// covers only the latest messages, and neither deletions, member
 		// changes nor key changes.
 		const resync = async () => {
-			await syncCrypto().catch(() => {});
+			const st = await syncCrypto().catch(() => null);
+			// Someone left (or was kicked) while we were disconnected.
+			if (st?.rekey_needed) {
+				rotateKey();
+			}
 			chatApi
 				.get(roomId)
 				.then((res) => {
@@ -537,6 +541,34 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 		dispatch({ type: "closed", reason: "You left the room." });
 	}, [roomId]);
 
+	/** Deletes the room for everyone (owner only). */
+	const deleteRoom = useCallback(async () => {
+		await chatApi.deleteRoom(roomId);
+		dispatch({ type: "closed", reason: "You deleted the room." });
+	}, [roomId]);
+
+	/** Replaces the join code (owner only); the room key stays the same. */
+	const newJoinCode = useCallback(async () => {
+		await chatApi.newJoinCode(roomId);
+		// The socket announces the new code too; this covers a dropped one.
+		const res = await chatApi.get(roomId);
+		dispatch({ type: "roomUpdated", joinCode: res.join_code });
+	}, [roomId]);
+
+	/**
+	 * Removes a member (owner only). The room's error.kicked event then
+	 * rotates the key; the member is left out of it from now on even if
+	 * that event is late.
+	 */
+	const kick = useCallback(
+		async (userId: string) => {
+			await chatApi.kick(roomId, userId);
+			crypto.markDeparted(userId);
+			dispatch({ type: "kicked", userId, reason: "" });
+		},
+		[roomId, crypto],
+	);
+
 	/** Pins userId's key with the fingerprint the user compared. */
 	const verifyMember = useCallback(
 		(userId: string, fingerprint: string) => {
@@ -578,5 +610,8 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 		react,
 		uploadImage,
 		leave,
+		deleteRoom,
+		newJoinCode,
+		kick,
 	};
 }

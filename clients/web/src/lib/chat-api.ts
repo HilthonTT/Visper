@@ -143,6 +143,23 @@ export const chatApi = {
 
 	leave: (roomId: string) => request<unknown>("POST", `${room(roomId)}/leave`),
 
+	/** Deletes the room for everyone (owner only). */
+	deleteRoom: (roomId: string) => request<unknown>("DELETE", room(roomId)),
+
+	/**
+	 * Replaces the room's join code (owner only), so the old code stops
+	 * letting people join. Members and the room key are unchanged.
+	 */
+	newJoinCode: (roomId: string) =>
+		request<unknown>("PUT", `${room(roomId)}/join-code`),
+
+	/** Removes a member (owner only). The API also replaces the join code. */
+	kick: (roomId: string, userId: string) =>
+		request<unknown>(
+			"POST",
+			`${room(roomId)}/membership/${encodeURIComponent(userId)}`,
+		),
+
 	listMessages: (roomId: string, limit = 100) =>
 		request<{ messages: ApiMessage[] | null }>(
 			"GET",

@@ -221,6 +221,61 @@ export const ChatView = ({
 		onLeft();
 	};
 
+	const isOwner = state.ownerId === state.me;
+
+	const deleteRoom = async () => {
+		if (
+			!window.confirm(
+				"Delete this room for everyone? Its messages and files are gone for good.",
+			)
+		) {
+			return;
+		}
+		try {
+			await chat.deleteRoom();
+		} catch (e) {
+			fail(e);
+			return;
+		}
+		onLeft();
+	};
+
+	const newJoinCode = async () => {
+		if (
+			!window.confirm(
+				"Make a new join code? The current code stops letting people join. Members stay, and the room key stays the same.",
+			)
+		) {
+			return;
+		}
+		setError("");
+		try {
+			await chat.newJoinCode();
+			setShowInvite(true);
+		} catch (e) {
+			fail(e);
+		}
+	};
+
+	const kick = async (member: { id: string; username: string }) => {
+		if (
+			!window.confirm(
+				`Remove ${member.username} from the room? The room key is rotated so they can't read what comes next.`,
+			)
+		) {
+			return;
+		}
+		setError("");
+		try {
+			await chat.kick(member.id);
+			if (keysFor === member.id) {
+				setKeysFor(undefined);
+			}
+		} catch (e) {
+			fail(e);
+		}
+	};
+
 	if (state.closed) {
 		return (
 			<Closed>
@@ -293,9 +348,28 @@ export const ChatView = ({
 				>
 					members
 				</BarButton>
+				{isOwner && (
+					<BarButton
+						type="button"
+						title="replace the join code"
+						onClick={newJoinCode}
+					>
+						new code
+					</BarButton>
+				)}
 				<BarButton type="button" $danger onClick={leave}>
 					leave
 				</BarButton>
+				{isOwner && (
+					<BarButton
+						type="button"
+						$danger
+						title="delete the room for everyone"
+						onClick={deleteRoom}
+					>
+						delete
+					</BarButton>
+				)}
 			</Bar>
 			{showInvite && (
 				<InvitePanel
@@ -412,6 +486,16 @@ export const ChatView = ({
 										</Trust>
 									)}
 									{m.id === state.ownerId && <Muted>owner</Muted>}
+									{isOwner && m.id !== state.me && (
+										<KickButton
+											type="button"
+											className="kick"
+											title={`remove ${m.username} from the room`}
+											onClick={() => kick(m)}
+										>
+											kick
+										</KickButton>
+									)}
 								</MemberRow>
 							);
 						})}
@@ -605,6 +689,10 @@ const MemberRow = styled.div<{ $online: boolean }>`
     flex: none;
   }
 
+  &:hover > button.kick {
+    opacity: 1;
+  }
+
   span {
     color: ${({ theme, $online }) =>
 			$online ? theme.colors.success : theme.colors.text[300]};
@@ -625,6 +713,23 @@ const MemberButton = styled.button`
 
   &:hover {
     color: ${({ theme }) => theme.colors.primary};
+  }
+`;
+
+// Shown only on hover or keyboard focus, so the list stays calm.
+const KickButton = styled.button`
+  flex: none;
+  margin-left: auto;
+  padding-right: 0.4rem;
+  color: ${({ theme }) => theme.colors.danger};
+  opacity: 0;
+
+  &:focus-visible {
+    opacity: 1;
+  }
+
+  @media (hover: none) {
+    opacity: 1;
   }
 `;
 
