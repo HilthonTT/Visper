@@ -117,3 +117,32 @@ func (s *FileService) UploadEncrypted(ctx context.Context, roomID, filePath, key
 	res.Hash = FileHash(ciphertext)
 	return res, nil
 }
+
+// List returns the room's files (members only). The API stores ciphertext
+// under a fixed name, so Filename says nothing; the real name, if any, is in
+// the encrypted message that points to the file's URL.
+func (s *FileService) List(ctx context.Context, roomID string, opts ...option.RequestOption) ([]FileResponse, error) {
+	if roomID == "" {
+		return nil, ErrMissingIDParameter
+	}
+	opts = slices.Concat(s.Options, opts)
+
+	path := fmt.Sprintf("api/v1/rooms/%s/files", url.PathEscape(roomID))
+	var res []FileResponse
+	if err := requestconfig.ExecuteNewRequest(ctx, http.MethodGet, path, nil, &res, opts...); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// Delete deletes one of the room's files. Only its uploader and the room's
+// owner may.
+func (s *FileService) Delete(ctx context.Context, roomID, fileID string, opts ...option.RequestOption) error {
+	if roomID == "" || fileID == "" {
+		return ErrMissingIDParameter
+	}
+	opts = slices.Concat(s.Options, opts)
+
+	path := fmt.Sprintf("api/v1/rooms/%s/files/%s", url.PathEscape(roomID), url.PathEscape(fileID))
+	return requestconfig.ExecuteNewRequest(ctx, http.MethodDelete, path, nil, nil, opts...)
+}

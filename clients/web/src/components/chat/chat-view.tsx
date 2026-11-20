@@ -18,6 +18,7 @@ import {
 	typingNames,
 } from "@/lib/chat-state";
 import { isEncryptedImageUrl, isPlainImageUrl } from "@/lib/room-crypto";
+import { FilesPanel } from "./files-panel";
 import { InvitePanel } from "./invite-panel";
 import type { ChatSession } from "./join-form";
 import { KeysPanel } from "./keys-panel";
@@ -54,6 +55,7 @@ export const ChatView = ({
 	// The member whose key fingerprint is shown: null for only ours,
 	// undefined when the keys panel is closed.
 	const [keysFor, setKeysFor] = useState<string | null | undefined>();
+	const [showFiles, setShowFiles] = useState(false);
 	const [error, setError] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [now, setNow] = useState(() => Date.now());
@@ -342,6 +344,13 @@ export const ChatView = ({
 				</BarButton>
 				<BarButton
 					type="button"
+					aria-pressed={showFiles}
+					onClick={() => setShowFiles((s) => !s)}
+				>
+					files
+				</BarButton>
+				<BarButton
+					type="button"
 					className="members-toggle"
 					aria-pressed={showMembers}
 					onClick={() => setShowMembers((s) => !s)}
@@ -371,6 +380,15 @@ export const ChatView = ({
 					</BarButton>
 				)}
 			</Bar>
+			{showFiles && (
+				<FilesPanel
+					state={state}
+					list={chat.listFiles}
+					remove={chat.deleteFile}
+					onJumpTo={onJumpTo}
+					onClose={() => setShowFiles(false)}
+				/>
+			)}
 			{showInvite && (
 				<InvitePanel
 					joinCode={state.joinCode}

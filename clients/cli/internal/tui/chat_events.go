@@ -170,6 +170,10 @@ func (m model) chatEventUpdate(msg tea.Msg) (_ model, _ tea.Cmd, handled bool) {
 		m, cmd = m.uploadResultUpdate(msg)
 	case imageFetchedMsg:
 		m = m.imageFetchedUpdate(msg)
+	case roomFilesLoadedMsg:
+		m, cmd = m.roomFilesLoadedUpdate(msg)
+	case roomFileDeletedMsg:
+		m, cmd = m.roomFileDeletedUpdate(msg)
 
 	default:
 		return m.socialEventUpdate(msg)

@@ -34,6 +34,10 @@ const (
 	// dialogUnverifyKey is the same for a member already verified.
 	dialogVerifyKey
 	dialogUnverifyKey
+	// dialogRoomFiles lists the room's files; dialogDeleteFile confirms
+	// deleting one.
+	dialogRoomFiles
+	dialogDeleteFile
 )
 
 const dialogMaxWidth = 58
@@ -199,7 +203,7 @@ func buttonLabels(k dialogKind) (string, string) {
 	switch k {
 	case dialogLeaveRoom:
 		return "Leave", "Stay"
-	case dialogDeleteMessage:
+	case dialogDeleteMessage, dialogDeleteFile:
 		return "Delete", "Keep"
 	case dialogKickMember:
 		return "Kick", "Cancel"
@@ -231,6 +235,8 @@ func (m model) dialogView() string {
 		return m.editMessageDialogView()
 	case dialogFileExplorer:
 		return m.fileExplorerView()
+	case dialogRoomFiles:
+		return m.roomFilesView()
 	}
 
 	inner := m.dialogWidth() - 6

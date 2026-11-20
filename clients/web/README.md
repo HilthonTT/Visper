@@ -73,6 +73,7 @@ In a room:
 - **Presence and typing**: the member list shows who is connected (`members` on narrow screens), and a line under the messages shows who is typing.
 - **Read receipts**: "seen by …" marks the last message each member has read. Yours is sent for the newest message while the chat is on screen.
 - **Search** filters the loaded messages. It runs in the page: the server only has ciphertext, so it can't search.
+- **Files** lists the room's uploaded files with their size, uploader and date. The server stores them as `file.enc`, so names come from the loaded messages that share them (click one to jump to it); older ones show as "encrypted file". You can delete your own files; the owner can delete any.
 - **Owner tools**: the owner sees **kick** next to each member (on hover), **new code** (the old join code stops letting people in; the room key is unchanged) and **delete** (removes the room for everyone). Kicking someone rotates the room key, as when they leave.
 
 The browser is identified by the API's HttpOnly `visper_user_id` cookie, which holds a private user token (a browser WebSocket can't send the `X-User-Token` header), so chat requests are sent with credentials. **The API must list this site in `VISPER_CORS_ALLOWORIGINS`** (e.g. `http://localhost:3000`): with `*`, browsers refuse to send credentials and the Chat page reports that it can't reach the API.

@@ -60,6 +60,7 @@ type chatState struct {
 	expiry       expiryState
 	images       imageCache
 	fileExplorer fileExplorerState
+	files        roomFilesState
 
 	// Background work shown in the status line.
 	aiEnhancing bool

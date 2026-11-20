@@ -92,12 +92,16 @@ func (c *filesController) GetRoomFiles(ctx *gin.Context) {
 
 	response := make([]FileResponse, len(files))
 	for i, f := range files {
-		response[i] = toFileResponse(f, "") // TODO: add usernames
+		response[i] = toFileResponse(f.File, f.UploaderName)
 	}
 	ctx.JSON(http.StatusOK, response)
 }
 
 func (c *filesController) DeleteFile(ctx *gin.Context) {
+	roomID, ok := httpx.RoomID(ctx)
+	if !ok {
+		return
+	}
 	fileID, ok := httpx.RequireParam(ctx, "fileId", "file ID")
 	if !ok {
 		return
@@ -107,7 +111,7 @@ func (c *filesController) DeleteFile(ctx *gin.Context) {
 		return
 	}
 
-	if err := c.fileUseCase.DeleteFile(ctx.Request.Context(), fileID, user.ID); err != nil {
+	if err := c.fileUseCase.DeleteFile(ctx.Request.Context(), roomID, fileID, user.ID); err != nil {
 		httpx.Error(ctx, err)
 		return
 	}

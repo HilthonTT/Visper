@@ -569,6 +569,16 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 		[roomId, crypto],
 	);
 
+	const listFiles = useCallback(
+		async () => (await chatApi.listFiles(roomId)) ?? [],
+		[roomId],
+	);
+
+	const deleteFile = useCallback(
+		(fileId: string) => chatApi.deleteFile(roomId, fileId),
+		[roomId],
+	);
+
 	/** Pins userId's key with the fingerprint the user compared. */
 	const verifyMember = useCallback(
 		(userId: string, fingerprint: string) => {
@@ -613,5 +623,7 @@ export function useRoomChat(room: ApiRoom, key: RoomKey, active: boolean) {
 		deleteRoom,
 		newJoinCode,
 		kick,
+		listFiles,
+		deleteFile,
 	};
 }

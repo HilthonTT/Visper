@@ -21,7 +21,7 @@ func (c *Container) initUseCases() {
 	})
 	c.RoomKeyUC = roomKeyUseCase.New(c.RoomUC, c.RoomKeyRepo)
 	c.UserUC = userUseCase.NewUserUseCase(c.UserRepo, c.Logger)
-	c.FileUC = fileUseCase.NewFileUseCase(c.FileRepo, c.RoomRepo, c.Storage, c.getServerURL())
+	c.FileUC = fileUseCase.NewFileUseCase(c.FileRepo, c.RoomRepo, c.UserRepo, c.Storage, c.getServerURL())
 
 	c.Logger.Info("Use cases initialized successfully")
 }

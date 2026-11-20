@@ -22,27 +22,42 @@ var (
 
 type FileUseCase interface {
 	UploadFile(ctx context.Context, fileHeader *multipart.FileHeader, roomID, userID string) (*model.File, error)
-	GetRoomFiles(ctx context.Context, roomID, userID string) ([]*model.File, error)
-	DeleteFile(ctx context.Context, fileID, userID string) error
+	// GetRoomFiles lists a room's files with their uploaders' usernames.
+	GetRoomFiles(ctx context.Context, roomID, userID string) ([]RoomFile, error)
+	// DeleteFile deletes a file of roomID; only its uploader or the room's
+	// owner may.
+	DeleteFile(ctx context.Context, roomID, fileID, userID string) error
 	CleanupOrphanedFiles(ctx context.Context) error
+}
+
+// RoomFile is a stored file and the username of whoever uploaded it ("" if
+// they are no longer known).
+type RoomFile struct {
+	*model.File
+	UploaderName string
 }
 
 type fileUseCase struct {
 	fileRepo     repository.FileRepository
 	roomRepo     repository.RoomRepository
+	userRepo     repository.UserRepository
 	localStorage *storage.LocalStorage
 	serverURL    string
 }
 
+// NewFileUseCase returns the file use case. userRepo names uploaders who
+// have left the room; it may be nil.
 func NewFileUseCase(
 	fileRepo repository.FileRepository,
 	roomRepo repository.RoomRepository,
+	userRepo repository.UserRepository,
 	localStorage *storage.LocalStorage,
 	serverURL string,
 ) FileUseCase {
 	return &fileUseCase{
 		fileRepo:     fileRepo,
 		roomRepo:     roomRepo,
+		userRepo:     userRepo,
 		localStorage: localStorage,
 		serverURL:    serverURL,
 	}
@@ -85,7 +100,7 @@ func (uc *fileUseCase) UploadFile(ctx context.Context, fileHeader *multipart.Fil
 	return file, nil
 }
 
-func (uc *fileUseCase) GetRoomFiles(ctx context.Context, roomID, userID string) ([]*model.File, error) {
+func (uc *fileUseCase) GetRoomFiles(ctx context.Context, roomID, userID string) ([]RoomFile, error) {
 	room, err := uc.getRoom(ctx, roomID)
 	if err != nil {
 		return nil, err
@@ -94,16 +109,44 @@ func (uc *fileUseCase) GetRoomFiles(ctx context.Context, roomID, userID string) 
 	if !room.IsMember(userID) {
 		return nil, ErrNotMember
 	}
-	return uc.fileRepo.GetByRoomID(ctx, roomID)
+	files, err := uc.fileRepo.GetByRoomID(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make(map[string]string, len(room.Members)+1)
+	names[room.Owner.ID] = room.Owner.Username
+	for _, m := range room.Members {
+		names[m.ID] = m.Username
+	}
+	result := make([]RoomFile, len(files))
+	for i, f := range files {
+		name, ok := names[f.UserID]
+		if !ok && uc.userRepo != nil {
+			// The uploader left: their record may still be around. Look
+			// each one up once; a missing record leaves the name empty.
+			if u, err := uc.userRepo.GetByID(ctx, f.UserID); err == nil && u != nil {
+				name = u.Username
+			}
+			names[f.UserID] = name
+		}
+		result[i] = RoomFile{File: f, UploaderName: name}
+	}
+	return result, nil
 }
 
-func (uc *fileUseCase) DeleteFile(ctx context.Context, fileID, userID string) error {
+func (uc *fileUseCase) DeleteFile(ctx context.Context, roomID, fileID, userID string) error {
 	file, err := uc.fileRepo.GetByID(ctx, fileID)
-	if errors.Is(err, repository.ErrNotFound) {
+	if errors.Is(err, repository.ErrNotFound) || (err == nil && file == nil) {
 		return ErrFileNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("failed to get file: %w", err)
+	}
+	// A file of another room is reported as missing, so the room in the
+	// path can't be used to reach (or probe) other rooms' files.
+	if file.RoomID != roomID {
+		return ErrFileNotFound
 	}
 
 	room, err := uc.getRoom(ctx, file.RoomID)

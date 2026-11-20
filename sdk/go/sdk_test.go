@@ -456,3 +456,37 @@ func TestPostRekeySendsTheRekey(t *testing.T) {
 		t.Fatalf("body = %v", body)
 	}
 }
+
+func TestFileListAndDelete(t *testing.T) {
+	var gotMethod, gotPath string
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.EscapedPath()
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet {
+			io.WriteString(w, `[{"id":"f1","filename":"file.enc","size":42,"url":"http://x/api/v1/d/r1/f1.enc","createdAt":"2026-01-02T03:04:05Z","uploader":{"id":"u1","username":"Ann"}}]`)
+			return
+		}
+		io.WriteString(w, `{"message":"file deleted successfully"}`)
+	}))
+
+	files, err := client.File.List(context.Background(), "r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != http.MethodGet || gotPath != "/api/v1/rooms/r1/files" {
+		t.Fatalf("list request = %s %s", gotMethod, gotPath)
+	}
+	if len(files) != 1 || files[0].ID != "f1" || files[0].Size != 42 || files[0].Uploader.Username != "Ann" {
+		t.Fatalf("files = %+v", files)
+	}
+
+	if err := client.File.Delete(context.Background(), "r1", "a/b"); err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != http.MethodDelete || gotPath != "/api/v1/rooms/r1/files/a%2Fb" {
+		t.Fatalf("delete request = %s %s", gotMethod, gotPath)
+	}
+	if err := client.File.Delete(context.Background(), "r1", ""); !errors.Is(err, ErrMissingIDParameter) {
+		t.Fatalf("delete without ID: %v", err)
+	}
+}

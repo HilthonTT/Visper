@@ -30,6 +30,7 @@ type keyMap struct {
 	ShareImage      key.Binding
 	AIRewrite       key.Binding
 	Invite          key.Binding
+	RoomFiles       key.Binding
 	ToggleCompanion key.Binding
 	JumpToBottom    key.Binding
 }
@@ -59,6 +60,7 @@ var keys = keyMap{
 	ShareImage:      key.NewBinding(key.WithKeys("ctrl+u"), key.WithHelp("ctrl+u", "share an image")),
 	AIRewrite:       key.NewBinding(key.WithKeys("ctrl+a"), key.WithHelp("ctrl+a", "rewrite with AI")),
 	Invite:          key.NewBinding(key.WithKeys("ctrl+p"), key.WithHelp("ctrl+p", "QR invite")),
+	RoomFiles:       key.NewBinding(key.WithKeys("ctrl+o"), key.WithHelp("ctrl+o", "room files")),
 	ToggleCompanion: key.NewBinding(key.WithKeys("ctrl+w"), key.WithHelp("ctrl+w", "show / hide companion")),
 	JumpToBottom:    key.NewBinding(key.WithKeys("end"), key.WithHelp("end", "jump to latest")),
 }

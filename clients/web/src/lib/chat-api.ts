@@ -60,6 +60,20 @@ export type ApiCryptoState = {
 
 export type ApiFile = { id: string; url: string };
 
+/**
+ * A file in the room's file list. The server only has ciphertext under a
+ * fixed name ("file.enc"): the real name travels in the encrypted message
+ * that points to `url`.
+ */
+export type ApiFileInfo = {
+	id: string;
+	filename: string;
+	size: number;
+	url: string;
+	createdAt: string;
+	uploader: { id: string; username?: string };
+};
+
 export class ChatApiError extends Error {
 	constructor(
 		message: string,
@@ -158,6 +172,17 @@ export const chatApi = {
 		request<unknown>(
 			"POST",
 			`${room(roomId)}/membership/${encodeURIComponent(userId)}`,
+		),
+
+	/** The room's uploaded (encrypted) files, for members. */
+	listFiles: (roomId: string) =>
+		request<ApiFileInfo[] | null>("GET", `${room(roomId)}/files`),
+
+	/** Deletes a file (its uploader or the room owner only). */
+	deleteFile: (roomId: string, fileId: string) =>
+		request<unknown>(
+			"DELETE",
+			`${room(roomId)}/files/${encodeURIComponent(fileId)}`,
 		),
 
 	listMessages: (roomId: string, limit = 100) =>

@@ -71,6 +71,8 @@ func (m model) chatKeyUpdate(msg tea.KeyPressMsg) (_ model, _ tea.Cmd, handled b
 		m = m.openFileExplorer()
 	case key.Matches(msg, keys.Invite):
 		m = m.openQRCodeDialog()
+	case key.Matches(msg, keys.RoomFiles):
+		m, cmd = m.openRoomFiles()
 	case key.Matches(msg, keys.ToggleCompanion):
 		m.state.chat.companion.hidden = !c.companion.hidden
 		m = m.relayoutChat()
@@ -225,6 +227,8 @@ func (m model) chatDialogUpdate(msg tea.KeyPressMsg) (model, tea.Cmd) {
 	switch m.state.dialog.kind {
 	case dialogFileExplorer:
 		return m.fileExplorerUpdate(msg)
+	case dialogRoomFiles:
+		return m.roomFilesUpdate(msg)
 	case dialogQRCode:
 		if msg.String() == "c" {
 			code := m.state.dialog.content
@@ -253,6 +257,9 @@ func (m model) chatDialogUpdate(msg tea.KeyPressMsg) (model, tea.Cmd) {
 		m.state.dialog.focus = 1 - m.state.dialog.focus
 		return m, nil
 	case answerNo:
+		if m.state.dialog.kind == dialogDeleteFile {
+			return m.reopenRoomFiles(), nil
+		}
 		m.state.chat.members.kickUserID = ""
 		m.state.chat.members.keysUserID = ""
 		return m.closeDialog(), nil
@@ -279,6 +286,11 @@ func (m model) confirmDialog() (model, tea.Cmd) {
 	case dialogDeleteMessage:
 		m = m.exitEditMode()
 		return m, m.deleteMessage(m.state.chat.edit.messageID)
+	case dialogDeleteFile:
+		fileID := m.state.chat.files.deleteID
+		m = m.reopenRoomFiles()
+		m.state.chat.files.loading = true
+		return m, m.deleteRoomFile(fileID)
 	case dialogAIConsent:
 		m.aiConsent = true
 		return m.rewriteDraft()
