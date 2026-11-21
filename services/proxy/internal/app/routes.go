@@ -18,7 +18,7 @@ func routes(cfg *config.App, lb *balancer.LoadBalancer, throttle *throttling.Hie
 
 	mux := http.NewServeMux()
 	mux.Handle("/", middleware.Chain(lb, throttled))
-	var metrics http.Handler = promhttp.Handler()
+	metrics := promhttp.Handler()
 	if cfg.MetricsToken != "" {
 		// /metrics shares the public listener and names the backends, so it
 		// can be locked down; unset keeps it open for existing scrapers.

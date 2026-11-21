@@ -58,7 +58,7 @@ func hasControl(s string, keepNewlines bool) bool {
 		return true
 	}
 	for _, r := range s {
-		if isControl(r) && !(keepNewlines && (r == '\n' || r == '\t')) {
+		if isControl(r) && (!keepNewlines || (r != '\n' && r != '\t')) {
 			return true
 		}
 	}
