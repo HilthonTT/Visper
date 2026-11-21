@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"github.com/hilthontt/visper/clients/cli/internal/strfn"
 	apisdk "github.com/hilthontt/visper/sdk/go"
 )
 
@@ -135,7 +136,17 @@ func (m model) enterChat(room *apisdk.RoomResponse, roomKey string) (model, tea.
 			return visibleError{message: "That room key is invalid. Ask for the full invite code again."}
 		}
 	}
-	if stored, ok := m.storedRoom(room.ID); ok && stored.OwnerID == room.Owner.ID {
+	stored, ok := m.storedRoom(room.ID)
+	if ok && stored.OwnerID != room.Owner.ID {
+		// The owner can't change: the server is lying. Pinning the owner it
+		// names now would let it sign rekeys of its own choosing, so keep the
+		// pin we have and stay out (see enterReopenedRoom). We were a member
+		// before this join, so don't leave either.
+		return m, func() tea.Msg {
+			return visibleError{message: "That room's owner isn't the one you joined, so it wasn't opened."}
+		}
+	}
+	if ok {
 		// Back in a room we were already in (e.g. through a new invite):
 		// keep the keys and verified members we had, plus the invite's key.
 		keys := stored.Keys
@@ -151,13 +162,30 @@ func (m model) enterChat(room *apisdk.RoomResponse, roomKey string) (model, tea.
 	return m.enterRoom(room, rc)
 }
 
+// cleanRoom returns a copy of room without control characters in the names
+// and codes the server sent, which are shown in the terminal.
+func cleanRoom(room *apisdk.RoomResponse) *apisdk.RoomResponse {
+	r := *room
+	r.JoinCode = strfn.CleanLine(r.JoinCode)
+	cleanUser := func(u apisdk.UserResponse) apisdk.UserResponse {
+		u.Username = strfn.CleanLine(u.Username)
+		return u
+	}
+	r.Owner, r.CurrentUser = cleanUser(r.Owner), cleanUser(r.CurrentUser)
+	r.Members = make([]apisdk.UserResponse, len(room.Members))
+	for i, u := range room.Members {
+		r.Members[i] = cleanUser(u)
+	}
+	return &r
+}
+
 // enterRoom opens the chat page for room with its crypto state rc: a room
 // just created or joined, or a remembered one reopened.
 func (m model) enterRoom(room *apisdk.RoomResponse, rc *apisdk.RoomCrypto) (model, tea.Cmd) {
 	if m.page == chatPage && m.state.chat.room != nil {
 		return m, nil // see enterChat
 	}
-	room = withInviteKey(room, rc.CurrentKey())
+	room = withInviteKey(cleanRoom(room), rc.CurrentKey())
 
 	m = m.stopNotificationListener()
 	// Never let a previous room's listener or countdown outlive it.

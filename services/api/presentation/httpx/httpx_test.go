@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -48,5 +49,25 @@ func TestErrorMapsKindsToStatuses(t *testing.T) {
 		if w.Code != tt.status || body.Message != tt.message {
 			t.Errorf("%v: got %d %q, want %d %q", tt.err, w.Code, body.Message, tt.status, tt.message)
 		}
+	}
+}
+
+func TestBindJSONRejectsOversizedBodies(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := `{"content":"` + strings.Repeat("a", MaxJSONBodySize) + `"}`
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	var req struct {
+		Content string `json:"content"`
+	}
+	if BindJSON(ctx, &req) {
+		t.Fatal("BindJSON accepted a body over the limit")
+	}
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusRequestEntityTooLarge)
 	}
 }

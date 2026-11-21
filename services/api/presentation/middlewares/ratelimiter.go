@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -82,7 +83,7 @@ return {1, ttl}
 func RateLimiterMiddleware(redisClient *redis.Client, logger *logger.Logger, config RateLimiterConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
-		clientKey := config.keyPrefix() + "ip:" + c.ClientIP()
+		clientKey := config.keyPrefix() + "ip:" + rateLimitSubject(c.ClientIP())
 
 		blockKey := fmt.Sprintf("ratelimit:block:%s", clientKey)
 		blockResult, err := redisClient.Eval(ctx, checkBlockScript, []string{blockKey}).Result()
@@ -188,4 +189,25 @@ func (c RateLimiterConfig) keyPrefix() string {
 		return "default:"
 	}
 	return c.Name + ":"
+}
+
+// rateLimitSubject returns what a client IP is rate limited as. An IPv6
+// client usually controls a whole /64 (one is routed to each home or VPS),
+// so limiting single IPv6 addresses let one client rotate through billions
+// of fresh budgets, e.g. to brute-force join codes. IPv6 addresses are
+// limited per /64; IPv4 addresses (and IPv4-mapped ones) individually.
+func rateLimitSubject(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap()
+	if addr.Is4() {
+		return addr.String()
+	}
+	prefix, err := addr.WithZone("").Prefix(64)
+	if err != nil {
+		return ip
+	}
+	return prefix.String()
 }

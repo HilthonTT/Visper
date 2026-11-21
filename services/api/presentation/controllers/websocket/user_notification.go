@@ -73,7 +73,12 @@ func (c *userNotificationController) NotifySelfRoomInvite(ctx *gin.Context) {
 	}
 
 	var req NotifySelfRoomInviteRequest
+	httpx.LimitJSONBody(ctx)
 	if err := ctx.ShouldBindJSON(&req); err != nil {
+		if httpx.IsBodyTooLarge(err) {
+			httpx.Fail(ctx, http.StatusRequestEntityTooLarge, httpx.CodeTooLarge, "request body is too large")
+			return
+		}
 		httpx.BadRequest(ctx, "user_id and sealed_key are required in request body")
 		return
 	}

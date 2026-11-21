@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/hilthontt/visper/clients/cli/internal/resource"
+	"github.com/hilthontt/visper/clients/cli/internal/strfn"
 	"github.com/hilthontt/visper/clients/cli/internal/tui/qr"
 	"github.com/hilthontt/visper/clients/cli/internal/tui/theme"
 )
@@ -82,6 +83,9 @@ func (m model) confirmAnswer(msg tea.KeyPressMsg) confirmAnswer {
 }
 
 func (m model) openDialog(d dialogState) model {
+	// Dialogs show usernames, file names and server errors: keep their
+	// control characters off the terminal.
+	d.title, d.content = strfn.CleanLine(d.title), strfn.CleanText(d.content)
 	d.open = true
 	m.state.dialog = d
 	return m

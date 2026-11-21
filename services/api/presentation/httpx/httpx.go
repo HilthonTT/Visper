@@ -4,6 +4,7 @@
 package httpx
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -27,6 +28,11 @@ const (
 // internalErrorMessage replaces the message of internal errors, which may
 // contain storage details.
 const internalErrorMessage = "something went wrong, please try again"
+
+// MaxJSONBodySize bounds JSON request bodies. The largest legitimate one is a
+// rekey sealing keys to 1000 members (about 200 KB); without a bound the
+// whole body was decoded into memory, however large.
+const MaxJSONBodySize = 1 << 20
 
 type ErrorResponse struct {
 	Error   string `json:"error"`
@@ -111,9 +117,28 @@ func RoomID(ctx *gin.Context) (string, bool) {
 // BindJSON decodes and validates the request body into req, or writes a 400
 // response.
 func BindJSON(ctx *gin.Context, req any) bool {
+	LimitJSONBody(ctx)
 	if err := ctx.ShouldBindJSON(req); err != nil {
+		if IsBodyTooLarge(err) {
+			Fail(ctx, http.StatusRequestEntityTooLarge, CodeTooLarge, "request body is too large")
+			return false
+		}
 		BadRequest(ctx, middlewares.TranslateValidationError(err))
 		return false
 	}
 	return true
+}
+
+// LimitJSONBody caps the request body at MaxJSONBodySize. Reading past it
+// fails with an error IsBodyTooLarge recognises.
+func LimitJSONBody(ctx *gin.Context) {
+	if ctx.Request.Body != nil {
+		ctx.Request.Body = http.MaxBytesReader(ctx.Writer, ctx.Request.Body, MaxJSONBodySize)
+	}
+}
+
+// IsBodyTooLarge reports whether err comes from reading past a body limit.
+func IsBodyTooLarge(err error) bool {
+	var tooLarge *http.MaxBytesError
+	return errors.As(err, &tooLarge)
 }

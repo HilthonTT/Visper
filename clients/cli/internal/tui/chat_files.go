@@ -81,7 +81,7 @@ func (m model) roomFilesLoadedUpdate(msg roomFilesLoadedMsg) (model, tea.Cmd) {
 	f := &m.state.chat.files
 	f.loading = false
 	if msg.err != nil {
-		f.err = fmt.Sprintf("Couldn't load the files: %v", msg.err)
+		f.err = strfn.CleanLine(fmt.Sprintf("Couldn't load the files: %v", msg.err))
 		return m, nil
 	}
 	f.err = ""
@@ -175,7 +175,8 @@ func sharedFileRef(content string) (fileID, name string, ok bool) {
 		return "", "", false
 	}
 	if n, err := url.PathUnescape(frag); err == nil {
-		name = n
+		// Unescaping can turn "%1b" back into an escape character.
+		name = strfn.CleanLine(n)
 	}
 	return fileID, name, true
 }
@@ -186,7 +187,7 @@ func (m model) fileUploaderName(f apisdk.FileResponse) string {
 	case m.isCurrentUser(f.Uploader.ID):
 		return "you"
 	case f.Uploader.Username != "":
-		return f.Uploader.Username
+		return strfn.CleanLine(f.Uploader.Username)
 	}
 	if name := m.state.chat.members.name(f.Uploader.ID); name != "" {
 		return name

@@ -11,6 +11,7 @@ import {
 } from "@/lib/room-crypto";
 import { RoomKeyError } from "@/lib/room-key";
 import type { RoomCrypto } from "@/lib/room-keys";
+import { getSavedRoom } from "@/lib/saved-rooms";
 import {
 	Box,
 	Button,
@@ -88,6 +89,19 @@ export const JoinForm = ({
 				const parsed = parseInviteCode(invite);
 				key = parsed.key;
 				room = await chatApi.joinByCode(parsed.joinCode, name);
+			}
+			// A room this browser remembers keeps the owner pinned when it was
+			// first entered: a server naming someone else now must not get to
+			// replace that pin (and so sign rekeys) by way of a fresh join.
+			const saved = await getSavedRoom(room.id);
+			if (
+				saved &&
+				saved.userId === room.current_user.id &&
+				saved.crypto.ownerId !== room.owner.id
+			) {
+				throw new Error(
+					"The server names a different owner than when you joined. Not opening: ask the owner for a new invite.",
+				);
 			}
 			onJoined({ room, key, remember });
 		} catch (e) {

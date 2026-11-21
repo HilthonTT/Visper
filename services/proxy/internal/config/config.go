@@ -31,6 +31,8 @@ type App struct {
 	Throttle       Throttle
 	TrustedProxies []string
 	AdminToken     string
+	// MetricsToken, when set, is the bearer token required for /metrics.
+	MetricsToken string
 
 	// lbBase is the LB section from defaults, env and flags only; the JSON
 	// file is overlaid on it both at startup and on every reload.

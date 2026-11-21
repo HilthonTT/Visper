@@ -490,3 +490,39 @@ func TestFileListAndDelete(t *testing.T) {
 		t.Fatalf("delete without ID: %v", err)
 	}
 }
+
+func TestSendRefusesAPlaintextResponse(t *testing.T) {
+	rc := selfRoomCrypto(t, "u1")
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"m1","user_id":"u1","content":"injected by the server","encrypted":false,"created_at":"2026-01-01T00:00:00Z"}`)
+	}))
+	client.Message.SetRoomCrypto(rc)
+	res, err := client.Message.Send(context.Background(), "r1", SendMessageParams{Content: "hello"})
+	if !errors.Is(err, ErrUnverified) || res.Content == "injected by the server" {
+		t.Fatalf("Send = %+v, %v", res, err)
+	}
+	upd, err := client.Message.Update(context.Background(), "r1", "m1", UpdateMessageParams{Content: "hello"})
+	if !errors.Is(err, ErrUnverified) || upd.Content == "injected by the server" {
+		t.Fatalf("Update = %+v, %v", upd, err)
+	}
+}
+
+func TestUserTokenDoesNotFollowRedirectsToAnotherHost(t *testing.T) {
+	var leaked string
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked = r.Header.Get(UserTokenHeader)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"r1"}`)
+	}))
+	t.Cleanup(other.Close)
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusFound)
+	}))
+	if _, err := client.Room.Get(context.Background(), "r1", option.WithUserToken("secret-token")); err != nil {
+		t.Fatal(err)
+	}
+	if leaked != "" {
+		t.Fatalf("token sent to another host: %q", leaked)
+	}
+}

@@ -470,6 +470,24 @@ describe("key verification", () => {
 		).resolves.toBeDefined();
 	});
 
+	it("pins the card whose fingerprint was compared, not a newer one", async () => {
+		const [alice, bob] = newRoom("alice", "bob");
+		// What the keys panel showed, and the user compared with Bob.
+		const shown = alice.fingerprint("bob");
+		// A card in Bob's name lands before the user clicks "mark verified".
+		const { fake, card } = forge(alice.currentKey(), "bob");
+		alice.addCard("bob", card);
+		expect(alice.fingerprint("bob")).not.toBe(shown);
+
+		alice.verifyMember("bob", shown);
+		expect(alice.fingerprint("bob")).toBe(bob.myFingerprint());
+		expect(() =>
+			alice.openMessage(fake.sealMessage("it's bob"), "bob", "m1", Date.now()),
+		).toThrow(UnverifiedError);
+		const { rekey } = await alice.newRekey(["alice", "bob"], 0);
+		await expect(fake.me.openRoomKey(rekey.keys?.bob ?? "")).rejects.toThrow();
+	});
+
 	it("refuses rekeys signed by a forged owner card", async () => {
 		const [alice, bob] = newRoom("alice", "bob");
 		bob.verifyMember("alice", alice.myFingerprint());

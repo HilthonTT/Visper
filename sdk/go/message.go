@@ -70,7 +70,12 @@ func (m *MessageService) Send(ctx context.Context, roomID string, body SendMessa
 	}
 
 	// Decrypt response for convenience
-	if rc != nil && res.Encrypted {
+	if rc != nil && !res.Encrypted {
+		// In an encrypted room, plaintext can only have come from the server.
+		res.Content = FailedText(ErrUnverified)
+		return res, fmt.Errorf("decryption failed: %w", ErrUnverified)
+	}
+	if rc != nil {
 		opened, err := rc.OpenMessage(res.Content, res.UserID, res.ID, res.CreatedAt, res.UpdatedAt)
 		if err != nil {
 			return res, fmt.Errorf("decryption failed: %w", err)
@@ -193,7 +198,12 @@ func (m *MessageService) Update(ctx context.Context, roomID, messageID string, b
 	}
 
 	// Decrypt response
-	if rc != nil && res.Encrypted {
+	if rc != nil && !res.Encrypted {
+		// In an encrypted room, plaintext can only have come from the server.
+		res.Content = FailedText(ErrUnverified)
+		return res, fmt.Errorf("decryption failed: %w", ErrUnverified)
+	}
+	if rc != nil {
 		opened, err := rc.OpenEdit(res.Content, rc.Identity().UserID(), messageID, time.Time{})
 		if err != nil {
 			return res, fmt.Errorf("decryption failed: %w", err)

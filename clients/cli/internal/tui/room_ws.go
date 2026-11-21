@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/hilthontt/visper/clients/cli/internal/strfn"
 	apisdk "github.com/hilthontt/visper/sdk/go"
 )
 
@@ -254,7 +255,13 @@ func parseRoomEvent(wsMsg apisdk.WSMessage, decrypt decryptFunc) (tea.Msg, bool)
 			return nil, false
 		}
 		encrypted, _ := data["encrypted"].(bool)
-		return messageUpdatedMsg{messageID: id, content: content, encrypted: encrypted, at: eventTime(data)}, true
+		// A live edit is checked against when it arrived if the server
+		// leaves its time out: a zero time would skip the replay window.
+		at := eventTime(data)
+		if at.IsZero() {
+			at = time.Now()
+		}
+		return messageUpdatedMsg{messageID: id, content: content, encrypted: encrypted, at: at}, true
 
 	case apisdk.MessageDeleted:
 		id, ok := stringField(data, "id", "ID", "message_id", "messageId")
@@ -362,11 +369,13 @@ func parseMember(data map[string]any) (apisdk.UserResponse, bool) {
 	return apisdk.UserResponse{ID: userID, Username: username}, okID && okUsername
 }
 
-// stringField returns the first non-empty string among data's keys.
+// stringField returns the first non-empty string among data's keys, without
+// control characters: these payloads come from the server (and usernames from
+// other members), and are shown in the terminal.
 func stringField(data map[string]any, keys ...string) (string, bool) {
 	for _, k := range keys {
 		if v, ok := data[k].(string); ok && v != "" {
-			return v, true
+			return strfn.CleanLine(v), true
 		}
 	}
 	return "", false
@@ -418,7 +427,7 @@ type decryptFunc func(content string, encrypted bool, want sealedAs) decrypted
 // crypto state; failures are shown in place of the content.
 func decryptContent(rc *apisdk.RoomCrypto, content string, encrypted bool, want sealedAs) decrypted {
 	if rc == nil {
-		return decrypted{text: content}
+		return decrypted{text: strfn.CleanText(content)}
 	}
 	if !encrypted {
 		// Every member of an encrypted room encrypts: plaintext can only
@@ -441,5 +450,11 @@ func decryptContent(rc *apisdk.RoomCrypto, content string, encrypted bool, want 
 		log.Printf("Failed to decrypt message: %v", err)
 		return decrypted{text: apisdk.FailedText(err)}
 	}
-	return decrypted{text: opened.Text, fileHash: opened.FileHash}
+	// Members write the text: never let it reach the terminal as escape
+	// sequences.
+	text := strfn.CleanText(opened.Text)
+	if want.reaction {
+		text = strfn.CleanLine(text)
+	}
+	return decrypted{text: text, fileHash: opened.FileHash}
 }

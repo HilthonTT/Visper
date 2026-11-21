@@ -96,7 +96,7 @@ func TestRoomIsRememberedAndReopenedWithItsKeys(t *testing.T) {
 	if err := rc.VerifyMember("owner", owner.MyFingerprint()); err != nil {
 		t.Fatal(err)
 	}
-	m, _ = m.verifyMember("owner", false)
+	m, _ = m.verifyMember("owner", owner.MyFingerprint(), false)
 	rekey, newKey, _, err := owner.NewRekey([]string{"owner", m.userID}, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -186,4 +186,26 @@ func mustCardT(t *testing.T, rc *apisdk.RoomCrypto) string {
 		t.Fatal(err)
 	}
 	return card
+}
+
+func TestJoiningAgainKeepsThePinnedOwner(t *testing.T) {
+	withIdentityFile(t)
+	m := newModelT(t)
+	key := testRoomKey(t)
+	stored := settings.StoredRoom{ID: "r", OwnerID: "owner", Keys: []string{key}}
+	if err := m.identityStore.SaveRoom(stored); err != nil {
+		t.Fatal(err)
+	}
+	// A new invite to the same room, but the server names another owner.
+	room := &apisdk.RoomResponse{ID: "r", Owner: apisdk.UserResponse{ID: "mallory"}, CurrentUser: apisdk.UserResponse{ID: m.userID}, ExpiresAt: time.Now().Add(time.Hour)}
+	m, cmd := m.enterChat(room, key)
+	if m.state.chat.room != nil {
+		t.Fatal("entered a room whose owner changed")
+	}
+	if _, ok := cmd().(visibleError); !ok {
+		t.Fatal("no error shown")
+	}
+	if r, ok := m.identityStore.Room("r"); !ok || r.OwnerID != "owner" {
+		t.Fatalf("pinned owner replaced: %+v, %v", r, ok)
+	}
 }

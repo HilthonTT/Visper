@@ -5,6 +5,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	"github.com/hilthontt/visper/clients/cli/internal/strfn"
 	"github.com/hilthontt/visper/clients/cli/internal/tui/theme"
 )
 
@@ -46,6 +47,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		log.Println("Cleanup completed")
 		return m, nil
 	case visibleError:
+		msg.message = strfn.CleanText(msg.message) // often a server error
 		m.error = &msg
 	case tea.WindowSizeMsg:
 		m = m.resize(msg)

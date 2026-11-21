@@ -56,11 +56,13 @@ func (m model) openVerifyKeyDialog() (model, tea.Cmd) {
 	}
 	d.content = content
 	m.state.chat.members.keysUserID = selected.ID
+	m.state.chat.members.keysFingerprint = theirs
 	return m.openDialog(d), nil
 }
 
-// verifyMember pins (or, with unverify, unpins) a member's key.
-func (m model) verifyMember(userID string, unverify bool) (model, tea.Cmd) {
+// verifyMember pins the key with fingerprint (the one the dialog showed), or,
+// with unverify, unpins the member's key.
+func (m model) verifyMember(userID, fingerprint string, unverify bool) (model, tea.Cmd) {
 	rc := m.state.chat.crypto
 	if rc == nil || userID == "" {
 		return m, nil
@@ -75,7 +77,12 @@ func (m model) verifyMember(userID string, unverify bool) (model, tea.Cmd) {
 		return m.toast(theme.ToneInfo, name+" is no longer verified.")
 	}
 	// The fingerprint shown in the dialog: verify exactly what was compared.
-	if err := rc.VerifyMember(userID, rc.Fingerprint(userID)); err != nil {
+	// Looking it up again here would pin a card that arrived (say, a forged
+	// one) while the dialog was open.
+	if fingerprint == "" {
+		return m, nil
+	}
+	if err := rc.VerifyMember(userID, fingerprint); err != nil {
 		return m.toast(theme.ToneDanger, fmt.Sprintf("Couldn't verify %s: %v", name, err))
 	}
 	// Toasts are one line: keep these short enough to show in full.

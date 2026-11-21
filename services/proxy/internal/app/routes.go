@@ -18,7 +18,13 @@ func routes(cfg *config.App, lb *balancer.LoadBalancer, throttle *throttling.Hie
 
 	mux := http.NewServeMux()
 	mux.Handle("/", middleware.Chain(lb, throttled))
-	mux.Handle("/metrics", promhttp.Handler())
+	var metrics http.Handler = promhttp.Handler()
+	if cfg.MetricsToken != "" {
+		// /metrics shares the public listener and names the backends, so it
+		// can be locked down; unset keeps it open for existing scrapers.
+		metrics = middleware.RequireBearerToken(cfg.MetricsToken)(metrics)
+	}
+	mux.Handle("/metrics", metrics)
 	mux.Handle("POST /admin/reload", middleware.Chain(reloadHandler(cfg, lb),
 		throttled, middleware.RequireBearerToken(cfg.AdminToken)))
 	return mux

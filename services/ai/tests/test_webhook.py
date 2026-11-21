@@ -87,3 +87,21 @@ async def test_post_webhook_refuses_private_resolution(monkeypatch):
     transport = httpx.MockTransport(lambda request: pytest.fail("must not send"))
     with pytest.raises(WebhookURLError):
         await post_webhook("http://evil.example/cb", {}, http_timeout=httpx.Timeout(1.0), transport=transport)
+
+
+async def test_post_webhook_does_not_read_the_response_body():
+    """The receiver is attacker-chosen: an endless body must not be buffered into memory."""
+    chunks_sent = 0
+
+    class EndlessBody(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            nonlocal chunks_sent
+            while True:
+                chunks_sent += 1
+                if chunks_sent > 100:
+                    pytest.fail("response body was read")
+                yield b"x" * 65536
+
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, stream=EndlessBody()))
+    await post_webhook("https://8.8.8.8/hook", {}, http_timeout=httpx.Timeout(1.0), transport=transport)
+    assert chunks_sent == 0

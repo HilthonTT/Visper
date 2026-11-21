@@ -70,3 +70,27 @@ func TestOwnKeyShownAsAlert(t *testing.T) {
 		t.Fatalf("own key dialog = %+v", m.state.dialog)
 	}
 }
+
+func TestVerifyPinsTheKeyShownNotOneThatArrivedSince(t *testing.T) {
+	m, key := ownedChatModel(t, "")
+	me := m.state.chat.crypto
+	bob := newPeer(t, "bob", "r", m.userID, key)
+	exchangeCards(t, me, bob)
+	m.state.chat.members.list = []apisdk.UserResponse{{ID: m.userID, Username: "me"}, {ID: "bob", Username: "bob"}}
+	m.state.chat.members.resetFilter()
+	m.state.chat.members.searching = true
+	m.state.chat.members.cursor = 1
+
+	m, _, _ = m.chatKeyUpdate(tea.KeyPressMsg{Code: 'k', Mod: tea.ModCtrl})
+	if m.state.dialog.kind != dialogVerifyKey || !strings.Contains(m.state.dialog.content, bob.MyFingerprint()) {
+		t.Fatalf("dialog = %+v", m.state.dialog)
+	}
+	// A forged card for bob arrives while the user compares the digits.
+	impostor := newPeer(t, "bob", "r", m.userID, key)
+	handleCryptoEvent(cardEvent(t, impostor), me)
+
+	m, _ = m.chatDialogUpdate(tea.KeyPressMsg{Code: 'y', Text: "y"})
+	if me.KeyStatus("bob") != apisdk.KeyVerified || me.Fingerprint("bob") != bob.MyFingerprint() {
+		t.Fatalf("pinned %q, want the compared %q", me.Fingerprint("bob"), bob.MyFingerprint())
+	}
+}

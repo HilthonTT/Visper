@@ -242,3 +242,44 @@ func TestSwappedImageIsShownAsMismatched(t *testing.T) {
 		t.Fatalf("view = %q", got)
 	}
 }
+
+func TestEscapeSequencesFromTheRoomAreStripped(t *testing.T) {
+	m, key := ownedChatModel(t, "")
+	me := m.state.chat.crypto
+	mallory := newPeer(t, "mallory", "r", m.userID, key)
+	exchangeCards(t, me, mallory)
+
+	evil := "hi\x1b]52;c;cm0gLXJmIH4=\x07\x1b[2J\u009b31m"
+	sealed, err := mallory.SealMessage(evil+"\nbye", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	msg, ok := parseRoomEvent(apisdk.WSMessage{Type: apisdk.MessageReceived, Data: map[string]any{
+		"id": "m1", "userId": "mallory", "username": "mal\x1b[31mlory", "content": sealed, "encrypted": true,
+		"timestamp": now.UTC().Format(time.RFC3339),
+	}}, func(c string, enc bool, want sealedAs) decrypted { return decryptContent(me, c, enc, want) })
+	if !ok {
+		t.Fatal("event not parsed")
+	}
+	got := msg.(messageReceivedMsg).message
+	if got.Content != "hi]52;c;cm0gLXJmIH4=[2J31m\nbye" || got.Username != "mal[31mlory" {
+		t.Fatalf("content %q, username %q", got.Content, got.Username)
+	}
+
+	if _, _, ok := sharedFileRef("http://visper.test/api/v1/d/r/f.enc#a%1b%5d0%3bx%07.png"); !ok {
+		t.Fatal("file reference not parsed")
+	}
+	if _, name, _ := sharedFileRef("http://visper.test/api/v1/d/r/f.enc#a%1b%5d0%3bx%07.png"); strings.ContainsAny(name, "\x1b\x07") {
+		t.Fatalf("file name kept control characters: %q", name)
+	}
+}
+
+func TestLiveEditWithoutATimeIsCheckedAgainstNow(t *testing.T) {
+	msg, ok := parseRoomEvent(apisdk.WSMessage{Type: apisdk.MessageUpdated, Data: map[string]any{
+		"id": "m1", "content": "sealed", "encrypted": true,
+	}}, nil)
+	if !ok || time.Since(msg.(messageUpdatedMsg).at) > time.Minute {
+		t.Fatalf("edit event = %#v", msg)
+	}
+}

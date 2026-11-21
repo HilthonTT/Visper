@@ -25,3 +25,21 @@ func TestRateLimiterConfigsUseDistinctKeyPrefixes(t *testing.T) {
 		t.Fatalf("unnamed config prefix = %q", got)
 	}
 }
+
+// Limiting single IPv6 addresses let a client rotate through its /64 for
+// fresh budgets.
+func TestRateLimitSubjectGroupsIPv6By64(t *testing.T) {
+	tests := map[string]string{
+		"203.0.113.7":                 "203.0.113.7",
+		"::ffff:203.0.113.7":          "203.0.113.7",
+		"2001:db8:1:2:aaaa::1":        "2001:db8:1:2::/64",
+		"2001:db8:1:2:ffff:ffff::abc": "2001:db8:1:2::/64",
+		"2001:db8:1:3::1":             "2001:db8:1:3::/64",
+		"not-an-ip":                   "not-an-ip",
+	}
+	for ip, want := range tests {
+		if got := rateLimitSubject(ip); got != want {
+			t.Errorf("rateLimitSubject(%q) = %q, want %q", ip, got, want)
+		}
+	}
+}

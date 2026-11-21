@@ -106,5 +106,11 @@ async def post_webhook(
         if parts.scheme == "https":
             extensions["sni_hostname"] = host
 
-    async with httpx.AsyncClient(timeout=http_timeout, follow_redirects=False, transport=transport) as client:
-        await client.post(request_url, json=payload, headers=headers, extensions=extensions)
+    # Streamed and never read: the receiver is attacker-chosen, and client.post() buffered
+    # the whole response body, so an endless body (the timeout is per read, not total)
+    # grew memory without bound. Only the status line and headers are needed.
+    async with (
+        httpx.AsyncClient(timeout=http_timeout, follow_redirects=False, transport=transport) as client,
+        client.stream("POST", request_url, json=payload, headers=headers, extensions=extensions),
+    ):
+        pass

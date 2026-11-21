@@ -6,6 +6,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/hilthontt/visper/clients/cli/internal/strfn"
 	"github.com/hilthontt/visper/clients/cli/internal/tui/theme"
 )
 
@@ -163,7 +164,7 @@ func (m model) chatEventUpdate(msg tea.Msg) (_ model, _ tea.Cmd, handled bool) {
 			m, cmd = m.toast(theme.ToneDanger, "AI rewrite failed. Your draft is unchanged.")
 			break
 		}
-		m.state.chat.messageInput.SetValue(msg.rewritten)
+		m.state.chat.messageInput.SetValue(strfn.CleanLine(msg.rewritten))
 		m.state.chat.messageInput.CursorEnd()
 		m.state.chat.companion.mood = "fancy words ✧"
 	case imageFileSelectedMsg:

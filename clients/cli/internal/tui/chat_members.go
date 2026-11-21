@@ -27,6 +27,9 @@ type memberState struct {
 	kickUserID string
 	// keysUserID is the member the key verification dialog is for.
 	keysUserID string
+	// keysFingerprint is the fingerprint that dialog shows: the one pinned
+	// on confirming, even if another card arrived while it was open.
+	keysFingerprint string
 }
 
 // memberSearchResultMsg lists the IDs of the members matching query, best

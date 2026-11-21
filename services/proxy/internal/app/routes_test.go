@@ -48,6 +48,19 @@ func TestMetricsAreNotThrottled(t *testing.T) {
 	}
 }
 
+func TestMetricsToken(t *testing.T) {
+	h, _ := newTestRoutes(t, map[string]string{"PROXY_METRICS_TOKEN": "m3trics"})
+	if w := serve(h, http.MethodGet, "/metrics", ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated /metrics: status %d, want 401", w.Code)
+	}
+	if w := serve(h, http.MethodGet, "/metrics", "Bearer wrong"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong token: status %d, want 401", w.Code)
+	}
+	if w := serve(h, http.MethodGet, "/metrics", "Bearer m3trics"); w.Code != http.StatusOK {
+		t.Fatalf("authenticated /metrics: status %d, want 200", w.Code)
+	}
+}
+
 func TestAdminReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "lb.json")
 	write := func(s string) {

@@ -47,7 +47,12 @@ func (c *Container) SetupRouter() *gin.Engine {
 
 	binding.Validator = new(middlewares.DefaultValidator)
 
-	router := gin.Default()
+	// Not gin.Default(): its request logger prints raw query strings, which
+	// would put the room codes some endpoints take there (join_code,
+	// secure_code) in the logs. GinLogger below logs requests with them
+	// redacted.
+	router := gin.New()
+	router.Use(gin.Recovery())
 
 	// gin trusts X-Forwarded-For from every peer by default, which would let
 	// any client pick its own IP and dodge the per-IP rate limiter.

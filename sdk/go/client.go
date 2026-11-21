@@ -2,9 +2,11 @@ package apisdk
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 
 	"net/http/cookiejar"
 
@@ -24,7 +26,8 @@ type Client struct {
 func DefaultClientOptions() []option.RequestOption {
 	jar, _ := cookiejar.New(nil)
 	httpClient := &http.Client{
-		Jar: jar,
+		Jar:           jar,
+		CheckRedirect: dropTokenOnRedirect,
 	}
 
 	defaults := []option.RequestOption{
@@ -38,6 +41,20 @@ func DefaultClientOptions() []option.RequestOption {
 	}
 
 	return defaults
+}
+
+// dropTokenOnRedirect keeps the user token from following a redirect to
+// another host. The http.Client drops Authorization and cookies there, but
+// forwards other headers, X-User-Token included, to wherever the redirect
+// points.
+func dropTokenOnRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	if !strings.EqualFold(req.URL.Host, via[0].URL.Host) {
+		req.Header.Del(UserTokenHeader)
+	}
+	return nil
 }
 
 func NewClient(opts ...option.RequestOption) *Client {

@@ -261,7 +261,7 @@ func (m model) chatDialogUpdate(msg tea.KeyPressMsg) (model, tea.Cmd) {
 			return m.reopenRoomFiles(), nil
 		}
 		m.state.chat.members.kickUserID = ""
-		m.state.chat.members.keysUserID = ""
+		m.state.chat.members.keysUserID, m.state.chat.members.keysFingerprint = "", ""
 		return m.closeDialog(), nil
 	case answerYes:
 		return m.confirmDialog()
@@ -295,9 +295,9 @@ func (m model) confirmDialog() (model, tea.Cmd) {
 		m.aiConsent = true
 		return m.rewriteDraft()
 	case dialogVerifyKey, dialogUnverifyKey:
-		userID := m.state.chat.members.keysUserID
-		m.state.chat.members.keysUserID = ""
-		return m.verifyMember(userID, kind == dialogUnverifyKey)
+		userID, fingerprint := m.state.chat.members.keysUserID, m.state.chat.members.keysFingerprint
+		m.state.chat.members.keysUserID, m.state.chat.members.keysFingerprint = "", ""
+		return m.verifyMember(userID, fingerprint, kind == dialogUnverifyKey)
 	}
 	return m, nil
 }

@@ -8,7 +8,11 @@ type Props = {
 	/** The member's fingerprint ("" if no key card is known for them). */
 	fingerprint: string;
 	status: KeyStatus;
-	onVerify: () => void;
+	/**
+	 * Pins the member's key. Gets the fingerprint shown, so the key pinned is
+	 * the one the user compared, not a card that arrived since.
+	 */
+	onVerify: (fingerprint: string) => void;
 	onUnverify: () => void;
 	onClose: () => void;
 };
@@ -68,7 +72,11 @@ export const KeysPanel = ({
 			</Note>
 			<Buttons>
 				{member && fingerprint && status !== "verified" && (
-					<button type="button" className="primary" onClick={onVerify}>
+					<button
+						type="button"
+						className="primary"
+						onClick={() => onVerify(fingerprint)}
+					>
 						{status === "changed" ? "verify new key" : "mark verified"}
 					</button>
 				)}

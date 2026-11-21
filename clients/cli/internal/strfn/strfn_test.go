@@ -88,3 +88,22 @@ func TestWhitespaceRenderWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestCleanText(t *testing.T) {
+	tests := []struct{ in, text, line string }{
+		{"hello", "hello", "hello"},
+		{"a\nb\tc", "a\nb\tc", "a b c"},
+		{"\x1b[2J\x1b]52;c;aGk=\x07hi", "[2J]52;c;aGk=hi", "[2J]52;c;aGk=hi"},
+		{"x\u009b31my\r\x7f", "x31my", "x31my"},
+		{"bad\x9bbyte", "bad�byte", "bad�byte"},
+		{"émoji 👍", "émoji 👍", "émoji 👍"},
+	}
+	for _, tt := range tests {
+		if got := CleanText(tt.in); got != tt.text {
+			t.Errorf("CleanText(%q) = %q, want %q", tt.in, got, tt.text)
+		}
+		if got := CleanLine(tt.in); got != tt.line {
+			t.Errorf("CleanLine(%q) = %q, want %q", tt.in, got, tt.line)
+		}
+	}
+}

@@ -25,7 +25,8 @@ type toastExpiredMsg struct{ id int }
 
 func (m model) toast(tone theme.Tone, text string) (model, tea.Cmd) {
 	id := m.state.toast.id + 1
-	m.state.toast = toastState{id: id, text: text, tone: tone}
+	// Toasts show usernames and server errors.
+	m.state.toast = toastState{id: id, text: strfn.CleanText(text), tone: tone}
 	return m, tea.Tick(toastDuration, func(time.Time) tea.Msg { return toastExpiredMsg{id: id} })
 }
 

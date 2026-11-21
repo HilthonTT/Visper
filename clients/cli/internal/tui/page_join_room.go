@@ -12,6 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/hilthontt/visper/clients/cli/internal/settings"
+	"github.com/hilthontt/visper/clients/cli/internal/strfn"
 	apisdk "github.com/hilthontt/visper/sdk/go"
 )
 
@@ -195,14 +196,14 @@ func (m model) joinRoomView(height int) string {
 // rememberedRoomRow is one remembered room: its join code, who owns it and
 // when it expires.
 func (m model) rememberedRoomRow(r settings.StoredRoom, selected bool, width int) string {
-	owner := r.OwnerName
+	owner := strfn.CleanLine(r.OwnerName)
 	switch {
 	case m.isCurrentUser(r.OwnerID):
 		owner = "you"
 	case owner == "":
 		owner = "someone"
 	}
-	left := "#" + r.JoinCode
+	left := "#" + strfn.CleanLine(r.JoinCode)
 	if r.JoinCode == "" {
 		left = "room " + truncate(r.ID, 8)
 	}

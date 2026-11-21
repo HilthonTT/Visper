@@ -434,12 +434,14 @@ export const ChatView = ({
 					myFingerprint={chat.crypto.myFingerprint()}
 					fingerprint={keysFor ? chat.crypto.fingerprint(keysFor) : ""}
 					status={keysFor ? chat.crypto.keyStatus(keysFor) : "unverified"}
-					onVerify={() => {
+					onVerify={(shown) => {
 						if (!keysFor) {
 							return;
 						}
 						try {
-							chat.verifyMember(keysFor, chat.crypto.fingerprint(keysFor));
+							// Pin the key the user compared, not a card that arrived
+							// since (which may be someone posing as them).
+							chat.verifyMember(keysFor, shown);
 						} catch (e) {
 							fail(e);
 						}

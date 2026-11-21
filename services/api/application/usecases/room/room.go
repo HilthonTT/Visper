@@ -132,7 +132,8 @@ func (uc *roomUseCase) GetByJoinCodeWithSecureToken(ctx context.Context, joinCod
 		return nil, err
 	}
 	if !codesEqual(room.SecureCode, secureCode) {
-		uc.logger.Warn("invalid secure token provided", zap.String("joinCode", joinCode))
+		// The join code is a credential: log the room, not the code.
+		uc.logger.Warn("invalid secure token provided", zap.String("roomID", room.ID))
 		return nil, ErrInvalidSecureToken
 	}
 	return room, nil

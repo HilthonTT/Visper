@@ -63,6 +63,7 @@ func Load(args []string, getenv func(string) string) (*App, error) {
 		},
 		TrustedProxies: splitList(env.str("PROXY_TRUSTED_PROXIES", "")),
 		AdminToken:     env.str("PROXY_ADMIN_TOKEN", ""),
+		MetricsToken:   env.str("PROXY_METRICS_TOKEN", ""),
 	}
 	for _, u := range splitList(*backends) {
 		app.lbBase.Backends = append(app.lbBase.Backends, BackendConfig{URL: u, Weight: 1})
