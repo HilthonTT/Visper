@@ -4,6 +4,10 @@
 #   docker compose up -d                 # infrastructure only
 #   docker compose --profile app up -d   # infrastructure + Visper services
 #
+# There are no default passwords: compose refuses to start until .env sets
+# POSTGRES_PASSWORD and REDIS_PASSWORD. Every port is published on 127.0.0.1
+# only; set PROXY_BIND_ADDR to serve the proxy beyond this machine.
+#
 # GPU acceleration for Ollama (NVIDIA only):
 #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 
@@ -11,7 +15,7 @@ x-sentinel: &sentinel
   image: redis:8
   restart: unless-stopped
   environment:
-    REDIS_PASSWORD: ${REDIS_PASSWORD:-password}
+    REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env, see .env.example}
   # The config is generated at startup because Sentinel rewrites its own
   # config file and needs it to be writable.
   command:
@@ -41,7 +45,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env, see .env.example}
       POSTGRES_DB: ${POSTGRES_DB:-visper_db}
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
@@ -61,7 +65,7 @@ services:
     image: redis:8
     container_name: visper-redis-master
     restart: unless-stopped
-    command: redis-server --requirepass ${REDIS_PASSWORD:-password} --appendonly yes
+    command: redis-server --requirepass ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env, see .env.example} --appendonly yes
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -72,7 +76,7 @@ services:
       timeout: 5s
       retries: 5
     environment:
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-password}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env, see .env.example}
     networks:
       visper-network:
         aliases: [redis]
@@ -83,9 +87,9 @@ services:
     restart: unless-stopped
     command: >
       redis-server
-      --requirepass ${REDIS_PASSWORD:-password}
+      --requirepass ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env, see .env.example}
       --replicaof redis-master 6379
-      --masterauth ${REDIS_PASSWORD:-password}
+      --masterauth ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env, see .env.example}
       --appendonly yes
     ports:
       - "127.0.0.1:6380:6379"
@@ -176,14 +180,16 @@ services:
       APP_ENV: docker
       VISPER_POSTGRES_HOST: postgres
       VISPER_POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      VISPER_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin}
+      VISPER_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env, see .env.example}
       VISPER_POSTGRES_DBNAME: ${POSTGRES_DB:-visper_db}
       VISPER_REDIS_HOST: redis-master
-      VISPER_REDIS_PASSWORD: ${REDIS_PASSWORD:-password}
+      VISPER_REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env, see .env.example}
       # Only the proxy container (fixed IP below) may set X-Forwarded-For.
       VISPER_SERVER_TRUSTEDPROXIES: 172.28.0.10
+    # Localhost only: published on every interface, the api could be reached
+    # without going through the proxy and its rate limits.
     ports:
-      - "5005:5005"
+      - "127.0.0.1:5005:5005"
     volumes:
       - api_data:/app/data
       - api_uploads:/app/uploads
@@ -204,9 +210,11 @@ services:
       PROXY_BACKENDS: http://api:5005
       REDIS_SENTINEL_ADDRS: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
       REDIS_MASTER_NAME: mymaster
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-password}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env, see .env.example}
+    # The only service meant to face clients. Localhost unless PROXY_BIND_ADDR
+    # says otherwise (e.g. 0.0.0.0 to serve the network).
     ports:
-      - "5004:5004"
+      - "${PROXY_BIND_ADDR:-127.0.0.1}:5004:5004"
     depends_on:
       - api
       - redis-sentinel-1
@@ -225,15 +233,15 @@ services:
       APP_HOST: 0.0.0.0
       APP_PORT: "8088"
       REDIS_CACHE_HOST: redis-master
-      REDIS_CACHE_PASSWORD: ${REDIS_PASSWORD:-password}
+      REDIS_CACHE_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env, see .env.example}
       REDIS_QUEUE_HOST: redis-master
-      REDIS_QUEUE_PASSWORD: ${REDIS_PASSWORD:-password}
+      REDIS_QUEUE_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env, see .env.example}
       REDIS_RATE_LIMIT_HOST: redis-master
-      REDIS_RATE_LIMIT_PASSWORD: ${REDIS_PASSWORD:-password}
+      REDIS_RATE_LIMIT_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env, see .env.example}
       OLLAMA_HOST: ollama
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
     ports:
-      - "8088:8088"
+      - "127.0.0.1:8088:8088"
     depends_on:
       redis-master:
         condition: service_healthy
