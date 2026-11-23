@@ -45,6 +45,8 @@ const ROOM_GONE_STATUSES = [403, 404, 410];
 
 const ROTATED_NOTICE =
 	"The room key was rotated: old invites no longer work. Open invite for the new one.";
+const EXCLUDED_NOTICE =
+	"The owner changed the room key without you (they had no key card for you), so anything you send could be read by members who left. Sending is off until you get the new key: ask the owner for a new invite.";
 const KEY_CHANGED_NOTICE =
 	"A member you verified has a new key. Only their old one is trusted until you check it again in members.";
 
@@ -96,6 +98,8 @@ export function useRoomChat(
 	const [keyVersion, setKeyVersion] = useState(0);
 	/** A note about the room's keys (e.g. that the key was rotated). */
 	const [notice, setNotice] = useState("");
+	/** Set when a live rekey left us out; sending is off until one includes us. */
+	const excluded = useRef(false);
 	/** Bumped when a member's key verification changes, to redraw it. */
 	const [trustVersion, setTrustVersion] = useState(0);
 
@@ -264,12 +268,24 @@ export function useRoomChat(
 			}
 			if (type === "room.rekeyed") {
 				try {
-					if (await crypto.applyRekey(data as Rekey)) {
+					// It arrived live, so we were a member when it was made: a
+					// rekey with no key for us left us out (unlike one found on
+					// entry, which may simply predate our invite).
+					const result = await crypto.applyRekeyResult(data as Rekey);
+					if (result === "applied") {
+						excluded.current = false;
 						await publishCard();
 						if (!stopped) {
 							setKeyVersion((v) => v + 1);
 							setNotice(ROTATED_NOTICE);
 						}
+					} else if (result === "excluded") {
+						excluded.current = true;
+						if (!stopped) {
+							setNotice(EXCLUDED_NOTICE);
+						}
+						// So the owner's next rotation can include us.
+						await publishCard();
 					}
 				} catch (e) {
 					if (!stopped) {
@@ -489,6 +505,9 @@ export function useRoomChat(
 	const assertReady = useCallback(() => {
 		if (!ready) {
 			throw new Error("Still loading the room's keys. Try again in a moment.");
+		}
+		if (excluded.current) {
+			throw new Error(EXCLUDED_NOTICE);
 		}
 	}, [ready]);
 

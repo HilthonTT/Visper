@@ -348,6 +348,19 @@ describe("rekeying", () => {
 		expect(await bob.applyRekey(rekey)).toBe(false); // replayed rekey
 	});
 
+	it("reports a rekey that leaves us out", async () => {
+		const [alice, bob, carol] = newRoom("alice", "bob", "carol");
+		// Carol is left out, as when the owner had no key card for her.
+		const { rekey, newKey } = await alice.newRekey(["alice", "bob"], 0);
+		alice.commitKey(newKey, rekey.epoch);
+
+		expect(await bob.applyRekeyResult(rekey)).toBe("applied");
+		expect(await carol.applyRekeyResult(rekey)).toBe("excluded");
+		// Seen again it is old news, not a new exclusion.
+		expect(await carol.applyRekeyResult(rekey)).toBe("unchanged");
+		expect(await alice.applyRekeyResult(rekey)).toBe("unchanged");
+	});
+
 	it("accepts only the owner's signature", async () => {
 		const [alice, bob] = newRoom("alice", "bob", "mallory");
 		const malloryAsOwner = new RoomCrypto(

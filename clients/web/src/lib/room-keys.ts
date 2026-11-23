@@ -953,8 +953,23 @@ export class RoomCrypto {
 	 * key. Returns whether the key changed (then publish a new card).
 	 */
 	async applyRekey(r: Rekey | null | undefined): Promise<boolean> {
+		return (await this.applyRekeyResult(r)) === "applied";
+	}
+
+	/**
+	 * applyRekey, also reporting "excluded" for a newer, validly signed rekey
+	 * with no key for us: either it predates our invite, or the owner rotated
+	 * without us (typically for lack of our key card). In the second case
+	 * what we send is still sealed with a key departed members may hold, so
+	 * a caller that knows we were a member when it was made (it arrived live)
+	 * should stop sending and ask for a new invite. Mirrors ApplyRekeyResult
+	 * in sdk/go/roomcrypto.go.
+	 */
+	async applyRekeyResult(
+		r: Rekey | null | undefined,
+	): Promise<"applied" | "unchanged" | "excluded"> {
 		if (!r || r.epoch <= this.epochValue || this.isOwner()) {
-			return false;
+			return "unchanged";
 		}
 		let sig: Uint8Array;
 		try {
@@ -971,9 +986,8 @@ export class RoomCrypto {
 		}
 		const sealed = r.keys?.[this.me.userId];
 		if (!sealed) {
-			// From before we joined, or one that left us out.
 			this.epochValue = Math.max(this.epochValue, r.epoch);
-			return false;
+			return "excluded";
 		}
 		let newKey: RoomKey;
 		try {
@@ -982,11 +996,11 @@ export class RoomCrypto {
 			throw e instanceof RoomKeyError ? new BadRekeyError(e.message) : e;
 		}
 		if (r.epoch <= this.epochValue) {
-			return false; // applied meanwhile
+			return "unchanged"; // applied meanwhile
 		}
 		this.addKey(newKey);
 		this.epochValue = r.epoch;
-		return true;
+		return "applied";
 	}
 }
 
