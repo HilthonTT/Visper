@@ -263,6 +263,44 @@ func (dc *DistributedCache) SAdd(ctx context.Context, key string, members ...any
 	return dc.redis.SAdd(ctx, redisKey, members...).Err()
 }
 
+// sAddIfRecordScript adds ARGV[1] to the set KEYS[2] only if the JSON record
+// at KEYS[1] exists and, for each following (field, value) pair of ARGV,
+// has that string value. It returns -1 if the record is missing, 0 if a
+// field differs, and 1 once the member is added.
+var sAddIfRecordScript = redis.NewScript(`
+local raw = redis.call('GET', KEYS[1])
+if not raw then return -1 end
+if #ARGV > 1 then
+	local record = cjson.decode(raw)
+	for i = 2, #ARGV, 2 do
+		if record[ARGV[i]] ~= ARGV[i + 1] then return 0 end
+	end
+end
+redis.call('SADD', KEYS[2], ARGV[1])
+return 1
+`)
+
+// SAddIf results.
+const (
+	SAddRecordMissing = -1
+	SAddFieldMismatch = 0
+	SAddAdded         = 1
+)
+
+// SAddIf atomically adds member to the set setKey only if the JSON record at
+// recordKey exists (read from Redis, never the local cache) and its string
+// fields equal want. It returns SAddAdded, SAddRecordMissing or
+// SAddFieldMismatch.
+func (dc *DistributedCache) SAddIf(ctx context.Context, recordKey, setKey, member string, want map[string]string) (int, error) {
+	args := make([]any, 0, 1+2*len(want))
+	args = append(args, member)
+	for field, value := range want {
+		args = append(args, field, value)
+	}
+	return sAddIfRecordScript.Run(ctx, dc.redis,
+		[]string{dc.keyPrefix + recordKey, dc.keyPrefix + setKey}, args...).Int()
+}
+
 // SRem removes members from a set
 func (dc *DistributedCache) SRem(ctx context.Context, key string, members ...any) error {
 	redisKey := dc.keyPrefix + key

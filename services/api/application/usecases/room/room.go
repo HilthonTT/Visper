@@ -26,7 +26,10 @@ type RoomUseCase interface {
 	GenerateNewJoinCode(ctx context.Context, userID, id string) (*model.Room, error)
 	RegenerateSecureCode(ctx context.Context, userID, id string) (*model.Room, error)
 
-	JoinRoom(ctx context.Context, roomID string, user model.User) error
+	// JoinRoom adds user to the room if it still has the codes they
+	// presented (an empty code is not checked; only the owner joins with
+	// none, when creating the room).
+	JoinRoom(ctx context.Context, roomID string, user model.User, codes repository.RoomCodes) error
 	JoinRoomWithCodes(ctx context.Context, roomID, joinCode, secureCode string, user model.User) error
 	LeaveRoom(ctx context.Context, roomID, userID string) error
 	// KickMember removes a member and rotates the room's join and secure
@@ -83,7 +86,7 @@ func (uc *roomUseCase) Create(ctx context.Context, owner model.User, expiry time
 		return nil, fmt.Errorf("failed to create room: %w", err)
 	}
 
-	if err := uc.repository.AddUser(ctx, room.ID, owner); err != nil {
+	if err := uc.repository.AddUser(ctx, room.ID, owner, repository.RoomCodes{}); err != nil {
 		uc.logger.Error("failed to add owner to room", zap.Error(err), zap.String("roomID", room.ID), zap.String("ownerID", owner.ID))
 		_ = uc.repository.Delete(ctx, room.ID)
 		return nil, fmt.Errorf("failed to add owner to room: %w", err)
@@ -173,7 +176,7 @@ func (uc *roomUseCase) RegenerateSecureCode(ctx context.Context, userID, id stri
 // ---------------------------------------------------------------------------
 // Membership
 
-func (uc *roomUseCase) JoinRoom(ctx context.Context, roomID string, user model.User) error {
+func (uc *roomUseCase) JoinRoom(ctx context.Context, roomID string, user model.User, codes repository.RoomCodes) error {
 	room, err := uc.GetByID(ctx, roomID)
 	if err != nil {
 		return err
@@ -184,7 +187,15 @@ func (uc *roomUseCase) JoinRoom(ctx context.Context, roomID string, user model.U
 		return nil
 	}
 
-	if err := uc.repository.AddUser(ctx, roomID, user); err != nil {
+	if err := uc.repository.AddUser(ctx, roomID, user, codes); err != nil {
+		switch {
+		case errors.Is(err, repository.ErrCodesChanged):
+			// The codes were rotated (e.g. by a kick) after the room was read.
+			uc.logger.Warn("join with codes that were just rotated", zap.String("roomID", roomID), zap.String("userID", user.ID))
+			return ErrInvalidCodes
+		case errors.Is(err, repository.ErrNotFound):
+			return ErrRoomNotFound
+		}
 		uc.logger.Error("failed to add user to room", zap.Error(err), zap.String("roomID", roomID), zap.String("userID", user.ID))
 		return fmt.Errorf("failed to join room: %w", err)
 	}
@@ -218,7 +229,7 @@ func (uc *roomUseCase) JoinRoomWithCodes(ctx context.Context, roomID, joinCode, 
 		return ErrInvalidCodes
 	}
 
-	return uc.JoinRoom(ctx, roomID, user)
+	return uc.JoinRoom(ctx, roomID, user, repository.RoomCodes{JoinCode: joinCode, SecureCode: secureCode})
 }
 
 func (uc *roomUseCase) LeaveRoom(ctx context.Context, roomID, userID string) error {
@@ -264,19 +275,27 @@ func (uc *roomUseCase) KickMember(ctx context.Context, roomID, userID, requester
 		return nil, ErrNotMember
 	}
 
-	if err := uc.repository.RemoveUser(ctx, roomID, userID); err != nil {
-		uc.logger.Error("failed to kick user from room", zap.Error(err), zap.String("roomID", roomID), zap.String("userID", userID))
-		return nil, fmt.Errorf("failed to kick member: %w", err)
-	}
-
 	// Every member can see the join code, and joining by join code alone is
 	// allowed, so without new codes a kicked user could rejoin at once and be
 	// sealed into the next room key.
+	//
+	// The codes change before the member is removed. If removal then fails
+	// the user is still a member, so the owner can simply retry the kick;
+	// the other way round, a failed rotation would leave the user out of the
+	// room's member set (so a retry is refused as "not a member") yet still
+	// connected and still able to rejoin with the old codes. And AddUser
+	// checks the codes atomically, so a rejoin racing this kick either lands
+	// before the rotation (and is undone by the removal below) or fails.
 	room.JoinCode = generateJoinCode()
 	room.SecureCode = generateSecureCode()
 	if err := uc.repository.Update(ctx, room); err != nil {
-		uc.logger.Error("failed to rotate codes after kick", zap.Error(err), zap.String("roomID", roomID))
+		uc.logger.Error("failed to rotate codes before kick", zap.Error(err), zap.String("roomID", roomID))
 		return nil, fmt.Errorf("failed to rotate room codes: %w", err)
+	}
+
+	if err := uc.repository.RemoveUser(ctx, roomID, userID); err != nil {
+		uc.logger.Error("failed to kick user from room", zap.Error(err), zap.String("roomID", roomID), zap.String("userID", userID))
+		return nil, fmt.Errorf("failed to kick member: %w", err)
 	}
 	room.Members = slices.DeleteFunc(room.Members, func(u model.User) bool { return u.ID == userID })
 

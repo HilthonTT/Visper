@@ -31,7 +31,7 @@ func NewRoomRepository(
 	}
 }
 
-func (r *roomRepository) AddUser(ctx context.Context, roomID string, user model.User) error {
+func (r *roomRepository) AddUser(ctx context.Context, roomID string, user model.User, roomCodes repository.RoomCodes) error {
 	ctx, span := r.tracer.Start(ctx, "roomRepository.AddUser")
 	defer span.End()
 
@@ -41,31 +41,33 @@ func (r *roomRepository) AddUser(ctx context.Context, roomID string, user model.
 		attribute.String("user.username", user.Username),
 	)
 
-	// Check the room first: SADD on a deleted room would recreate its
-	// membership set, which nothing ever removes again.
-	roomKey := fmt.Sprintf("room:%s", roomID)
-	var room model.Room
-	found, err := r.cache.Get(ctx, roomKey, &room)
+	// One script checks the room and adds the user. The room must exist:
+	// SADD on a deleted room would recreate its membership set, which nothing
+	// ever removes again. And its codes must still be the ones the joiner
+	// presented, read from Redis at this moment: a kick rotates the codes
+	// before removing the member, so a join that raced the kick with the old
+	// codes either lands first (and is removed by the kick) or fails here.
+	want := make(map[string]string, 2)
+	if roomCodes.JoinCode != "" {
+		want["joinCode"] = roomCodes.JoinCode
+	}
+	if roomCodes.SecureCode != "" {
+		want["secureCode"] = roomCodes.SecureCode
+	}
+	result, err := r.cache.SAddIf(ctx,
+		fmt.Sprintf("room:%s", roomID), fmt.Sprintf("room:%s:users", roomID), user.ID, want)
 	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to get room from cache")
-		return err
-	}
-	if !found {
-		span.SetAttributes(attribute.Bool("room.found", false))
-		span.SetStatus(codes.Error, "room not found")
-		return fmt.Errorf("room not found")
-	}
-
-	span.SetAttributes(
-		attribute.Bool("room.found", true),
-	)
-
-	userKey := fmt.Sprintf("room:%s:users", roomID)
-	if err := r.cache.SAdd(ctx, userKey, user.ID); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to add user to room set")
 		return err
+	}
+	switch result {
+	case cache.SAddRecordMissing:
+		span.SetStatus(codes.Error, "room not found")
+		return repository.ErrNotFound
+	case cache.SAddFieldMismatch:
+		span.SetStatus(codes.Error, "room codes changed")
+		return repository.ErrCodesChanged
 	}
 
 	// Membership lives only in the set (GetByID rebuilds Members from it).

@@ -9,6 +9,7 @@ import (
 	"github.com/hilthontt/visper/services/api/application/usecases/roomkey"
 	"github.com/hilthontt/visper/services/api/application/usecases/user"
 	"github.com/hilthontt/visper/services/api/domain/model"
+	"github.com/hilthontt/visper/services/api/domain/repository"
 	"github.com/hilthontt/visper/services/api/infrastructure/config"
 	"github.com/hilthontt/visper/services/api/infrastructure/security"
 	"github.com/hilthontt/visper/services/api/infrastructure/websocket"
@@ -223,7 +224,7 @@ func (c *roomController) JoinRoomByJoinCode(ctx *gin.Context) {
 		httpx.Error(ctx, err)
 		return
 	}
-	c.joinFoundRoom(ctx, room, req.Username)
+	c.joinFoundRoom(ctx, room, req.Username, repository.RoomCodes{JoinCode: req.JoinCode})
 }
 
 func (c *roomController) JoinRoomByJoinCodeWithToken(ctx *gin.Context) {
@@ -237,7 +238,7 @@ func (c *roomController) JoinRoomByJoinCodeWithToken(ctx *gin.Context) {
 		httpx.Error(ctx, err)
 		return
 	}
-	c.joinFoundRoom(ctx, room, req.Username)
+	c.joinFoundRoom(ctx, room, req.Username, repository.RoomCodes{JoinCode: req.JoinCode, SecureCode: req.SecureToken})
 }
 
 func (c *roomController) LeaveRoom(ctx *gin.Context) {
@@ -332,12 +333,14 @@ func (c *roomController) KickMember(ctx *gin.Context) {
 // Helpers
 
 // joinFoundRoom joins a room found by its join code and responds with it.
-func (c *roomController) joinFoundRoom(ctx *gin.Context, room *model.Room, username string) {
+// codes are the ones the caller presented; joining fails if the room no
+// longer has them (e.g. a kick rotated them after the room was found).
+func (c *roomController) joinFoundRoom(ctx *gin.Context, room *model.Room, username string, codes repository.RoomCodes) {
 	user, ok := c.joiningUser(ctx, username)
 	if !ok {
 		return
 	}
-	if err := c.usecase.JoinRoom(ctx.Request.Context(), room.ID, *user); err != nil {
+	if err := c.usecase.JoinRoom(ctx.Request.Context(), room.ID, *user, codes); err != nil {
 		httpx.Error(ctx, err)
 		return
 	}

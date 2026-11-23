@@ -3,6 +3,7 @@ package room
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -18,6 +19,11 @@ type fakeRoomRepo struct {
 	removed []string
 	deleted []string
 	added   []string
+	// ops records RemoveUser ("remove") and Update ("update") calls in order.
+	ops       []string
+	updateErr error
+	addErr    error
+	addCodes  []repository.RoomCodes
 }
 
 func (f *fakeRoomRepo) Create(context.Context, *model.Room) error { return nil }
@@ -39,16 +45,24 @@ func (f *fakeRoomRepo) Delete(_ context.Context, id string) error {
 	delete(f.rooms, id)
 	return nil
 }
-func (f *fakeRoomRepo) AddUser(_ context.Context, _ string, u model.User) error {
+func (f *fakeRoomRepo) AddUser(_ context.Context, _ string, u model.User, codes repository.RoomCodes) error {
+	f.addCodes = append(f.addCodes, codes)
+	if f.addErr != nil {
+		return f.addErr
+	}
 	f.added = append(f.added, u.ID)
 	return nil
 }
 func (f *fakeRoomRepo) RemoveUser(_ context.Context, _ string, userID string) error {
+	f.ops = append(f.ops, "remove")
 	f.removed = append(f.removed, userID)
 	return nil
 }
 func (f *fakeRoomRepo) GetUsers(context.Context, string) ([]string, error) { return nil, nil }
-func (f *fakeRoomRepo) Update(context.Context, *model.Room) error          { return nil }
+func (f *fakeRoomRepo) Update(context.Context, *model.Room) error {
+	f.ops = append(f.ops, "update")
+	return f.updateErr
+}
 
 func newTestUseCase(repo *fakeRoomRepo) RoomUseCase {
 	return NewRoomUseCase(repo, nil, &logger.Logger{Log: zap.NewNop()}, nil)
@@ -195,5 +209,58 @@ func TestOwnerActionsRefuseExpiredRooms(t *testing.T) {
 
 	if _, err := uc.GenerateNewJoinCode(context.Background(), "owner", "r1"); !errors.Is(err, ErrRoomExpired) {
 		t.Fatalf("new join code on expired room: got %v, want ErrRoomExpired", err)
+	}
+}
+
+func TestKickRotatesCodesBeforeRemovingTheMember(t *testing.T) {
+	owner := model.User{ID: "owner"}
+	newRepo := func() *fakeRoomRepo {
+		return &fakeRoomRepo{rooms: map[string]*model.Room{
+			"r1": {ID: "r1", Owner: owner, JoinCode: "ABC123", SecureCode: "secret",
+				Members: []model.User{owner, {ID: "member"}}},
+		}}
+	}
+
+	repo := newRepo()
+	if _, err := newTestUseCase(repo).KickMember(context.Background(), "r1", "member", "owner"); err != nil {
+		t.Fatalf("kick: %v", err)
+	}
+	if want := []string{"update", "remove"}; !slices.Equal(repo.ops, want) {
+		t.Fatalf("ops = %v, want %v", repo.ops, want)
+	}
+
+	// If the codes can't be rotated, the member must still be in the room,
+	// so the owner can retry the kick.
+	repo = newRepo()
+	repo.updateErr = errors.New("redis down")
+	if _, err := newTestUseCase(repo).KickMember(context.Background(), "r1", "member", "owner"); err == nil {
+		t.Fatal("kick succeeded although the codes weren't rotated")
+	}
+	if len(repo.removed) != 0 {
+		t.Fatalf("member removed although the kick failed: %v", repo.removed)
+	}
+}
+
+func TestJoinPassesTheCodesAndRefusesRotatedOnes(t *testing.T) {
+	owner := model.User{ID: "owner"}
+	repo := &fakeRoomRepo{rooms: map[string]*model.Room{
+		"r1": {ID: "r1", Owner: owner, JoinCode: "ABC123", SecureCode: "secret", Members: []model.User{owner}},
+	}}
+	uc := newTestUseCase(repo)
+	joiner := model.User{ID: "joiner"}
+
+	if err := uc.JoinRoomWithCodes(context.Background(), "r1", "ABC123", "secret", joiner); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	want := repository.RoomCodes{JoinCode: "ABC123", SecureCode: "secret"}
+	if len(repo.addCodes) != 1 || repo.addCodes[0] != want {
+		t.Fatalf("AddUser got codes %v, want %v", repo.addCodes, want)
+	}
+
+	// A kick rotated the codes between reading the room and joining it.
+	repo.addErr = repository.ErrCodesChanged
+	err := uc.JoinRoom(context.Background(), "r1", model.User{ID: "kicked"}, repository.RoomCodes{JoinCode: "ABC123"})
+	if !errors.Is(err, ErrInvalidCodes) {
+		t.Fatalf("join with rotated codes: got %v, want ErrInvalidCodes", err)
 	}
 }
