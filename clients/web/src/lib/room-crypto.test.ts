@@ -12,6 +12,7 @@ import {
 	imageMessageContent,
 	imageMimeType,
 	imageName,
+	isAutoLoadImageUrl,
 	isEncryptedFile,
 	isEncryptedImageUrl,
 	isPlainImageUrl,
@@ -100,6 +101,23 @@ describe("image messages", () => {
 	])("%s", (content, encrypted, plain) => {
 		expect(isEncryptedImageUrl(content)).toBe(encrypted);
 		expect(isPlainImageUrl(content)).toBe(plain);
+	});
+
+	it.each([
+		["https://api.visper.test/api/v1/d/r/f.enc#cat.png", true],
+		["https://API.visper.test:8443/p/a.png", true],
+		["https://tracker.example/p.png", false],
+		["https://tracker.example/d/r/f.enc#cat.png", false],
+		["https://api.visper.test.evil.example/p.png", false],
+		["https://api.visper.test/notes.txt", false],
+	])("auto-loads %s only from the API host: %s", (content, auto) => {
+		expect(isAutoLoadImageUrl(content, "https://api.visper.test:5004")).toBe(
+			auto,
+		);
+	});
+
+	it("auto-loads nothing when the API address is unusable", () => {
+		expect(isAutoLoadImageUrl("https://x/p/a.png", "")).toBe(false);
 	});
 
 	it("names the file in the fragment", () => {

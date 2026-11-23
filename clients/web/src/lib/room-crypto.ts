@@ -229,6 +229,30 @@ export function isPlainImageUrl(content: string): boolean {
 }
 
 /**
+ * Whether an image message is downloaded and shown without asking: only
+ * images on the Visper API's own host are. Fetching a URL any member posted
+ * would reveal every reader's IP address (and when they were online) to
+ * whoever runs that host. The port is not compared: the API and the proxy in
+ * front of it share a host but not a port. Mirrors isAutoLoadImage in
+ * clients/cli/internal/tui/chat_images.go.
+ */
+export function isAutoLoadImageUrl(content: string, apiUrl: string): boolean {
+	if (!isEncryptedImageUrl(content) && !isPlainImageUrl(content)) {
+		return false;
+	}
+	try {
+		const api = new URL(apiUrl).hostname;
+		return (
+			api !== "" &&
+			new URL(content.split("#")[0]).hostname.toLowerCase() ===
+				api.toLowerCase()
+		);
+	} catch {
+		return false;
+	}
+}
+
+/**
  * The content of an encrypted image message: the stored file's URL with the
  * image's (URI-encoded) name as the fragment. A long name is shortened,
  * keeping its extension, to at most `budget` encoded bytes; the encoded name

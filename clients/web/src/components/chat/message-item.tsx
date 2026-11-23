@@ -1,7 +1,12 @@
 import { memo, useState } from "react";
 import styled from "styled-components";
+import { getBackendUrl } from "@/lib/api";
 import { type ChatMessage, groupReactions, myReaction } from "@/lib/chat-state";
-import { isEncryptedImageUrl, isPlainImageUrl } from "@/lib/room-crypto";
+import {
+	isAutoLoadImageUrl,
+	isEncryptedImageUrl,
+	isPlainImageUrl,
+} from "@/lib/room-crypto";
 import type { RoomCrypto } from "@/lib/room-keys";
 import { ImageMessage } from "./image-message";
 
@@ -22,6 +27,15 @@ type Props = {
 	onJumpTo: (id: string) => void;
 };
 
+/** The API's address, or "" (so no image auto-loads) if it isn't configured. */
+const apiUrl = (() => {
+	try {
+		return getBackendUrl();
+	} catch {
+		return "";
+	}
+})();
+
 const time = (ms: number) =>
 	new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
@@ -40,9 +54,9 @@ export const MessageItem = memo(function MessageItem({
 	const [picking, setPicking] = useState(false);
 	const own = message.userId === me;
 	const mine = myReaction(message.reactions, me);
-	const image =
-		!message.failed &&
-		(isEncryptedImageUrl(message.content) || isPlainImageUrl(message.content));
+	// Images elsewhere stay plain text: loading them would tell that host who
+	// is reading the room.
+	const image = !message.failed && isAutoLoadImageUrl(message.content, apiUrl);
 
 	return (
 		<Item id={`msg-${message.id}`} $own={own}>
