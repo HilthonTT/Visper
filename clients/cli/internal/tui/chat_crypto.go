@@ -37,6 +37,9 @@ type (
 	rekeyAppliedMsg struct{}
 	// rekeyRejectedMsg reports a rekey that was not signed by the owner.
 	rekeyRejectedMsg struct{ err error }
+	// rekeyExcludedMsg reports a rekey from the owner, made while we were
+	// in the room, that has no key for us.
+	rekeyExcludedMsg struct{}
 	// keyRotatedMsg is the result of rotating the room key, as its owner.
 	keyRotatedMsg struct {
 		session context.Context
@@ -111,13 +114,18 @@ func handleCryptoEvent(wsMsg apisdk.WSMessage, rc *apisdk.RoomCrypto) (msg tea.M
 		return nil, true
 	}
 
-	changed, err := rc.ApplyRekey(parseRekey(data))
+	// This rekey arrived live, so we were a member when it was made: one
+	// without a key for us left us out (unlike a rekey found when syncing on
+	// entry, which may simply predate our invite).
+	result, err := rc.ApplyRekeyResult(parseRekey(data))
 	switch {
 	case err != nil:
 		log.Printf("Rejected rekey: %v", err)
 		return rekeyRejectedMsg{err: err}, true
-	case changed:
+	case result == apisdk.RekeyApplied:
 		return rekeyAppliedMsg{}, true
+	case result == apisdk.RekeyExcluded:
+		return rekeyExcludedMsg{}, true
 	}
 	return nil, true
 }
@@ -142,6 +150,7 @@ func parseRekey(data map[string]any) *apisdk.Rekey {
 // rekeyAppliedUpdate publishes our card for the new key and points the
 // invite at it.
 func (m model) rekeyAppliedUpdate() (model, tea.Cmd) {
+	m.state.chat.keyExcluded = false
 	m = m.refreshInviteKey()
 	m.rememberRoom()
 	rc := m.state.chat.crypto
@@ -150,6 +159,30 @@ func (m model) rekeyAppliedUpdate() (model, tea.Cmd) {
 	})
 	m, toastCmd := m.toast(theme.ToneInfo, keyRotatedText)
 	return m, tea.Batch(publish, toastCmd, m.waitForRoomEvent())
+}
+
+// keyExcludedText explains why a member left out of a rotation can't send.
+const keyExcludedText = "The owner changed the room key without you (they had no key card for you), so anything you send could be read by members who left. Sending is off until you're given the new key: ask the owner for a new invite."
+
+// rekeyExcludedUpdate stops sending after a rotation that left us out. Our
+// key card is published again so the owner's next rotation can include us.
+func (m model) rekeyExcludedUpdate() (model, tea.Cmd) {
+	m.state.chat.keyExcluded = true
+	rc := m.state.chat.crypto
+	publish := m.roomRequest("publish your key card", func(ctx context.Context, c *apisdk.Client, roomID string, opts []option.RequestOption) error {
+		return c.Room.PublishKeyCard(ctx, roomID, rc, opts...)
+	})
+	m = m.alert(theme.ToneDanger, "Left out of the new room key", keyExcludedText)
+	return m, tea.Batch(publish, m.waitForRoomEvent())
+}
+
+// sendingBlocked returns a command showing why nothing can be sent, or nil
+// if sending is allowed.
+func (m model) sendingBlocked() tea.Cmd {
+	if !m.state.chat.keyExcluded {
+		return nil
+	}
+	return func() tea.Msg { return visibleError{message: keyExcludedText} }
 }
 
 // refreshInviteKey puts the current room key in the invite link.

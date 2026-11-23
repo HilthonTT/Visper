@@ -167,6 +167,69 @@ func TestRekeyEventSwitchesTheInviteToTheNewKey(t *testing.T) {
 	}
 }
 
+func TestRekeyThatLeavesUsOutStopsSending(t *testing.T) {
+	m, oldKey := ownedChatModel(t, "alice")
+	me := m.state.chat.crypto
+	alice := newPeer(t, "alice", "r", "alice", oldKey)
+	exchangeCards(t, me, alice)
+
+	// The owner rotates without us, e.g. because it had no card for us.
+	rekey, _, _, err := alice.NewRekey([]string{"alice"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(rekey)
+	var data map[string]any
+	_ = json.Unmarshal(raw, &data)
+
+	got, _ := handleCryptoEvent(apisdk.WSMessage{Type: apisdk.RoomRekeyed, Data: data}, me)
+	if _, ok := got.(rekeyExcludedMsg); !ok {
+		t.Fatalf("rekey event = %#v, want rekeyExcludedMsg", got)
+	}
+	m, _ = m.rekeyExcludedUpdate()
+	if !m.state.chat.keyExcluded {
+		t.Fatal("sending still allowed after being left out of the new key")
+	}
+
+	// Sending keeps the draft and reports why instead of sending.
+	m.state.chat.messageInput.SetValue("hello")
+	m, cmd := m.sendMessage()
+	if m.state.chat.messageInput.Value() != "hello" {
+		t.Fatal("the draft was cleared although nothing was sent")
+	}
+	if cmd == nil {
+		t.Fatal("no explanation for the blocked send")
+	}
+	if msg, ok := cmd().(visibleError); !ok || !strings.Contains(msg.message, "new invite") {
+		t.Fatalf("blocked send = %#v", msg)
+	}
+	for name, blocked := range map[string]tea.Cmd{
+		"edit":  m.updateMessage("m1", "x"),
+		"image": m.sendContent("send image message", "https://x/f.enc#a.png", "", "h"),
+	} {
+		if _, ok := blocked().(visibleError); !ok {
+			t.Fatalf("%s was not blocked", name)
+		}
+	}
+
+	// A later rekey that includes us turns sending back on.
+	rekey, _, _, err = alice.NewRekey([]string{"alice", m.userID}, rekey.Epoch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = json.Marshal(rekey)
+	data = nil
+	_ = json.Unmarshal(raw, &data)
+	got, _ = handleCryptoEvent(apisdk.WSMessage{Type: apisdk.RoomRekeyed, Data: data}, me)
+	if _, ok := got.(rekeyAppliedMsg); !ok {
+		t.Fatalf("second rekey = %#v, want rekeyAppliedMsg", got)
+	}
+	m, _ = m.rekeyAppliedUpdate()
+	if m.state.chat.keyExcluded {
+		t.Fatal("sending still off after receiving the new key")
+	}
+}
+
 func TestOwnerRotatesTheKeyWhenSomeoneLeaves(t *testing.T) {
 	m, _ := ownedChatModel(t, "")
 	m.state.chat.members.add(apisdk.UserResponse{ID: "bob", Username: "bob"})

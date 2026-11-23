@@ -808,41 +808,67 @@ func (rc *RoomCrypto) addKeyLocked(key string) {
 // ErrBadRekey means a rekey was not signed by the room's owner.
 var ErrBadRekey = errors.New("the new room key was not signed by the room owner")
 
+// RekeyResult is what applying a rekey did (see ApplyRekeyResult).
+type RekeyResult int
+
+const (
+	// RekeyUnchanged: the rekey was not newer than the current key (or we
+	// own the room), so nothing changed.
+	RekeyUnchanged RekeyResult = iota
+	// RekeyApplied: we switched to the rekey's key. The caller should then
+	// upload a new card (MyCard).
+	RekeyApplied
+	// RekeyExcluded: a newer, validly signed rekey that has no key for us.
+	// Either it is from before we joined (our invite already had the newer
+	// key), or the owner rotated without us, typically because we had no
+	// key card yet. In the second case what we send is still sealed with a
+	// key departed members may hold, so a caller that knows we were a member
+	// when the rekey was made (e.g. it arrived live) should stop sending
+	// and ask for a new invite.
+	RekeyExcluded
+)
+
 // ApplyRekey checks a rekey from the API and, if it is newer than the
 // current key and includes this client, switches to its key. It reports
 // whether the key changed; the caller should then upload a new card
 // (MyCard). Rekeys this client made itself are applied by CommitKey.
+// ApplyRekeyResult also tells whether the rekey left this client out.
 func (rc *RoomCrypto) ApplyRekey(r *Rekey) (bool, error) {
+	res, err := rc.ApplyRekeyResult(r)
+	return res == RekeyApplied, err
+}
+
+// ApplyRekeyResult is ApplyRekey, reporting RekeyExcluded for a newer,
+// validly signed rekey that has no key for this client.
+func (rc *RoomCrypto) ApplyRekeyResult(r *Rekey) (RekeyResult, error) {
 	if r == nil || r.Epoch <= rc.Epoch() || rc.IsOwner() {
-		return false, nil
+		return RekeyUnchanged, nil
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(r.Signature)
 	if err != nil {
-		return false, ErrBadRekey
+		return RekeyUnchanged, ErrBadRekey
 	}
 	if err := rc.verifySender(rc.ownerID, rekeyMessage(rc.roomID, r.Epoch, r.Keys), sig); err != nil {
-		return false, ErrBadRekey
+		return RekeyUnchanged, ErrBadRekey
 	}
 
 	sealed, included := r.Keys[rc.me.userID]
 	if !included {
-		// A rekey from before we joined (our invite already had the
-		// newer key), or one that left us out.
 		rc.mu.Lock()
 		rc.epoch = max(rc.epoch, r.Epoch)
 		rc.mu.Unlock()
-		return false, nil
+		return RekeyExcluded, nil
 	}
 	newKey, err := rc.me.device.OpenRoomKey(sealed)
 	if err != nil {
-		return false, err
+		return RekeyUnchanged, err
 	}
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	if r.Epoch <= rc.epoch {
-		return false, nil // applied concurrently
+		return RekeyUnchanged, nil // applied concurrently
 	}
 	rc.addKeyLocked(newKey)
 	rc.epoch = r.Epoch
-	return true, nil
+	return RekeyApplied, nil
 }

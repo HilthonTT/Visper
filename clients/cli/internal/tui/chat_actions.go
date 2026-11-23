@@ -108,6 +108,10 @@ func (m model) sendMessage() (model, tea.Cmd) {
 	if content == "" {
 		return m, nil
 	}
+	// Checked before the input is cleared, so the draft isn't lost.
+	if blocked := m.sendingBlocked(); blocked != nil {
+		return m, blocked
+	}
 
 	if text, ok := m.checkMessageLength(content, ""); !ok {
 		return m.toast(theme.ToneWarning, text)
@@ -125,6 +129,9 @@ func (m model) sendMessage() (model, tea.Cmd) {
 // encrypts it (and sets the encrypted flag) in an encrypted room. fileHash is
 // the hash of the file an image message points to, or "".
 func (m model) sendContent(action, content, replyTo, fileHash string) tea.Cmd {
+	if blocked := m.sendingBlocked(); blocked != nil {
+		return blocked
+	}
 	return m.roomRequest(action, func(ctx context.Context, c *apisdk.Client, roomID string, opts []option.RequestOption) error {
 		_, err := c.Message.Send(ctx, roomID, apisdk.SendMessageParams{Content: content, ReplyToID: replyTo, FileHash: fileHash}, opts...)
 		return err
@@ -132,6 +139,9 @@ func (m model) sendContent(action, content, replyTo, fileHash string) tea.Cmd {
 }
 
 func (m model) updateMessage(messageID, content string) tea.Cmd {
+	if blocked := m.sendingBlocked(); blocked != nil {
+		return blocked
+	}
 	return m.roomRequest("update message", func(ctx context.Context, c *apisdk.Client, roomID string, opts []option.RequestOption) error {
 		_, err := c.Message.Update(ctx, roomID, messageID, apisdk.UpdateMessageParams{Content: content}, opts...)
 		return err
@@ -192,6 +202,9 @@ func (m model) rewriteDraft() (model, tea.Cmd) {
 func (m model) uploadImage(path string) (model, tea.Cmd) {
 	if m.state.chat.room == nil {
 		return m, nil
+	}
+	if blocked := m.sendingBlocked(); blocked != nil {
+		return m, blocked
 	}
 	m.state.chat.uploading = true
 

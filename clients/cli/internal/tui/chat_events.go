@@ -63,6 +63,8 @@ func (m model) chatEventUpdate(msg tea.Msg) (_ model, _ tea.Cmd, handled bool) {
 		m, cmd = m.cryptoSyncedUpdate(msg)
 	case rekeyAppliedMsg:
 		m, cmd = m.rekeyAppliedUpdate()
+	case rekeyExcludedMsg:
+		m, cmd = m.rekeyExcludedUpdate()
 	case rekeyRejectedMsg:
 		m, cmd = m.toast(theme.ToneDanger, "Ignored a new room key that wasn't signed by the room's owner.")
 		cmd = tea.Batch(cmd, m.waitForRoomEvent())

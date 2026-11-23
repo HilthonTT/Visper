@@ -263,6 +263,33 @@ func TestRekeyLeavesTheDepartedMemberOut(t *testing.T) {
 	}
 }
 
+func TestApplyRekeyResultReportsExclusion(t *testing.T) {
+	m := newRoom(t, "alice", "bob", "carol")
+	alice, bob, carol := m[0].rc, m[1].rc, m[2].rc
+
+	// Carol is left out, as when the owner had no key card for her.
+	rekey, newKey, _, err := alice.NewRekey([]string{"alice", "bob"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice.CommitKey(newKey, rekey.Epoch)
+
+	if res, err := bob.ApplyRekeyResult(rekey); err != nil || res != RekeyApplied {
+		t.Fatalf("bob: %v, %v; want RekeyApplied", res, err)
+	}
+	if res, err := carol.ApplyRekeyResult(rekey); err != nil || res != RekeyExcluded {
+		t.Fatalf("carol: %v, %v; want RekeyExcluded", res, err)
+	}
+	// Seen again (e.g. on the next sync) it is old news, not a new exclusion.
+	if res, _ := carol.ApplyRekeyResult(rekey); res != RekeyUnchanged {
+		t.Fatalf("carol again: %v; want RekeyUnchanged", res)
+	}
+	// The owner never applies rekeys, and ApplyRekey keeps its old answer.
+	if res, _ := alice.ApplyRekeyResult(rekey); res != RekeyUnchanged {
+		t.Fatalf("owner: %v; want RekeyUnchanged", res)
+	}
+}
+
 func TestRekeyMustBeSignedByTheOwner(t *testing.T) {
 	m := newRoom(t, "alice", "bob", "mallory")
 	bob, mallory := m[1].rc, m[2]

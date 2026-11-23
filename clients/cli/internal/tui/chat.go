@@ -44,6 +44,11 @@ type chatState struct {
 	// for another one once it finishes (someone else left meanwhile).
 	rekeying     bool
 	rekeyPending bool
+	// keyExcluded is set when the owner rotated the key while we were in
+	// the room but left us out (they had no key card for us). What we'd
+	// send would still be sealed with the old key, which departed members
+	// may hold, so sending is off until a rekey includes us again.
+	keyExcluded bool
 
 	ws     *apisdk.RoomWebSocket
 	events chan tea.Msg

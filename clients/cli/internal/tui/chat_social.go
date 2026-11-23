@@ -276,6 +276,9 @@ func quote(msg apisdk.MessageResponse, width int) string {
 // react sets the user's reaction to the message at index i; picking their
 // current reaction again removes it.
 func (m model) react(i int, emoji string) tea.Cmd {
+	if blocked := m.sendingBlocked(); blocked != nil {
+		return blocked
+	}
 	c := m.state.chat
 	if i < 0 || i >= len(c.messages) {
 		return nil
