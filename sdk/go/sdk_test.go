@@ -380,12 +380,52 @@ func TestSendReplyCarriesReplyToID(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		io.WriteString(w, `{"id":"m2","content":"yo","reply_to_id":"m1","created_at":"2026-01-01T00:00:00Z"}`)
 	}))
+	client.Message.AllowPlaintext(true)
 	res, err := client.Message.Send(context.Background(), "r1", SendMessageParams{Content: "yo", ReplyToID: "m1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if body["reply_to_id"] != "m1" || res.ReplyToID != "m1" {
 		t.Fatalf("request %v, response %+v", body, res)
+	}
+}
+
+func TestWritesFailClosedWithoutRoomCrypto(t *testing.T) {
+	requests := 0
+	client := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{}`)
+	}))
+	ctx := context.Background()
+
+	check := func(when string) {
+		t.Helper()
+		if _, err := client.Message.Send(ctx, "r1", SendMessageParams{Content: "secret"}); !errors.Is(err, ErrNoRoomCrypto) {
+			t.Errorf("%s: Send got %v, want ErrNoRoomCrypto", when, err)
+		}
+		if _, err := client.Message.Update(ctx, "r1", "m1", UpdateMessageParams{Content: "secret"}); !errors.Is(err, ErrNoRoomCrypto) {
+			t.Errorf("%s: Update got %v, want ErrNoRoomCrypto", when, err)
+		}
+		if _, err := client.Message.SetReaction(ctx, "r1", "m1", "👍"); !errors.Is(err, ErrNoRoomCrypto) {
+			t.Errorf("%s: SetReaction got %v, want ErrNoRoomCrypto", when, err)
+		}
+	}
+
+	check("no room crypto")
+
+	// Keys for another room must not be used (or skipped) for this one.
+	client.Message.SetRoomCrypto(selfRoomCrypto(t, "u1"))
+	if _, err := client.Message.Send(ctx, "other-room", SendMessageParams{Content: "secret"}); !errors.Is(err, ErrNoRoomCrypto) {
+		t.Errorf("Send to another room got %v, want ErrNoRoomCrypto", err)
+	}
+
+	// Leaving the room (SetRoomCrypto(nil)) must not fall back to plaintext.
+	client.Message.SetRoomCrypto(nil)
+	check("after leaving")
+
+	if requests != 0 {
+		t.Fatalf("%d requests reached the server", requests)
 	}
 }
 

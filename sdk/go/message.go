@@ -19,9 +19,15 @@ import (
 type MessageService struct {
 	Options []option.RequestOption
 
-	mu     sync.RWMutex
-	crypto *RoomCrypto // the current room's keys (set when entering a room)
+	mu             sync.RWMutex
+	crypto         *RoomCrypto // the current room's keys (set when entering a room)
+	allowPlaintext bool
 }
+
+// ErrNoRoomCrypto is returned by Send, Update and SetReaction when no room
+// crypto state is set for the room (see SetRoomCrypto). Without it the
+// content would go to the server unencrypted, so nothing is sent.
+var ErrNoRoomCrypto = errors.New("no room key is set for this room; refusing to send unencrypted content")
 
 func NewMessageService(opts ...option.RequestOption) *MessageService {
 	m := &MessageService{Options: opts}
@@ -44,12 +50,42 @@ func (m *MessageService) roomCrypto() *RoomCrypto {
 	return m.crypto
 }
 
+// AllowPlaintext lets Send, Update and SetReaction send unencrypted content
+// when no room crypto state is set. Off by default: forgetting SetRoomCrypto,
+// or racing it with SetRoomCrypto(nil) when leaving a room, would otherwise
+// disclose the content to the server. Only turn it on for rooms that are
+// deliberately unencrypted.
+func (m *MessageService) AllowPlaintext(allow bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.allowPlaintext = allow
+}
+
+// sealingCrypto returns the crypto state to seal content for roomID with. It
+// fails closed: with no state, or state for another room, nothing may be
+// sent (unless plaintext was allowed and no state is set). A nil result with
+// a nil error means plaintext was allowed.
+func (m *MessageService) sealingCrypto(roomID string) (*RoomCrypto, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	switch {
+	case m.crypto == nil && m.allowPlaintext:
+		return nil, nil
+	case m.crypto == nil || m.crypto.roomID != roomID:
+		return nil, ErrNoRoomCrypto
+	}
+	return m.crypto, nil
+}
+
 // Send encrypts and sends a message to a room
 func (m *MessageService) Send(ctx context.Context, roomID string, body SendMessageParams, opts ...option.RequestOption) (*MessageResponse, error) {
 	opts = slices.Concat(m.Options, opts)
-	rc := m.roomCrypto()
 	if roomID == "" {
 		return nil, ErrMissingIDParameter
+	}
+	rc, err := m.sealingCrypto(roomID)
+	if err != nil {
+		return nil, err
 	}
 
 	// Encrypt the message content before sending
@@ -64,7 +100,7 @@ func (m *MessageService) Send(ctx context.Context, roomID string, body SendMessa
 
 	path := fmt.Sprintf("api/v1/rooms/%s/messages", url.PathEscape(roomID))
 	res := &MessageResponse{}
-	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, &res, opts...)
+	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPost, path, body, &res, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -91,9 +127,12 @@ func (m *MessageService) Send(ctx context.Context, roomID string, body SendMessa
 // content. It returns the message with its new reactions, decrypted.
 func (m *MessageService) SetReaction(ctx context.Context, roomID, messageID, emoji string, opts ...option.RequestOption) (*MessageResponse, error) {
 	opts = slices.Concat(m.Options, opts)
-	rc := m.roomCrypto()
 	if roomID == "" || messageID == "" {
 		return nil, ErrMissingIDParameter
+	}
+	rc, err := m.sealingCrypto(roomID)
+	if err != nil {
+		return nil, err
 	}
 
 	body := SetReactionParams{Emoji: emoji}
@@ -175,9 +214,12 @@ func FailedText(err error) string {
 // Update encrypts and updates a message
 func (m *MessageService) Update(ctx context.Context, roomID, messageID string, body UpdateMessageParams, opts ...option.RequestOption) (*MessageUpdatedResponse, error) {
 	opts = slices.Concat(m.Options, opts)
-	rc := m.roomCrypto()
 	if roomID == "" || messageID == "" {
 		return nil, ErrMissingIDParameter
+	}
+	rc, err := m.sealingCrypto(roomID)
+	if err != nil {
+		return nil, err
 	}
 
 	// Encrypt before updating, bound to this message
@@ -192,7 +234,7 @@ func (m *MessageService) Update(ctx context.Context, roomID, messageID string, b
 
 	path := fmt.Sprintf("api/v1/rooms/%s/messages/%s", url.PathEscape(roomID), url.PathEscape(messageID))
 	res := &MessageUpdatedResponse{}
-	err := requestconfig.ExecuteNewRequest(ctx, http.MethodPut, path, body, &res, opts...)
+	err = requestconfig.ExecuteNewRequest(ctx, http.MethodPut, path, body, &res, opts...)
 	if err != nil {
 		return nil, err
 	}
