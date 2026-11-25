@@ -153,6 +153,14 @@ func (uc *fileUseCase) DeleteFile(ctx context.Context, roomID, fileID, userID st
 	if err != nil {
 		return err
 	}
+	if room.HasExpired() {
+		return ErrRoomExpired
+	}
+	// An uploader who left or was kicked no longer has a say over the
+	// room's files, as for every other room action.
+	if !room.IsMember(userID) {
+		return ErrNotMember
+	}
 	if file.UserID != userID && room.Owner.ID != userID {
 		return ErrCannotDelete
 	}

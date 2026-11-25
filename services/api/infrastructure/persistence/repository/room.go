@@ -238,6 +238,11 @@ func (r *roomRepository) GetByID(ctx context.Context, id string) (*model.Room, e
 			continue
 		}
 		room.Members = append(room.Members, *user)
+		// The record holds a copy of the owner taken at creation; use the
+		// current user so a rename shows up in the owner's name too.
+		if user.ID == room.Owner.ID {
+			room.Owner = *user
+		}
 	}
 
 	span.SetAttributes(

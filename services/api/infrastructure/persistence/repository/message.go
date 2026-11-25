@@ -3,12 +3,12 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strconv"
 	"time"
 
+	"github.com/hilthontt/visper/services/api/domain/apperr"
 	"github.com/hilthontt/visper/services/api/domain/model"
 	"github.com/hilthontt/visper/services/api/domain/repository"
 	"github.com/hilthontt/visper/services/api/infrastructure/cache"
@@ -22,7 +22,9 @@ import (
 // was changed concurrently between reading and writing it.
 const maxMemberRaceRetries = 3
 
-var errConcurrentModification = errors.New("message was modified concurrently, try again")
+// errConcurrentModification is a Conflict so clients get a retryable 409
+// rather than a 500.
+var errConcurrentModification = apperr.New(apperr.Conflict, "message was modified concurrently, try again")
 
 type messageRepository struct {
 	cache  *cache.DistributedCache

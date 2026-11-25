@@ -141,6 +141,12 @@ func TestDeleteFile(t *testing.T) {
 	if err := uc.DeleteFile(ctx, "r1", "other", "owner"); !errors.Is(err, ErrFileNotFound) {
 		t.Fatalf("file of another room: %v", err)
 	}
+	// An uploader who is no longer a member (left or kicked) can't delete.
+	addFile(t, repo, dir, "f3", "r1", "gone")
+	if err := uc.DeleteFile(ctx, "r1", "f3", "gone"); !errors.Is(err, ErrNotMember) {
+		t.Fatalf("former member deleting: %v", err)
+	}
+	delete(repo.files, "f3")
 	if err := uc.DeleteFile(ctx, "r1", "missing", "ann"); !errors.Is(err, ErrFileNotFound) {
 		t.Fatalf("missing file: %v", err)
 	}
