@@ -3,10 +3,10 @@ module github.com/hilthontt/visper/clients/cli
 go 1.27.0
 
 require (
-	charm.land/bubbles/v2 v2.2.1
-	charm.land/bubbletea/v2 v2.1.1
-	charm.land/lipgloss/v2 v2.1.0
-	github.com/charmbracelet/x/ansi v0.11.9
+	charm.land/bubbles/v2 v2.2.2
+	charm.land/bubbletea/v2 v2.1.2
+	charm.land/lipgloss/v2 v2.1.1
+	github.com/charmbracelet/x/ansi v0.11.10
 	github.com/disintegration/imaging v1.6.2
 	github.com/foize/go.sgr v0.0.0-20140220094842-40bdfc98040c
 	github.com/hilthontt/visper/sdk/go v0.0.0-00010101000000-000000000000
@@ -33,11 +33,11 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-runewidth v0.0.31 // indirect
 	github.com/muesli/cancelreader v0.2.2 // indirect
-	github.com/rivo/uniseg v0.4.7 // indirect
-	github.com/tidwall/gjson v1.20.3 // indirect
+	github.com/rivo/uniseg v0.4.8-0.20261110175422-3a370411ca06 // indirect
+	github.com/tidwall/gjson v1.20.6 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
 	github.com/tidwall/pretty v1.3.0 // indirect
-	github.com/tidwall/sjson v1.2.9 // indirect
+	github.com/tidwall/sjson v1.2.11 // indirect
 	github.com/xo/terminfo v1.3.1 // indirect
 	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
