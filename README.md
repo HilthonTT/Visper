@@ -9,8 +9,19 @@
 [![CI](https://github.com/HilthonTT/Visper/actions/workflows/ci.yml/badge.svg)](https://github.com/HilthonTT/Visper/actions/workflows/ci.yml)
 [![Go](https://img.shields.io/badge/go-1.27-00ADD8?logo=go&logoColor=white)](go.work)
 [![License: MIT](https://img.shields.io/badge/license-MIT-A78BFA)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/HilthonTT/Visper?color=F472B6)](https://github.com/HilthonTT/Visper/releases/latest)
+[![Stars](https://img.shields.io/github/stars/HilthonTT/Visper?style=flat&color=A78BFA)](https://github.com/HilthonTT/Visper/stargazers)
+
+[Install](#install-the-cli) · [Quick start](#quick-start) · [Demos](docs/demos/README.md) · [Security model](docs/security-model.md)
 
 </div>
+
+- **No accounts:** pick a name, open a room, share the code or QR invite.
+- **End-to-end encrypted:** the server stores only ciphertext and never sees the room key.
+- **Signed messages:** members can't write as each other; keys rotate when someone leaves.
+- **Terminal first:** a Bubble Tea TUI plus a terminal-style web client, same rooms in both.
+- **Files and images:** encrypted sharing with inline previews.
+- **Self-hosted:** one `docker compose` and you run the whole stack.
 
 Spin up a throwaway room, share the join code or QR invite, and chat without an
 account. Messages and shared files are encrypted on the client with a room key
@@ -120,3 +131,9 @@ per [SECURITY](.github/SECURITY.md).
 ## License
 
 [MIT](LICENSE) © 2025 Hilthon
+
+<div align="center">
+
+If Visper is useful to you, a ⭐ helps other people find it.
+
+</div>
