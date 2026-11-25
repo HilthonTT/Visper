@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/hilthontt/visper/services/api/application/usecases/file"
@@ -14,6 +15,7 @@ type FileCleanupJob struct {
 	logger      *logger.Logger
 	interval    time.Duration
 	stopChan    chan struct{}
+	stopOnce    sync.Once
 }
 
 func NewFileCleanupJob(fileUseCase file.FileUseCase, logger *logger.Logger, interval time.Duration) *FileCleanupJob {
@@ -49,8 +51,9 @@ func (j *FileCleanupJob) Start(ctx context.Context) {
 	}
 }
 
+// Stop stops the job. It is safe to call more than once.
 func (j *FileCleanupJob) Stop() {
-	close(j.stopChan)
+	j.stopOnce.Do(func() { close(j.stopChan) })
 }
 
 func (j *FileCleanupJob) runCleanup(ctx context.Context) {

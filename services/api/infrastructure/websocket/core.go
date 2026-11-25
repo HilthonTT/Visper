@@ -90,10 +90,12 @@ func (c *Core) dispatch(msg *WSMessage) {
 	case Kicked:
 		if p, ok := msg.Data.(ErrorKickedPayload); ok {
 			c.roomMgr.DisconnectUser(msg.RoomID, p.UserID)
+			c.dropRead(msg.RoomID, p.UserID)
 		}
 	case MemberLeft:
 		if p, ok := msg.Data.(MemberPayload); ok {
 			c.roomMgr.DisconnectUser(msg.RoomID, p.UserID)
+			c.dropRead(msg.RoomID, p.UserID)
 		}
 	case RoomDeleted:
 		c.roomMgr.CloseRoom(msg.RoomID)
@@ -161,6 +163,19 @@ func (c *Core) MarkRead(roomID, userID, messageID string) bool {
 		return true
 	}
 	return c.Publish(NewReadUpdate(roomID, userID, messageID))
+}
+
+// dropRead forgets userID's read marker in a room once they are no longer a
+// member, so it is not replayed to people who join later.
+func (c *Core) dropRead(roomID, userID string) {
+	c.readsMu.Lock()
+	defer c.readsMu.Unlock()
+	if room, ok := c.reads[roomID]; ok {
+		delete(room, userID)
+		if len(room) == 0 {
+			delete(c.reads, roomID)
+		}
+	}
 }
 
 // readsOf returns a copy of a room's read markers.

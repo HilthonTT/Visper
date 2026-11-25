@@ -319,6 +319,30 @@ func TestReadMarkersAreReplayedToNewConnections(t *testing.T) {
 	}
 }
 
+// Members who leave or are kicked must not have their read markers replayed
+// to people who join later.
+func TestReadMarkersAreDroppedWhenMembersLeave(t *testing.T) {
+	core, _ := startCore(t)
+	core.MarkRead("room", "alice", "m1")
+	core.MarkRead("room", "bob", "m2")
+	core.MarkRead("room", "carol", "m3")
+
+	core.Publish(NewMemberLeft("room", "alice", "Alice"))
+	core.Publish(NewErrorKicked("room", "bob", "Bob", "kicked"))
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		reads := core.readsOf("room")
+		if len(reads) == 1 && reads["carol"] == "m3" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("read markers = %v, want only carol's", reads)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestMessageReceivedCarriesTheEditTime(t *testing.T) {
 	created := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	m := &model.Message{ID: "m1", CreatedAt: created}
