@@ -4,8 +4,8 @@ go 1.27.0
 
 require (
 	github.com/gorilla/websocket v1.5.3
-	github.com/tidwall/gjson v1.20.3
-	github.com/tidwall/sjson v1.2.9
+	github.com/tidwall/gjson v1.20.6
+	github.com/tidwall/sjson v1.2.11
 	golang.org/x/crypto v0.59.0
 )
 
