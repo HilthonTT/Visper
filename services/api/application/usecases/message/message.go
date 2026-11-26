@@ -9,11 +9,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hilthontt/visper/services/api/application/ports"
 	"github.com/hilthontt/visper/services/api/domain/apperr"
 	"github.com/hilthontt/visper/services/api/domain/model"
 	"github.com/hilthontt/visper/services/api/domain/repository"
-	"github.com/hilthontt/visper/services/api/infrastructure/events"
-	"github.com/hilthontt/visper/services/api/infrastructure/logger"
 	"go.uber.org/zap"
 )
 
@@ -60,14 +59,14 @@ type MessageUseCase interface {
 
 type messageUseCase struct {
 	repository     repository.MessageRepository
-	eventPublisher *events.EventPublisher
-	logger         *logger.Logger
+	eventPublisher ports.EventPublisher
+	logger         ports.Logger
 }
 
 func NewMessageUseCase(
 	repository repository.MessageRepository,
-	eventPublisher *events.EventPublisher,
-	logger *logger.Logger,
+	eventPublisher ports.EventPublisher,
+	logger ports.Logger,
 ) MessageUseCase {
 	return &messageUseCase{
 		repository:     repository,

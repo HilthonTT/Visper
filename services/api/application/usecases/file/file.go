@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"mime/multipart"
 
+	"github.com/hilthontt/visper/services/api/application/ports"
 	"github.com/hilthontt/visper/services/api/domain/apperr"
 	"github.com/hilthontt/visper/services/api/domain/model"
 	"github.com/hilthontt/visper/services/api/domain/repository"
-	"github.com/hilthontt/visper/services/api/infrastructure/storage"
 )
 
 var (
@@ -38,11 +38,11 @@ type RoomFile struct {
 }
 
 type fileUseCase struct {
-	fileRepo     repository.FileRepository
-	roomRepo     repository.RoomRepository
-	userRepo     repository.UserRepository
-	localStorage *storage.LocalStorage
-	serverURL    string
+	fileRepo  repository.FileRepository
+	roomRepo  repository.RoomRepository
+	userRepo  repository.UserRepository
+	storage   ports.FileStorage
+	serverURL string
 }
 
 // NewFileUseCase returns the file use case. userRepo names uploaders who
@@ -51,15 +51,15 @@ func NewFileUseCase(
 	fileRepo repository.FileRepository,
 	roomRepo repository.RoomRepository,
 	userRepo repository.UserRepository,
-	localStorage *storage.LocalStorage,
+	storage ports.FileStorage,
 	serverURL string,
 ) FileUseCase {
 	return &fileUseCase{
-		fileRepo:     fileRepo,
-		roomRepo:     roomRepo,
-		userRepo:     userRepo,
-		localStorage: localStorage,
-		serverURL:    serverURL,
+		fileRepo:  fileRepo,
+		roomRepo:  roomRepo,
+		userRepo:  userRepo,
+		storage:   storage,
+		serverURL: serverURL,
 	}
 }
 
@@ -75,7 +75,7 @@ func (uc *fileUseCase) UploadFile(ctx context.Context, fileHeader *multipart.Fil
 		return nil, ErrNotMember
 	}
 
-	relativePath, fileID, mimeType, err := uc.localStorage.SaveFile(fileHeader, roomID)
+	relativePath, fileID, mimeType, err := uc.storage.SaveFile(fileHeader, roomID)
 	if err != nil {
 		return nil, storageError(err)
 	}
@@ -94,7 +94,7 @@ func (uc *fileUseCase) UploadFile(ctx context.Context, fileHeader *multipart.Fil
 	}
 
 	if err := uc.fileRepo.Create(ctx, file); err != nil {
-		_ = uc.localStorage.DeleteFile(relativePath)
+		_ = uc.storage.DeleteFile(relativePath)
 		return nil, fmt.Errorf("failed to save file metadata: %w", err)
 	}
 	return file, nil
@@ -165,7 +165,7 @@ func (uc *fileUseCase) DeleteFile(ctx context.Context, roomID, fileID, userID st
 		return ErrCannotDelete
 	}
 
-	if err := uc.localStorage.DeleteFile(file.Path); err != nil {
+	if err := uc.storage.DeleteFile(file.Path); err != nil {
 		return fmt.Errorf("failed to delete file from storage: %w", err)
 	}
 	if err := uc.fileRepo.Delete(ctx, fileID); err != nil {
@@ -180,11 +180,11 @@ func (uc *fileUseCase) CleanupOrphanedFiles(ctx context.Context) error {
 		return fmt.Errorf("failed to get orphaned files: %w", err)
 	}
 	for _, file := range orphanedFiles {
-		_ = uc.localStorage.DeleteFile(file.Path)
+		_ = uc.storage.DeleteFile(file.Path)
 		_ = uc.fileRepo.Delete(ctx, file.ID)
 	}
 
-	roomDirs, err := uc.localStorage.GetAllRoomDirectories()
+	roomDirs, err := uc.storage.GetAllRoomDirectories()
 	if err != nil {
 		return fmt.Errorf("failed to get room directories: %w", err)
 	}
@@ -192,7 +192,7 @@ func (uc *fileUseCase) CleanupOrphanedFiles(ctx context.Context) error {
 		// Only a definite "not found" means the room is gone; on any other
 		// error (e.g. Redis unavailable) keep the files.
 		if _, err := uc.roomRepo.GetByID(ctx, roomID); errors.Is(err, repository.ErrNotFound) {
-			_ = uc.localStorage.DeleteRoomFiles(roomID)
+			_ = uc.storage.DeleteRoomFiles(roomID)
 		}
 	}
 	return nil
@@ -212,9 +212,9 @@ func (uc *fileUseCase) getRoom(ctx context.Context, roomID string) (*model.Room,
 // storageError gives the storage errors the client can fix their kind.
 func storageError(err error) error {
 	switch {
-	case errors.Is(err, storage.ErrFileTooLarge):
+	case errors.Is(err, ports.ErrFileTooLarge):
 		return apperr.Wrap(apperr.TooLarge, err)
-	case errors.Is(err, storage.ErrInvalidFileType), errors.Is(err, storage.ErrInvalidPath):
+	case errors.Is(err, ports.ErrInvalidFileType), errors.Is(err, ports.ErrInvalidPath):
 		return apperr.Wrap(apperr.Invalid, err)
 	}
 	return err

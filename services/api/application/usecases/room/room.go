@@ -9,10 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hilthontt/visper/services/api/application/ports"
 	"github.com/hilthontt/visper/services/api/domain/model"
 	"github.com/hilthontt/visper/services/api/domain/repository"
-	"github.com/hilthontt/visper/services/api/infrastructure/events"
-	"github.com/hilthontt/visper/services/api/infrastructure/logger"
 	"go.uber.org/zap"
 )
 
@@ -44,17 +43,18 @@ type RoomUseCase interface {
 
 type roomUseCase struct {
 	repository     repository.RoomRepository
-	eventPublisher *events.EventPublisher
-	logger         *logger.Logger
+	eventPublisher ports.EventPublisher
+	logger         ports.Logger
 	onExpired      func(roomID string)
 }
 
-// NewRoomUseCase creates the room use case. onExpired, if not nil, is called
+// NewRoomUseCase creates the room use case. eventPublisher may be nil.
+// onExpired, if not nil, is called
 // with the ID of every expired room after it has been deleted.
 func NewRoomUseCase(
 	repository repository.RoomRepository,
-	eventPublisher *events.EventPublisher,
-	logger *logger.Logger,
+	eventPublisher ports.EventPublisher,
+	logger ports.Logger,
 	onExpired func(roomID string),
 ) RoomUseCase {
 	return &roomUseCase{
@@ -92,7 +92,7 @@ func (uc *roomUseCase) Create(ctx context.Context, owner model.User, expiry time
 		return nil, fmt.Errorf("failed to add owner to room: %w", err)
 	}
 
-	uc.publishAsync("room created", func(p *events.EventPublisher) error {
+	uc.publishAsync("room created", func(p ports.EventPublisher) error {
 		return p.PublishRoomCreated(room.ID, owner.ID, room.Expiry)
 	})
 
@@ -200,7 +200,7 @@ func (uc *roomUseCase) JoinRoom(ctx context.Context, roomID string, user model.U
 		return fmt.Errorf("failed to join room: %w", err)
 	}
 
-	uc.publishAsync("room joined", func(p *events.EventPublisher) error {
+	uc.publishAsync("room joined", func(p ports.EventPublisher) error {
 		return p.PublishRoomJoined(room.ID, user.ID)
 	})
 
@@ -426,7 +426,7 @@ func (uc *roomUseCase) findByJoinCode(ctx context.Context, joinCode string) (*mo
 }
 
 // publishAsync publishes an analytics event without delaying the request.
-func (uc *roomUseCase) publishAsync(event string, publish func(*events.EventPublisher) error) {
+func (uc *roomUseCase) publishAsync(event string, publish func(ports.EventPublisher) error) {
 	if uc.eventPublisher == nil {
 		return
 	}

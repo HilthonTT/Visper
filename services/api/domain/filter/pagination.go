@@ -1,10 +1,6 @@
 package filter
 
-import (
-	"math"
-
-	"github.com/hilthontt/visper/services/api/infrastructure/common"
-)
+import "math"
 
 const (
 	DefaultPageSize = 10
@@ -46,17 +42,6 @@ func NewPagedList[T any](items *[]T, count int64, pageNumber int, pageSize int64
 	pl.HasPreviousPage = pl.PageNumber > 1
 
 	return pl
-}
-
-func Paginate[TInput any, TOutput any](totalRows int64, items *[]TInput, pageNumber int, pageSize int64) (*PagedList[TOutput], error) {
-	var rItems []TOutput
-
-	rItems, err := common.TypeConverter[[]TOutput](items)
-	if err != nil {
-		return nil, err
-	}
-
-	return NewPagedList(&rItems, totalRows, pageNumber, pageSize), err
 }
 
 // GetOffset returns the number of rows to skip. Pages are 1-based:

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/hilthontt/visper/services/api/application/ports"
 )
 
 const (
@@ -18,13 +19,15 @@ const (
 	UploadsBasePath = "./uploads"
 )
 
+// The storage errors are declared by the application layer so the use cases
+// can recognise them without importing this package.
 var (
-	ErrFileTooLarge    = errors.New("file size exceeds maximum allowed size of 5MB")
-	ErrInvalidFileType = errors.New("invalid file: uploads must be encrypted on the client")
-	// ErrInvalidPath is returned for paths that are absolute or escape the
-	// uploads directory (e.g. "../config.yml").
-	ErrInvalidPath = errors.New("invalid file path")
+	ErrFileTooLarge    = ports.ErrFileTooLarge
+	ErrInvalidFileType = ports.ErrInvalidFileType
+	ErrInvalidPath     = ports.ErrInvalidPath
 )
+
+var _ ports.FileStorage = (*LocalStorage)(nil)
 
 type LocalStorage struct {
 	basePath string

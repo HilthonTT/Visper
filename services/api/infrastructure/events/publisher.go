@@ -7,8 +7,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hilthontt/visper/services/api/application/ports"
 	"github.com/hilthontt/visper/services/api/infrastructure/broker"
 )
+
+var _ ports.EventPublisher = (*EventPublisher)(nil)
 
 // EventPublisher publishes Visper events to the broker
 type EventPublisher struct {

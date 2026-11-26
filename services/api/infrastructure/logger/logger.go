@@ -7,10 +7,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/hilthontt/visper/services/api/application/ports"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	gormlogger "gorm.io/gorm/logger"
 )
+
+var _ ports.Logger = (*Logger)(nil)
 
 type Logger struct {
 	Log *zap.Logger

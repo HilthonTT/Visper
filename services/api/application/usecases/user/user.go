@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hilthontt/visper/services/api/application/ports"
 	"github.com/hilthontt/visper/services/api/domain/apperr"
 	"github.com/hilthontt/visper/services/api/domain/model"
 	"github.com/hilthontt/visper/services/api/domain/repository"
-	"github.com/hilthontt/visper/services/api/infrastructure/logger"
 	"go.uber.org/zap"
 )
 
@@ -32,10 +32,10 @@ type UserUseCase interface {
 
 type userUseCase struct {
 	repository repository.UserRepository
-	logger     *logger.Logger
+	logger     ports.Logger
 }
 
-func NewUserUseCase(repository repository.UserRepository, logger *logger.Logger) UserUseCase {
+func NewUserUseCase(repository repository.UserRepository, logger ports.Logger) UserUseCase {
 	return &userUseCase{
 		repository: repository,
 		logger:     logger,
