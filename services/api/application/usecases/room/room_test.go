@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hilthontt/visper/services/api/application/ports"
 	"github.com/hilthontt/visper/services/api/domain/model"
 	"github.com/hilthontt/visper/services/api/domain/repository"
 	"github.com/hilthontt/visper/services/api/infrastructure/logger"
@@ -40,6 +41,14 @@ func (f *fakeRoomRepo) GetAll(context.Context) ([]*model.Room, error) {
 	}
 	return out, nil
 }
+func (f *fakeRoomRepo) GetByJoinCode(_ context.Context, code string) (*model.Room, error) {
+	for _, r := range f.rooms {
+		if r.JoinCode == code {
+			return r, nil
+		}
+	}
+	return nil, repository.ErrNotFound
+}
 func (f *fakeRoomRepo) Delete(_ context.Context, id string) error {
 	f.deleted = append(f.deleted, id)
 	delete(f.rooms, id)
@@ -64,8 +73,30 @@ func (f *fakeRoomRepo) Update(context.Context, *model.Room) error {
 	return f.updateErr
 }
 
+// recordingNotifier records the notifications it is given, in order.
+type recordingNotifier struct {
+	ports.NopNotifier
+	sent []string
+}
+
+func (n *recordingNotifier) RoomDeleted(roomID string) { n.sent = append(n.sent, "deleted:"+roomID) }
+func (n *recordingNotifier) RoomUpdated(roomID, _ string) {
+	n.sent = append(n.sent, "updated:"+roomID)
+}
+func (n *recordingNotifier) MemberLeft(_ string, m model.User) {
+	n.sent = append(n.sent, "left:"+m.ID+":"+m.Username)
+}
+func (n *recordingNotifier) MemberKicked(_ string, m model.User, _ string) {
+	n.sent = append(n.sent, "kicked:"+m.ID+":"+m.Username)
+}
+
 func newTestUseCase(repo *fakeRoomRepo) RoomUseCase {
-	return NewRoomUseCase(repo, nil, &logger.Logger{Log: zap.NewNop()}, nil)
+	return NewRoomUseCase(repo, nil, nil, nil, &logger.Logger{Log: zap.NewNop()})
+}
+
+func newNotifyingUseCase(repo *fakeRoomRepo) (RoomUseCase, *recordingNotifier) {
+	n := &recordingNotifier{}
+	return NewRoomUseCase(repo, nil, n, nil, &logger.Logger{Log: zap.NewNop()}), n
 }
 
 func TestMissingRoomIsReportedAsNotFound(t *testing.T) {
@@ -75,7 +106,7 @@ func TestMissingRoomIsReportedAsNotFound(t *testing.T) {
 	checks := map[string]error{
 		"Delete":               uc.Delete(ctx, "missing", "u1"),
 		"LeaveRoom":            uc.LeaveRoom(ctx, "missing", "u1"),
-		"KickMember":           func() error { _, err := uc.KickMember(ctx, "missing", "u2", "u1"); return err }(),
+		"KickMember":           func() error { _, _, err := uc.KickMember(ctx, "missing", "u2", "u1"); return err }(),
 		"GenerateNewJoinCode":  func() error { _, err := uc.GenerateNewJoinCode(ctx, "u1", "missing"); return err }(),
 		"RegenerateSecureCode": func() error { _, err := uc.RegenerateSecureCode(ctx, "u1", "missing"); return err }(),
 	}
@@ -142,10 +173,7 @@ func TestExpireRoomsDeletesOnlyExpiredRooms(t *testing.T) {
 		"live":      {ID: "live", CreatedAt: now, Expiry: time.Hour},
 		"no-expiry": {ID: "no-expiry", CreatedAt: now.Add(-48 * time.Hour)},
 	}}
-	var notified []string
-	uc := NewRoomUseCase(repo, nil, &logger.Logger{Log: zap.NewNop()}, func(id string) {
-		notified = append(notified, id)
-	})
+	uc, notifier := newNotifyingUseCase(repo)
 
 	n, err := uc.ExpireRooms(context.Background())
 	if err != nil {
@@ -154,8 +182,8 @@ func TestExpireRoomsDeletesOnlyExpiredRooms(t *testing.T) {
 	if n != 1 || len(repo.deleted) != 1 || repo.deleted[0] != "expired" {
 		t.Fatalf("expired %d, deleted %v; want only \"expired\"", n, repo.deleted)
 	}
-	if len(notified) != 1 || notified[0] != "expired" {
-		t.Fatalf("onExpired got %v; want [expired]", notified)
+	if want := []string{"deleted:expired"}; !slices.Equal(notifier.sent, want) {
+		t.Fatalf("notified %v; want %v", notifier.sent, want)
 	}
 }
 
@@ -165,16 +193,13 @@ func TestLazyExpiryNotifies(t *testing.T) {
 	repo := &fakeRoomRepo{rooms: map[string]*model.Room{
 		"r1": {ID: "r1", CreatedAt: time.Now().Add(-2 * time.Hour), Expiry: time.Hour},
 	}}
-	var notified []string
-	uc := NewRoomUseCase(repo, nil, &logger.Logger{Log: zap.NewNop()}, func(id string) {
-		notified = append(notified, id)
-	})
+	uc, notifier := newNotifyingUseCase(repo)
 
 	if _, err := uc.GetByID(context.Background(), "r1"); err == nil || err.Error() != "room has expired" {
 		t.Fatalf("GetByID: got %v, want \"room has expired\"", err)
 	}
-	if len(notified) != 1 || notified[0] != "r1" {
-		t.Fatalf("onExpired got %v; want [r1]", notified)
+	if want := []string{"deleted:r1"}; !slices.Equal(notifier.sent, want) {
+		t.Fatalf("notified %v; want %v", notifier.sent, want)
 	}
 }
 
@@ -186,7 +211,7 @@ func TestKickRotatesCodes(t *testing.T) {
 	}}
 	uc := newTestUseCase(repo)
 
-	room, err := uc.KickMember(context.Background(), "r1", "member", "owner")
+	room, _, err := uc.KickMember(context.Background(), "r1", "member", "owner")
 	if err != nil {
 		t.Fatalf("kick: %v", err)
 	}
@@ -222,7 +247,7 @@ func TestKickRotatesCodesBeforeRemovingTheMember(t *testing.T) {
 	}
 
 	repo := newRepo()
-	if _, err := newTestUseCase(repo).KickMember(context.Background(), "r1", "member", "owner"); err != nil {
+	if _, _, err := newTestUseCase(repo).KickMember(context.Background(), "r1", "member", "owner"); err != nil {
 		t.Fatalf("kick: %v", err)
 	}
 	if want := []string{"update", "remove"}; !slices.Equal(repo.ops, want) {
@@ -233,7 +258,7 @@ func TestKickRotatesCodesBeforeRemovingTheMember(t *testing.T) {
 	// so the owner can retry the kick.
 	repo = newRepo()
 	repo.updateErr = errors.New("redis down")
-	if _, err := newTestUseCase(repo).KickMember(context.Background(), "r1", "member", "owner"); err == nil {
+	if _, _, err := newTestUseCase(repo).KickMember(context.Background(), "r1", "member", "owner"); err == nil {
 		t.Fatal("kick succeeded although the codes weren't rotated")
 	}
 	if len(repo.removed) != 0 {
@@ -262,5 +287,64 @@ func TestJoinPassesTheCodesAndRefusesRotatedOnes(t *testing.T) {
 	err := uc.JoinRoom(context.Background(), "r1", model.User{ID: "kicked"}, repository.RoomCodes{JoinCode: "ABC123"})
 	if !errors.Is(err, ErrInvalidCodes) {
 		t.Fatalf("join with rotated codes: got %v, want ErrInvalidCodes", err)
+	}
+}
+
+// The kicked member is told (and disconnected) before the new join code goes
+// out, so they never see it; and they are named in the notice.
+func TestKickNotifiesKickedMemberBeforeTheNewCode(t *testing.T) {
+	owner := model.User{ID: "owner"}
+	repo := &fakeRoomRepo{rooms: map[string]*model.Room{
+		"r1": {ID: "r1", Owner: owner, JoinCode: "ABC123", SecureCode: "secret",
+			Members: []model.User{owner, {ID: "member", Username: "Mo"}}},
+	}}
+	uc, notifier := newNotifyingUseCase(repo)
+
+	_, kicked, err := uc.KickMember(context.Background(), "r1", "member", "owner")
+	if err != nil {
+		t.Fatalf("kick: %v", err)
+	}
+	if kicked.Username != "Mo" {
+		t.Fatalf("kicked = %+v, want username Mo", kicked)
+	}
+	if want := []string{"kicked:member:Mo", "updated:r1"}; !slices.Equal(notifier.sent, want) {
+		t.Fatalf("notified %v; want %v", notifier.sent, want)
+	}
+}
+
+func TestLeaveNotifiesWithTheMembersName(t *testing.T) {
+	owner := model.User{ID: "owner"}
+	repo := &fakeRoomRepo{rooms: map[string]*model.Room{
+		"r1": {ID: "r1", Owner: owner, Members: []model.User{owner, {ID: "member", Username: "Mo"}}},
+	}}
+	uc, notifier := newNotifyingUseCase(repo)
+
+	if err := uc.LeaveRoom(context.Background(), "r1", "member"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"left:member:Mo"}; !slices.Equal(notifier.sent, want) {
+		t.Fatalf("notified %v; want %v", notifier.sent, want)
+	}
+}
+
+func TestGetByJoinCode(t *testing.T) {
+	repo := &fakeRoomRepo{rooms: map[string]*model.Room{
+		"r1": {ID: "r1", JoinCode: "ABC123", CreatedAt: time.Now(), Expiry: time.Hour},
+		"r2": {ID: "r2", JoinCode: "OLD999", CreatedAt: time.Now().Add(-2 * time.Hour), Expiry: time.Hour},
+	}}
+	uc := newTestUseCase(repo)
+	ctx := context.Background()
+
+	if room, err := uc.GetByJoinCode(ctx, "ABC123"); err != nil || room.ID != "r1" {
+		t.Fatalf("GetByJoinCode(ABC123) = %v, %v; want r1", room, err)
+	}
+	if _, err := uc.GetByJoinCode(ctx, "NOPE00"); err == nil {
+		t.Fatal("unknown join code found a room")
+	}
+	if _, err := uc.GetByJoinCode(ctx, "OLD999"); !errors.Is(err, ErrRoomExpired) {
+		t.Fatalf("expired room: got %v, want ErrRoomExpired", err)
+	}
+	if !slices.Contains(repo.deleted, "r2") {
+		t.Fatal("expired room found by code was not deleted")
 	}
 }

@@ -33,35 +33,43 @@ type RoomUseCase interface {
 	LeaveRoom(ctx context.Context, roomID, userID string) error
 	// KickMember removes a member and rotates the room's join and secure
 	// codes, so the kicked user can't rejoin with the codes they already saw.
-	// It returns the updated room.
-	KickMember(ctx context.Context, roomID, userID, requesterID string) (*model.Room, error)
+	// It returns the updated room and the kicked member.
+	KickMember(ctx context.Context, roomID, userID, requesterID string) (*model.Room, model.User, error)
 	IsUserInRoom(ctx context.Context, roomID, userID string) (bool, error)
 
 	// ExpireRooms deletes every room whose expiry has passed and returns how many it removed.
 	ExpireRooms(ctx context.Context) (int, error)
 }
 
+// kickReason is sent to a member who was kicked.
+const kickReason = "Removed by room owner"
+
 type roomUseCase struct {
-	repository     repository.RoomRepository
-	eventPublisher ports.EventPublisher
-	logger         ports.Logger
-	onExpired      func(roomID string)
+	repository repository.RoomRepository
+	keys       repository.RoomKeyRepository
+	notifier   ports.Notifier
+	events     *ports.AsyncEvents
+	logger     ports.Logger
 }
 
-// NewRoomUseCase creates the room use case. eventPublisher may be nil.
-// onExpired, if not nil, is called
-// with the ID of every expired room after it has been deleted.
+// NewRoomUseCase creates the room use case. keys records departures so the
+// owner's client knows to rekey; it, notifier and events may be nil.
 func NewRoomUseCase(
 	repository repository.RoomRepository,
-	eventPublisher ports.EventPublisher,
+	keys repository.RoomKeyRepository,
+	notifier ports.Notifier,
+	events *ports.AsyncEvents,
 	logger ports.Logger,
-	onExpired func(roomID string),
 ) RoomUseCase {
+	if notifier == nil {
+		notifier = ports.NopNotifier{}
+	}
 	return &roomUseCase{
-		repository:     repository,
-		eventPublisher: eventPublisher,
-		logger:         logger,
-		onExpired:      onExpired,
+		repository: repository,
+		keys:       keys,
+		notifier:   notifier,
+		events:     events,
+		logger:     logger,
 	}
 }
 
@@ -92,7 +100,7 @@ func (uc *roomUseCase) Create(ctx context.Context, owner model.User, expiry time
 		return nil, fmt.Errorf("failed to add owner to room: %w", err)
 	}
 
-	uc.publishAsync("room created", func(p ports.EventPublisher) error {
+	uc.events.Publish("room created", func(p ports.EventPublisher) error {
 		return p.PublishRoomCreated(room.ID, owner.ID, room.Expiry)
 	})
 
@@ -153,14 +161,19 @@ func (uc *roomUseCase) Delete(ctx context.Context, id, userID string) error {
 		return fmt.Errorf("failed to delete room: %w", err)
 	}
 
+	uc.notifier.RoomDeleted(room.ID)
 	uc.logger.Info("room deleted successfully", zap.String("roomID", id), zap.String("ownerID", userID))
 	return nil
 }
 
 func (uc *roomUseCase) GenerateNewJoinCode(ctx context.Context, userID, id string) (*model.Room, error) {
-	return uc.updateOwnedRoom(ctx, id, userID, func(room *model.Room) {
+	room, err := uc.updateOwnedRoom(ctx, id, userID, func(room *model.Room) {
 		room.JoinCode = generateJoinCode()
 	})
+	if err == nil {
+		uc.notifier.RoomUpdated(room.ID, room.JoinCode)
+	}
+	return room, err
 }
 
 func (uc *roomUseCase) RegenerateSecureCode(ctx context.Context, userID, id string) (*model.Room, error) {
@@ -183,7 +196,9 @@ func (uc *roomUseCase) JoinRoom(ctx context.Context, roomID string, user model.U
 	}
 
 	if room.IsMember(user.ID) {
+		// Announced again: the member may be joining from another client.
 		uc.logger.Debug("user already in room", zap.String("roomID", roomID), zap.String("userID", user.ID))
+		uc.notifier.MemberJoined(roomID, user)
 		return nil
 	}
 
@@ -200,10 +215,11 @@ func (uc *roomUseCase) JoinRoom(ctx context.Context, roomID string, user model.U
 		return fmt.Errorf("failed to join room: %w", err)
 	}
 
-	uc.publishAsync("room joined", func(p ports.EventPublisher) error {
+	uc.events.Publish("room joined", func(p ports.EventPublisher) error {
 		return p.PublishRoomJoined(room.ID, user.ID)
 	})
 
+	uc.notifier.MemberJoined(roomID, user)
 	uc.logger.Info("user joined room", zap.String("roomID", roomID), zap.String("userID", user.ID), zap.String("username", user.Username))
 	return nil
 }
@@ -246,7 +262,8 @@ func (uc *roomUseCase) LeaveRoom(ctx context.Context, roomID, userID string) err
 	}
 	// Without this check any user could "leave" any room, which broadcasts a
 	// bogus member-left notice to its members.
-	if !room.IsMember(userID) {
+	member, ok := findMember(room, userID)
+	if !ok {
 		return ErrNotMember
 	}
 
@@ -254,25 +271,28 @@ func (uc *roomUseCase) LeaveRoom(ctx context.Context, roomID, userID string) err
 		uc.logger.Error("failed to remove user from room", zap.Error(err), zap.String("roomID", roomID), zap.String("userID", userID))
 		return fmt.Errorf("failed to leave room: %w", err)
 	}
+	uc.markDeparted(ctx, roomID, userID)
 
+	uc.notifier.MemberLeft(roomID, member)
 	uc.logger.Info("user left room", zap.String("roomID", roomID), zap.String("userID", userID))
 	return nil
 }
 
-func (uc *roomUseCase) KickMember(ctx context.Context, roomID, userID, requesterID string) (*model.Room, error) {
+func (uc *roomUseCase) KickMember(ctx context.Context, roomID, userID, requesterID string) (*model.Room, model.User, error) {
 	if userID == "" {
-		return nil, ErrUserIDRequired
+		return nil, model.User{}, ErrUserIDRequired
 	}
 	room, err := uc.loadOwnedRoom(ctx, roomID, requesterID, ErrOwnerOnlyKick)
 	if err != nil {
-		return nil, err
+		return nil, model.User{}, err
 	}
 
 	if userID == room.Owner.ID {
-		return nil, ErrOwnerCannotBeKicked
+		return nil, model.User{}, ErrOwnerCannotBeKicked
 	}
-	if !room.IsMember(userID) {
-		return nil, ErrNotMember
+	kicked, ok := findMember(room, userID)
+	if !ok {
+		return nil, model.User{}, ErrNotMember
 	}
 
 	// Every member can see the join code, and joining by join code alone is
@@ -290,17 +310,23 @@ func (uc *roomUseCase) KickMember(ctx context.Context, roomID, userID, requester
 	room.SecureCode = generateSecureCode()
 	if err := uc.repository.Update(ctx, room); err != nil {
 		uc.logger.Error("failed to rotate codes before kick", zap.Error(err), zap.String("roomID", roomID))
-		return nil, fmt.Errorf("failed to rotate room codes: %w", err)
+		return nil, model.User{}, fmt.Errorf("failed to rotate room codes: %w", err)
 	}
 
 	if err := uc.repository.RemoveUser(ctx, roomID, userID); err != nil {
 		uc.logger.Error("failed to kick user from room", zap.Error(err), zap.String("roomID", roomID), zap.String("userID", userID))
-		return nil, fmt.Errorf("failed to kick member: %w", err)
+		return nil, model.User{}, fmt.Errorf("failed to kick member: %w", err)
 	}
 	room.Members = slices.DeleteFunc(room.Members, func(u model.User) bool { return u.ID == userID })
+	uc.markDeparted(ctx, roomID, userID)
+
+	uc.notifier.MemberKicked(roomID, kicked, kickReason)
+	// Sent after the kick, which disconnects the kicked user first, so only
+	// the remaining members learn the new join code.
+	uc.notifier.RoomUpdated(room.ID, room.JoinCode)
 
 	uc.logger.Info("user kicked from room", zap.String("roomID", roomID), zap.String("kickedUserID", userID), zap.String("kickedBy", requesterID))
-	return room, nil
+	return room, kicked, nil
 }
 
 func (uc *roomUseCase) IsUserInRoom(ctx context.Context, roomID, userID string) (bool, error) {
@@ -317,12 +343,7 @@ func (uc *roomUseCase) IsUserInRoom(ctx context.Context, roomID, userID string) 
 		return false, fmt.Errorf("failed to check room membership: %w", err)
 	}
 
-	for _, id := range userIDs {
-		if id == userID {
-			return true, nil
-		}
-	}
-	return false, nil
+	return slices.Contains(userIDs, userID), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -343,8 +364,8 @@ func (uc *roomUseCase) ExpireRooms(ctx context.Context) (int, error) {
 	return expired, nil
 }
 
-// deleteExpired deletes an expired room and reports it through onExpired so
-// that its live websocket connections are told and closed. Without that,
+// deleteExpired deletes an expired room and tells its clients, so that its
+// live websocket connections are closed. Without that,
 // clients stayed connected to (and kept chatting in) a room that no longer
 // existed.
 func (uc *roomUseCase) deleteExpired(ctx context.Context, room *model.Room) error {
@@ -353,9 +374,7 @@ func (uc *roomUseCase) deleteExpired(ctx context.Context, room *model.Room) erro
 		uc.logger.Error("failed to delete expired room", zap.Error(err), zap.String("roomID", room.ID))
 		return err
 	}
-	if uc.onExpired != nil {
-		uc.onExpired(room.ID)
-	}
+	uc.notifier.RoomDeleted(room.ID)
 	return nil
 }
 
@@ -406,35 +425,45 @@ func (uc *roomUseCase) updateOwnedRoom(ctx context.Context, id, userID string, c
 
 // findByJoinCode returns the unexpired room using joinCode.
 func (uc *roomUseCase) findByJoinCode(ctx context.Context, joinCode string) (*model.Room, error) {
-	rooms, err := uc.repository.GetAll(ctx)
+	room, err := uc.repository.GetByJoinCode(ctx, joinCode)
+	if errors.Is(err, repository.ErrNotFound) {
+		return nil, errJoinCodeNotFound(joinCode)
+	}
 	if err != nil {
-		uc.logger.Error("failed to get rooms", zap.Error(err))
+		uc.logger.Error("failed to find room by join code", zap.Error(err))
 		return nil, fmt.Errorf("failed to search for room: %w", err)
 	}
-
-	for _, room := range rooms {
-		if room.JoinCode != joinCode {
-			continue
-		}
-		if room.HasExpired() {
-			_ = uc.deleteExpired(ctx, room)
-			return nil, ErrRoomExpired
-		}
-		return room, nil
+	if room.HasExpired() {
+		_ = uc.deleteExpired(ctx, room)
+		return nil, ErrRoomExpired
 	}
-	return nil, errJoinCodeNotFound(joinCode)
+	return room, nil
 }
 
-// publishAsync publishes an analytics event without delaying the request.
-func (uc *roomUseCase) publishAsync(event string, publish func(ports.EventPublisher) error) {
-	if uc.eventPublisher == nil {
+// markDeparted records that userID left, so the owner's client knows a
+// rekey is due. The member is out either way, so a failure is only logged.
+func (uc *roomUseCase) markDeparted(ctx context.Context, roomID, userID string) {
+	if uc.keys == nil {
 		return
 	}
-	go func() {
-		if err := publish(uc.eventPublisher); err != nil {
-			uc.logger.Error("failed to publish event", zap.String("event", event), zap.Error(err))
-		}
-	}()
+	if err := uc.keys.MarkDeparted(ctx, roomID, userID); err != nil {
+		uc.logger.Error("failed to mark member departed", zap.Error(err), zap.String("roomID", roomID), zap.String("userID", userID))
+	}
+}
+
+// findMember returns the member of room with userID (the owner included).
+func findMember(room *model.Room, userID string) (model.User, bool) {
+	if userID == "" {
+		return model.User{}, false
+	}
+	if room.Owner.ID == userID {
+		return room.Owner, true
+	}
+	i := slices.IndexFunc(room.Members, func(u model.User) bool { return u.ID == userID })
+	if i < 0 {
+		return model.User{}, false
+	}
+	return room.Members[i], true
 }
 
 // codesEqual compares room secrets in constant time.

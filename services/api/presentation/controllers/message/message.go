@@ -10,7 +10,6 @@ import (
 	"github.com/hilthontt/visper/services/api/application/usecases/message"
 	"github.com/hilthontt/visper/services/api/application/usecases/room"
 	"github.com/hilthontt/visper/services/api/domain/model"
-	"github.com/hilthontt/visper/services/api/infrastructure/websocket"
 	"github.com/hilthontt/visper/services/api/presentation/httpx"
 )
 
@@ -34,18 +33,15 @@ type MessageController interface {
 type messageController struct {
 	usecase     message.MessageUseCase
 	roomUseCase room.RoomUseCase
-	wsCore      *websocket.Core
 }
 
 func NewMessageController(
 	usecase message.MessageUseCase,
 	roomUseCase room.RoomUseCase,
-	wsCore *websocket.Core,
 ) MessageController {
 	return &messageController{
 		usecase:     usecase,
 		roomUseCase: roomUseCase,
-		wsCore:      wsCore,
 	}
 }
 
@@ -64,8 +60,6 @@ func (c *messageController) SendMessage(ctx *gin.Context) {
 		httpx.Error(ctx, err)
 		return
 	}
-
-	c.wsCore.Publish(websocket.NewMessageReceived(roomID, msg))
 
 	ctx.JSON(http.StatusCreated, toMessageResponse(msg))
 }
@@ -90,7 +84,6 @@ func (c *messageController) UpdateMessage(ctx *gin.Context) {
 	}
 
 	content := strings.TrimSpace(req.Content)
-	c.wsCore.Publish(websocket.NewMessageUpdated(roomID, messageID, content, time.Now().Format(time.RFC3339), req.Encrypted))
 
 	ctx.JSON(http.StatusOK, MessageUpdatedResponse{
 		Success:   true,
@@ -114,8 +107,6 @@ func (c *messageController) DeleteMessage(ctx *gin.Context) {
 		httpx.Error(ctx, err)
 		return
 	}
-
-	c.wsCore.Publish(websocket.NewMessageDeleted(roomID, messageID, time.Now().Format(time.RFC3339)))
 
 	ctx.JSON(http.StatusOK, MessageDeletedResponse{
 		Success:   true,
@@ -247,7 +238,6 @@ func (c *messageController) setReaction(ctx *gin.Context, emoji string, encrypte
 		return
 	}
 
-	c.wsCore.Publish(websocket.NewMessageReactions(roomID, msg))
 	ctx.JSON(http.StatusOK, toMessageResponse(msg))
 }
 

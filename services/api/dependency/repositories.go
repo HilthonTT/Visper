@@ -1,10 +1,13 @@
 package dependency
 
 import (
+	"context"
+
 	"github.com/hilthontt/visper/services/api/infrastructure/cache"
 	"github.com/hilthontt/visper/services/api/infrastructure/persistence/repository"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
+	"go.uber.org/zap"
 )
 
 const (
@@ -36,6 +39,13 @@ func (c *Container) initRepositories() {
 	c.MessageRepo = repository.NewMessageRepository(distributedCache, tracer)
 	c.UserRepo = repository.NewUserRepository(distributedCache, tracer)
 	c.RoomRepo = repository.NewRoomRepository(distributedCache, c.UserRepo, tracer)
+	// Rooms created before the join code index existed must be added to it,
+	// or they could no longer be joined by code.
+	if indexer, ok := c.RoomRepo.(interface{ IndexJoinCodes(context.Context) error }); ok {
+		if err := indexer.IndexJoinCodes(c.ctx); err != nil {
+			c.Logger.Error("failed to index room join codes", zap.Error(err))
+		}
+	}
 	c.RoomKeyRepo = repository.NewRoomKeyRepository(distributedCache)
 	c.FileRepo = repository.NewFileRepository(redisClient, c.RoomRepo)
 	c.AuditLogRepo = repository.NewAuditLogRepository(c.Logger.Log)

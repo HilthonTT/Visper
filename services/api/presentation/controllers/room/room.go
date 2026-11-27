@@ -12,12 +12,8 @@ import (
 	"github.com/hilthontt/visper/services/api/domain/repository"
 	"github.com/hilthontt/visper/services/api/infrastructure/config"
 	"github.com/hilthontt/visper/services/api/infrastructure/security"
-	"github.com/hilthontt/visper/services/api/infrastructure/websocket"
 	"github.com/hilthontt/visper/services/api/presentation/httpx"
 )
-
-// kickReason is sent to a member who was kicked.
-const kickReason = "Removed by room owner"
 
 type RoomController interface {
 	CreateRoom(ctx *gin.Context)
@@ -42,7 +38,6 @@ type roomController struct {
 	usecase     room.RoomUseCase
 	userUsecase user.UserUseCase
 	keys        roomkey.UseCase
-	wsCore      *websocket.Core
 	config      *config.Config
 }
 
@@ -50,14 +45,12 @@ func NewRoomController(
 	usecase room.RoomUseCase,
 	userUsecase user.UserUseCase,
 	keys roomkey.UseCase,
-	wsCore *websocket.Core,
 	config *config.Config,
 ) RoomController {
 	return &roomController{
 		usecase:     usecase,
 		userUsecase: userUsecase,
 		keys:        keys,
-		wsCore:      wsCore,
 		config:      config,
 	}
 }
@@ -127,7 +120,6 @@ func (c *roomController) DeleteRoom(ctx *gin.Context) {
 	}
 
 	security.ClearRoomAuth(ctx.Writer, roomID)
-	c.wsCore.Publish(websocket.NewRoomDeleted(roomID))
 
 	ctx.JSON(http.StatusOK, httpx.SuccessResponse{Message: "room deleted successfully"})
 }
@@ -142,13 +134,10 @@ func (c *roomController) GenerateNewJoinCode(ctx *gin.Context) {
 		return
 	}
 
-	room, err := c.usecase.GenerateNewJoinCode(ctx.Request.Context(), user.ID, roomID)
-	if err != nil {
+	if _, err := c.usecase.GenerateNewJoinCode(ctx.Request.Context(), user.ID, roomID); err != nil {
 		httpx.Error(ctx, err)
 		return
 	}
-
-	c.wsCore.Publish(websocket.NewRoomUpdated(room.ID, room.JoinCode))
 
 	ctx.JSON(http.StatusOK, httpx.SuccessResponse{Message: "room join code regenerated successfully"})
 }
@@ -200,7 +189,7 @@ func (c *roomController) JoinRoom(ctx *gin.Context) {
 		httpx.Error(ctx, err)
 		return
 	}
-	if !c.completeJoin(ctx, user, roomID) {
+	if !setRoomAuth(ctx, user, roomID) {
 		return
 	}
 
@@ -257,8 +246,6 @@ func (c *roomController) LeaveRoom(ctx *gin.Context) {
 	}
 
 	security.ClearRoomAuth(ctx.Writer, roomID)
-	c.markDeparted(ctx, roomID, user.ID)
-	c.wsCore.Publish(websocket.NewMemberLeft(roomID, user.ID, user.Username))
 
 	ctx.JSON(http.StatusOK, httpx.SuccessResponse{Message: "successfully left room"})
 }
@@ -302,22 +289,11 @@ func (c *roomController) KickMember(ctx *gin.Context) {
 
 	// Kick first: it checks the caller owns the room, so non-owners can't
 	// probe which user IDs exist.
-	room, err := c.usecase.KickMember(ctx.Request.Context(), roomID, kickedID, user.ID)
+	_, kicked, err := c.usecase.KickMember(ctx.Request.Context(), roomID, kickedID, user.ID)
 	if err != nil {
 		httpx.Error(ctx, err)
 		return
 	}
-	c.markDeparted(ctx, roomID, kickedID)
-	kicked, err := c.userUsecase.GetByID(ctx.Request.Context(), kickedID)
-	if err != nil {
-		// The member is out either way; announce them by ID alone.
-		kicked = &model.User{ID: kickedID}
-	}
-
-	c.wsCore.Publish(websocket.NewErrorKicked(roomID, kicked.ID, kicked.Username, kickReason))
-	// Published after the kick, which disconnects the kicked user first, so
-	// only the remaining members learn the new join code.
-	c.wsCore.Publish(websocket.NewRoomUpdated(room.ID, room.JoinCode))
 
 	ctx.JSON(http.StatusOK, httpx.SuccessResponse{
 		Message: "member kicked successfully",
@@ -344,7 +320,7 @@ func (c *roomController) joinFoundRoom(ctx *gin.Context, room *model.Room, usern
 		httpx.Error(ctx, err)
 		return
 	}
-	if !c.completeJoin(ctx, user, room.ID) {
+	if !setRoomAuth(ctx, user, room.ID) {
 		return
 	}
 
@@ -368,19 +344,6 @@ func (c *roomController) joiningUser(ctx *gin.Context, username string) (*model.
 		return nil, false
 	}
 	return user, true
-}
-
-// completeJoin sets the room cookie and tells the room about its new member.
-func (c *roomController) completeJoin(ctx *gin.Context, user *model.User, roomID string) bool {
-	if !setRoomAuth(ctx, user, roomID) {
-		return false
-	}
-	c.wsCore.Publish(websocket.NewMemberJoined(roomID, websocket.MemberPayload{
-		UserID:   user.ID,
-		Username: user.Username,
-		JoinedAt: time.Now().Format(time.RFC3339),
-	}))
-	return true
 }
 
 // setRoomAuth sets the room's auth cookie, or writes a 500 response.

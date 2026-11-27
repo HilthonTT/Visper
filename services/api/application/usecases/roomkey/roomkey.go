@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"regexp"
 
+	"github.com/hilthontt/visper/services/api/application/ports"
 	"github.com/hilthontt/visper/services/api/application/usecases/room"
 	"github.com/hilthontt/visper/services/api/domain/apperr"
 	"github.com/hilthontt/visper/services/api/domain/model"
@@ -62,12 +63,17 @@ type UseCase interface {
 }
 
 type useCase struct {
-	rooms room.RoomUseCase
-	repo  repository.RoomKeyRepository
+	rooms    room.RoomUseCase
+	repo     repository.RoomKeyRepository
+	notifier ports.Notifier
 }
 
-func New(rooms room.RoomUseCase, repo repository.RoomKeyRepository) UseCase {
-	return &useCase{rooms: rooms, repo: repo}
+// New creates the room key use case; notifier may be nil.
+func New(rooms room.RoomUseCase, repo repository.RoomKeyRepository, notifier ports.Notifier) UseCase {
+	if notifier == nil {
+		notifier = ports.NopNotifier{}
+	}
+	return &useCase{rooms: rooms, repo: repo, notifier: notifier}
 }
 
 // memberRoom returns the room if userID is a member.
@@ -124,6 +130,7 @@ func (uc *useCase) PutCard(ctx context.Context, roomID, userID, card string) err
 	if err := uc.repo.AddCard(ctx, roomID, userID, card); err != nil {
 		return fmt.Errorf("failed to store key card: %w", err)
 	}
+	uc.notifier.MemberCard(roomID, userID, card)
 	return nil
 }
 
@@ -157,6 +164,7 @@ func (uc *useCase) Rekey(ctx context.Context, roomID, userID string, rekey model
 	if !ok {
 		return nil, apperr.Newf(apperr.Conflict, "the room key changed meanwhile: the next epoch is %d", latest+1)
 	}
+	uc.notifier.RoomRekeyed(roomID, &rekey)
 	return &rekey, nil
 }
 

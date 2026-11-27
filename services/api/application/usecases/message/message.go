@@ -58,20 +58,28 @@ type MessageUseCase interface {
 }
 
 type messageUseCase struct {
-	repository     repository.MessageRepository
-	eventPublisher ports.EventPublisher
-	logger         ports.Logger
+	repository repository.MessageRepository
+	notifier   ports.Notifier
+	events     *ports.AsyncEvents
+	logger     ports.Logger
 }
 
+// NewMessageUseCase creates the message use case; notifier and events may be
+// nil.
 func NewMessageUseCase(
 	repository repository.MessageRepository,
-	eventPublisher ports.EventPublisher,
+	notifier ports.Notifier,
+	events *ports.AsyncEvents,
 	logger ports.Logger,
 ) MessageUseCase {
+	if notifier == nil {
+		notifier = ports.NopNotifier{}
+	}
 	return &messageUseCase{
-		repository:     repository,
-		eventPublisher: eventPublisher,
-		logger:         logger,
+		repository: repository,
+		notifier:   notifier,
+		events:     events,
+		logger:     logger,
 	}
 }
 
@@ -112,13 +120,10 @@ func (uc *messageUseCase) Send(ctx context.Context, roomID, userID, username, co
 		return nil, fmt.Errorf("failed to send message: %w", err)
 	}
 
-	if uc.eventPublisher != nil {
-		go func() {
-			if err := uc.eventPublisher.PublishMessageSent(roomID, userID, message.ID, len(message.Content)); err != nil {
-				uc.logger.Error("failed to publish message sent event", zap.Error(err))
-			}
-		}()
-	}
+	uc.notifier.MessageReceived(roomID, message)
+	uc.events.Publish("message sent", func(p ports.EventPublisher) error {
+		return p.PublishMessageSent(roomID, userID, message.ID, len(message.Content))
+	})
 
 	uc.logger.Info("message sent", zap.String("roomID", roomID), zap.String("userID", userID), zap.String("username", username))
 	return message, nil
@@ -147,6 +152,7 @@ func (uc *messageUseCase) Update(ctx context.Context, roomID, messageID, userID,
 		return fmt.Errorf("failed to update message: %w", err)
 	}
 
+	uc.notifier.MessageUpdated(roomID, message)
 	uc.logger.Info("message updated", zap.String("messageID", messageID), zap.String("roomID", roomID), zap.String("userID", userID))
 	return nil
 }
@@ -164,6 +170,7 @@ func (uc *messageUseCase) Delete(ctx context.Context, roomID, messageID, userID 
 		return fmt.Errorf("failed to delete message: %w", err)
 	}
 
+	uc.notifier.MessageDeleted(roomID, messageID)
 	uc.logger.Info("message deleted", zap.String("messageID", messageID), zap.String("roomID", roomID), zap.String("userID", userID))
 	return nil
 }
@@ -191,6 +198,7 @@ func (uc *messageUseCase) SetReaction(ctx context.Context, roomID, messageID, us
 		uc.logger.Error("failed to set reaction", zap.Error(err), zap.String("messageID", messageID))
 		return nil, fmt.Errorf("failed to set reaction: %w", err)
 	}
+	uc.notifier.MessageReactions(roomID, message)
 	return message, nil
 }
 

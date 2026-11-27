@@ -55,7 +55,7 @@ func (r *memRepo) Count(context.Context, string) (int64, error) { return int64(l
 
 func newTestUseCase() (MessageUseCase, *memRepo) {
 	repo := &memRepo{messages: map[string]*model.Message{}}
-	return NewMessageUseCase(repo, nil, &logger.Logger{Log: zap.NewNop()}), repo
+	return NewMessageUseCase(repo, nil, nil, &logger.Logger{Log: zap.NewNop()}), repo
 }
 
 func TestSendReply(t *testing.T) {

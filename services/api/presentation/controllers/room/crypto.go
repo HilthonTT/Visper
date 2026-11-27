@@ -5,7 +5,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/hilthontt/visper/services/api/domain/model"
-	"github.com/hilthontt/visper/services/api/infrastructure/websocket"
 	"github.com/hilthontt/visper/services/api/presentation/httpx"
 )
 
@@ -74,7 +73,6 @@ func (c *roomController) PutKeyCard(ctx *gin.Context) {
 		return
 	}
 
-	c.wsCore.Publish(websocket.NewMemberCard(roomID, user.ID, req.Card))
 	ctx.JSON(http.StatusOK, httpx.SuccessResponse{Message: "key card published"})
 }
 
@@ -92,7 +90,7 @@ func (c *roomController) PostRekey(ctx *gin.Context) {
 		return
 	}
 
-	rekey, err := c.keys.Rekey(ctx.Request.Context(), roomID, user.ID, model.Rekey{
+	_, err := c.keys.Rekey(ctx.Request.Context(), roomID, user.ID, model.Rekey{
 		Epoch:     req.Epoch,
 		Keys:      req.Keys,
 		Signature: req.Signature,
@@ -102,14 +100,5 @@ func (c *roomController) PostRekey(ctx *gin.Context) {
 		return
 	}
 
-	c.wsCore.Publish(websocket.NewRoomRekeyed(roomID, rekey))
 	ctx.JSON(http.StatusOK, httpx.SuccessResponse{Message: "room key changed"})
-}
-
-// markDeparted tells the owner's client a rekey is due after userID left.
-// The member is out either way, so a failure is only logged.
-func (c *roomController) markDeparted(ctx *gin.Context, roomID, userID string) {
-	if err := c.keys.MarkDeparted(ctx.Request.Context(), roomID, userID); err != nil {
-		_ = ctx.Error(err)
-	}
 }

@@ -16,6 +16,9 @@ type RoomRepository interface {
 	Create(ctx context.Context, room *model.Room) error
 	GetByID(ctx context.Context, id string) (*model.Room, error)
 	GetAll(ctx context.Context) ([]*model.Room, error)
+	// GetByJoinCode returns the room whose join code is joinCode, or
+	// ErrNotFound.
+	GetByJoinCode(ctx context.Context, joinCode string) (*model.Room, error)
 	Delete(ctx context.Context, id string) error
 	// AddUser adds user to the room, atomically checking that the room still
 	// has the codes the joiner presented (an empty code is not checked). It

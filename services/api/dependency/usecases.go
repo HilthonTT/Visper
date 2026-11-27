@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hilthontt/visper/services/api/application/ports"
 	fileUseCase "github.com/hilthontt/visper/services/api/application/usecases/file"
 	messageUseCase "github.com/hilthontt/visper/services/api/application/usecases/message"
 	roomUseCase "github.com/hilthontt/visper/services/api/application/usecases/room"
@@ -13,13 +14,12 @@ import (
 )
 
 func (c *Container) initUseCases() {
-	c.MessageUC = messageUseCase.NewMessageUseCase(c.MessageRepo, c.EventPublisher, c.Logger)
-	// An expired room is gone: close its websocket connections the same way
-	// an explicit delete does.
-	c.RoomUC = roomUseCase.NewRoomUseCase(c.RoomRepo, c.EventPublisher, c.Logger, func(roomID string) {
-		c.WSCore.Publish(websocket.NewRoomDeleted(roomID))
-	})
-	c.RoomKeyUC = roomKeyUseCase.New(c.RoomUC, c.RoomKeyRepo)
+	c.Events = ports.NewAsyncEvents(c.EventPublisher, c.Logger)
+	notifier := websocket.NewNotifier(c.WSCore)
+
+	c.MessageUC = messageUseCase.NewMessageUseCase(c.MessageRepo, notifier, c.Events, c.Logger)
+	c.RoomUC = roomUseCase.NewRoomUseCase(c.RoomRepo, c.RoomKeyRepo, notifier, c.Events, c.Logger)
+	c.RoomKeyUC = roomKeyUseCase.New(c.RoomUC, c.RoomKeyRepo, notifier)
 	c.UserUC = userUseCase.NewUserUseCase(c.UserRepo, c.Logger)
 	c.FileUC = fileUseCase.NewFileUseCase(c.FileRepo, c.RoomRepo, c.UserRepo, c.Storage, c.getServerURL())
 

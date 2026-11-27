@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -103,6 +104,12 @@ func (r *roomRepository) Create(ctx context.Context, room *model.Room) error {
 		return err
 	}
 
+	if err := r.indexJoinCode(ctx, room.JoinCode, room.ID); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to index join code")
+		return err
+	}
+
 	span.SetStatus(codes.Ok, "room created successfully")
 	return nil
 }
@@ -114,6 +121,14 @@ func (r *roomRepository) Delete(ctx context.Context, id string) error {
 	span.SetAttributes(attribute.String("room.id", id))
 
 	key := fmt.Sprintf("room:%s", id)
+	var existing model.Room
+	found, err := r.cache.Get(ctx, key, &existing)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to read room before delete")
+		return err
+	}
+
 	if err := r.cache.Delete(ctx, key); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to delete room from cache")
@@ -148,6 +163,14 @@ func (r *roomRepository) Delete(ctx context.Context, id string) error {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to remove room from rooms set")
 		return err
+	}
+
+	if found {
+		if err := r.unindexJoinCode(ctx, existing.JoinCode, id); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to unindex join code")
+			return err
+		}
 	}
 
 	span.SetStatus(codes.Ok, "room deleted successfully")
@@ -191,6 +214,88 @@ func (r *roomRepository) GetAll(ctx context.Context) ([]*model.Room, error) {
 	}
 
 	return rooms, nil
+}
+
+// joinCodeKey is the set of rooms using a join code. It is a set, not a
+// single ID, so two rooms that happen to draw the same code don't overwrite
+// each other's entry; GetByJoinCode returns the first that still has it.
+func joinCodeKey(joinCode string) string { return "joincode:" + joinCode }
+
+func (r *roomRepository) indexJoinCode(ctx context.Context, joinCode, roomID string) error {
+	if joinCode == "" {
+		return nil
+	}
+	return r.cache.SAdd(ctx, joinCodeKey(joinCode), roomID)
+}
+
+func (r *roomRepository) unindexJoinCode(ctx context.Context, joinCode, roomID string) error {
+	if joinCode == "" {
+		return nil
+	}
+	return r.cache.SRem(ctx, joinCodeKey(joinCode), roomID)
+}
+
+func (r *roomRepository) GetByJoinCode(ctx context.Context, joinCode string) (*model.Room, error) {
+	ctx, span := r.tracer.Start(ctx, "roomRepository.GetByJoinCode")
+	defer span.End()
+
+	if joinCode == "" {
+		return nil, repository.ErrNotFound
+	}
+	roomIDs, err := r.cache.SMembers(ctx, joinCodeKey(joinCode))
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to read join code index")
+		return nil, err
+	}
+	span.SetAttributes(attribute.Int("rooms.candidates", len(roomIDs)))
+
+	for _, id := range roomIDs {
+		room, err := r.GetByID(ctx, id)
+		if errors.Is(err, repository.ErrNotFound) {
+			// Left behind by a delete that failed halfway; drop it.
+			_ = r.unindexJoinCode(ctx, joinCode, id)
+			continue
+		}
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to get indexed room")
+			return nil, err
+		}
+		// The index can lag behind the record (a rotation that failed after
+		// saving the room), so the record has the last word.
+		if room.JoinCode == joinCode {
+			span.SetStatus(codes.Ok, "room found by join code")
+			return room, nil
+		}
+	}
+
+	span.SetStatus(codes.Error, "room not found")
+	return nil, repository.ErrNotFound
+}
+
+// IndexJoinCodes adds every stored room to the join code index. It is run
+// once at startup so rooms created before the index existed stay joinable
+// by code.
+func (r *roomRepository) IndexJoinCodes(ctx context.Context) error {
+	roomIDs, err := r.cache.SMembers(ctx, "rooms")
+	if err != nil {
+		return err
+	}
+	for _, id := range roomIDs {
+		var room model.Room
+		found, err := r.cache.Get(ctx, fmt.Sprintf("room:%s", id), &room)
+		if err != nil {
+			return err
+		}
+		if !found {
+			continue
+		}
+		if err := r.indexJoinCode(ctx, room.JoinCode, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *roomRepository) GetByID(ctx context.Context, id string) (*model.Room, error) {
@@ -326,6 +431,21 @@ func (r *roomRepository) Update(ctx context.Context, room *model.Room) error {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to update room in cache")
 		return err
+	}
+
+	if existingRoom.JoinCode != room.JoinCode {
+		// Index the new code before dropping the old one: a stale entry is
+		// harmless (GetByJoinCode checks the record), a missing one is not.
+		if err := r.indexJoinCode(ctx, room.JoinCode, room.ID); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to index new join code")
+			return err
+		}
+		if err := r.unindexJoinCode(ctx, existingRoom.JoinCode, room.ID); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "failed to unindex old join code")
+			return err
+		}
 	}
 
 	span.SetStatus(codes.Ok, "room updated successfully")

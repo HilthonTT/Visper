@@ -19,53 +19,19 @@ type Logger struct {
 	Log *zap.Logger
 }
 
-func NewLogger() (*Logger, error) {
-	encoderConfig := zapcore.EncoderConfig{
-		TimeKey:        "timestamp",
-		LevelKey:       "level",
-		NameKey:        "logger",
-		CallerKey:      "caller",
-		MessageKey:     "msg",
-		StacktraceKey:  "stacktrace",
-		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeLevel:    zapcore.CapitalLevelEncoder,
-		EncodeTime:     zapcore.ISO8601TimeEncoder,
-		EncodeDuration: zapcore.StringDurationEncoder,
-		EncodeCaller:   zapcore.FullCallerEncoder,
-		EncodeName:     zapcore.FullNameEncoder,
-	}
-
-	core := zapcore.NewCore(
-		zapcore.NewJSONEncoder(encoderConfig),
-		zapcore.AddSync(os.Stdout),
-		zap.NewAtomicLevelAt(zap.InfoLevel),
-	)
-
-	logger := zap.New(core)
-
-	return &Logger{
-		Log: logger,
-	}, nil
-}
-
-// NewLoggerWithLevel creates a JSON logger at the named level ("debug",
-// "info", "warn", "error", ...). An empty level means debug; an unknown one
-// is an error.
+// NewLoggerWithLevel creates a JSON logger writing to stdout at the named
+// level ("debug", "info", "warn", "error", ...), with stack traces on errors.
+// An empty level means debug; an unknown one is an error.
 func NewLoggerWithLevel(level string) (*Logger, error) {
-	l, err := NewDevelopmentLogger()
-	if err != nil || level == "" {
-		return l, err
+	lvl := zapcore.DebugLevel
+	if level != "" {
+		parsed, err := zapcore.ParseLevel(level)
+		if err != nil {
+			return nil, err
+		}
+		lvl = parsed
 	}
-	lvl, err := zapcore.ParseLevel(level)
-	if err != nil {
-		return nil, err
-	}
-	l.Log = l.Log.WithOptions(zap.IncreaseLevel(lvl))
-	return l, nil
-}
 
-// NewDevelopmentLogger creates a logger for development with more debug information
-func NewDevelopmentLogger() (*Logger, error) {
 	encoderConfig := zapcore.EncoderConfig{
 		TimeKey:        "timestamp",
 		LevelKey:       "level",
@@ -84,7 +50,7 @@ func NewDevelopmentLogger() (*Logger, error) {
 	core := zapcore.NewCore(
 		zapcore.NewJSONEncoder(encoderConfig),
 		zapcore.AddSync(os.Stdout),
-		zap.NewAtomicLevelAt(zap.DebugLevel),
+		zap.NewAtomicLevelAt(lvl),
 	)
 
 	logger := zap.New(core, zap.AddStacktrace(zap.ErrorLevel))

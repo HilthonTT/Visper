@@ -1,21 +1,9 @@
 package filter
 
-import "math"
-
 const (
 	DefaultPageSize = 10
 	MaxPageSize     = 100
 )
-
-type PagedList[T any] struct {
-	PageNumber      int   `json:"pageNumber"`
-	PageSize        int64 `json:"pageSize"`
-	TotalRows       int64 `json:"totalRows"`
-	TotalPages      int   `json:"totalPages"`
-	HasPreviousPage bool  `json:"hasPreviousPage"`
-	HasNextPage     bool  `json:"hasNextPage"`
-	Items           *[]T  `json:"items"`
-}
 
 type PaginationInput struct {
 	PageSize   int `json:"pageSize"`
@@ -25,23 +13,6 @@ type PaginationInput struct {
 type PaginationInputWithFilter struct {
 	PaginationInput
 	DynamicFilter
-}
-
-func NewPagedList[T any](items *[]T, count int64, pageNumber int, pageSize int64) *PagedList[T] {
-	pl := &PagedList[T]{
-		PageNumber: pageNumber,
-		PageSize:   pageSize,
-		TotalRows:  count,
-		Items:      items,
-	}
-
-	if pageSize > 0 {
-		pl.TotalPages = int(math.Ceil(float64(count) / float64(pageSize)))
-	}
-	pl.HasNextPage = pl.PageNumber < pl.TotalPages
-	pl.HasPreviousPage = pl.PageNumber > 1
-
-	return pl
 }
 
 // GetOffset returns the number of rows to skip. Pages are 1-based:

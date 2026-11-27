@@ -26,8 +26,8 @@ func (c *Container) initMiddleware() {
 }
 
 func (c *Container) initControllers() {
-	c.MessageController = message.NewMessageController(c.MessageUC, c.RoomUC, c.WSCore)
-	c.RoomController = room.NewRoomController(c.RoomUC, c.UserUC, c.RoomKeyUC, c.WSCore, c.Config)
+	c.MessageController = message.NewMessageController(c.MessageUC, c.RoomUC)
+	c.RoomController = room.NewRoomController(c.RoomUC, c.UserUC, c.RoomKeyUC, c.Config)
 	c.WebsocketController = wsCtrl.NewWebSocketController(c.RoomUC, c.WSRoomManager, c.WSCore)
 	c.FilesController = file.NewFilesController(c.FileUC, c.Storage)
 	c.UserNotificationController = wsCtrl.NewUserNotificationController(c.UserUC, c.RoomUC, c.NotificationCore)
@@ -153,6 +153,13 @@ func (c *Container) Shutdown() error {
 			c.Logger.Error("failed to shutdown tracer provider", zap.Error(err))
 		}
 	}
+
+	// Let events still being published reach the broker before closing it.
+	eventsCtx, cancelEvents := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := c.Events.Wait(eventsCtx); err != nil {
+		c.Logger.Warn("gave up waiting for events to be published", zap.Error(err))
+	}
+	cancelEvents()
 
 	if c.Broker != nil {
 		if err := c.Broker.Close(); err != nil {

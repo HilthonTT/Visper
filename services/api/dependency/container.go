@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hilthontt/visper/services/api/application/ports"
 	fileUseCase "github.com/hilthontt/visper/services/api/application/usecases/file"
 	messageUseCase "github.com/hilthontt/visper/services/api/application/usecases/message"
 	roomUseCase "github.com/hilthontt/visper/services/api/application/usecases/room"
@@ -67,7 +68,10 @@ type Container struct {
 
 	EventConsumer  *events.EventConsumer
 	EventPublisher *events.EventPublisher
-	Broker         *broker.Broker
+	// Events publishes in the background for the use cases; Shutdown waits
+	// for it before closing the broker.
+	Events *ports.AsyncEvents
+	Broker *broker.Broker
 
 	// ctx is cancelled by Shutdown and stops every background goroutine
 	// (websocket hubs, profiler, cleanup job).
